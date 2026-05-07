@@ -1,0 +1,159 @@
+{
+  "project": "EnterpriseAgent",
+  "target": "Enterprise Agent Hub 详细设计",
+  "generated_at": "2026-05-07T00:00:00Z",
+  "source_requirement_dir": "docs/RequirementDocument",
+  "revision": "final-approved-v3",
+  "scope": [
+    "客户端后端",
+    "服务端",
+    "接口契约",
+    "数据模型",
+    "本地执行",
+    "异常与幂等",
+    "配置部署",
+    "测试建议",
+    "开源参考实现",
+    "最终审核通过报告"
+  ],
+  "out_of_scope": [
+    "客户端前端 UI",
+    "Web 管理端前端 UI",
+    "视觉与交互样式",
+    "Agent 执行内核"
+  ],
+  "files": [
+    {
+      "name": "00_阅读指南与设计结论.md",
+      "size": 9883,
+      "sha256": "eccf4b82ee2e88011132398f0dcfed35e0c1d9dd9498d8d40487fcdb004ebc26"
+    },
+    {
+      "name": "01_需求分析与设计决策.md",
+      "size": 8228,
+      "sha256": "34871cb4f777e9b46a74c7a179b153eac694247428837b55a224213d228a918b"
+    },
+    {
+      "name": "02_总体架构与边界.md",
+      "size": 10957,
+      "sha256": "d597fab4de002d6d7a295c89bccc50b31f6c9f9d5faf6456f0335e4073180700"
+    },
+    {
+      "name": "03_服务端模块划分与依赖.md",
+      "size": 16519,
+      "sha256": "c660d33978e24bddcfbcdb91e0429fbb1880a0a4a2801aa9f9fc8d9a9d6137e6"
+    },
+    {
+      "name": "04_服务端数据模型设计.md",
+      "size": 34521,
+      "sha256": "a6cd7f0380270fc4ac6e49e1e2481986a4ed8dbbdd62f04ae7f84303fe0f8acc"
+    },
+    {
+      "name": "05_服务端接口契约.md",
+      "size": 24925,
+      "sha256": "9095b483272b548f171487a0d0e38abc1668ba79263dc170c76e82c819813e5f"
+    },
+    {
+      "name": "06_权限_可见性_审核与状态机.md",
+      "size": 17479,
+      "sha256": "9d00bd9745f30a2f91b49dd740f4acb93fde10784405f794726d48084257f27b"
+    },
+    {
+      "name": "07_客户端后端架构.md",
+      "size": 12953,
+      "sha256": "da234468806e9b5934a46ce2270c070a0604af97005dfe8eddc6064efebd82bf"
+    },
+    {
+      "name": "08_本地执行事务与ToolAdapter设计.md",
+      "size": 23343,
+      "sha256": "605f94c63cfa2baeea49b25619a76944b4e7ef39c18a3b76aee7ad1dfea733f0"
+    },
+    {
+      "name": "09_Skill_MCP_Plugin落地设计.md",
+      "size": 14970,
+      "sha256": "4066536d0c3b70e0eec6ce2513a9f33a4562708ed2129809be50c50ea32fa9e2"
+    },
+    {
+      "name": "10_核心业务流程时序.md",
+      "size": 13473,
+      "sha256": "66ceca6e7c7246a948a7a4e054dbf20507e55a49cc778aeac8e088aa76bc57f1"
+    },
+    {
+      "name": "11_包存储_安全校验_AI预审.md",
+      "size": 14064,
+      "sha256": "d668c68e5089d933a1717742511feffbf4c69d3a96712ff1b38f34d60110b0f9"
+    },
+    {
+      "name": "12_审计_日志_通知_设备与更新.md",
+      "size": 10607,
+      "sha256": "0b3a02a966deddad1f59bec4c1098ee621293d4fd266bdb77a9c691cd5365af0"
+    },
+    {
+      "name": "13_配置_部署_备份恢复.md",
+      "size": 10958,
+      "sha256": "0182967676a8d87d722b9b2e047dbe409814240f418fa368ff1827011b7a041e"
+    },
+    {
+      "name": "14_异常处理_错误码_幂等.md",
+      "size": 13243,
+      "sha256": "fd3b8406aca6e2ead86fadcef301975cd2d086e39090f514f797083134f1b54a"
+    },
+    {
+      "name": "15_测试策略与开发切片.md",
+      "size": 12394,
+      "sha256": "46db2205afbce77c8245c3eaedb05c9238ad2c5bfe1ecec305a49766f8b83c9f"
+    },
+    {
+      "name": "16_开源参考实现.md",
+      "size": 12189,
+      "sha256": "3577552820f994c6e5ba706b8e6309c2ce037f0fef0800c9140235c36a22b309"
+    },
+    {
+      "name": "17_最终自检报告.md",
+      "size": 6547,
+      "sha256": "cc7c043d50dc56d76d43676592ffa5ae9aff7efc837c824f97530715ac64d8cd"
+    },
+    {
+      "name": "18_整改复核与变更记录.md",
+      "size": 6224,
+      "sha256": "41123b85323fdb3cf6bb6d220f26017583f72738ca07e80013dbf4ea2ee63c4e"
+    },
+    {
+      "name": "19_接口契约_OpenAPI补充.md",
+      "size": 20204,
+      "sha256": "caccef3137ae7f12fbc72c4dbdfd033a4fa72652f0bf42ea98f0838d7af790fc"
+    },
+    {
+      "name": "20_最终审核通过报告.md",
+      "size": 6524,
+      "sha256": "2d943ff6920530614477077eecc7e4c707b185856a4e8e3b4603f8627f9efe88"
+    },
+    {
+      "name": "README.md",
+      "size": 1624,
+      "sha256": "e394f224ab407cc4abb89492c01f074fb5b8bac883bdb72b41391dd2e83f659b"
+    }
+  ],
+  "checks": {
+    "client_backend": true,
+    "server_design": true,
+    "interfaces": true,
+    "openapi_supplement": true,
+    "data_model": true,
+    "settings_version_added": true,
+    "statistics_module_added": true,
+    "tool_adapter_path_validation_added": true,
+    "type_specific_error_codes_unified": true,
+    "exceptions": true,
+    "config": true,
+    "tests": true,
+    "open_source_refs": true,
+    "ui_excluded": true,
+    "multiple_md": true,
+    "markdown_fences_even": true,
+    "json_examples_valid": true,
+    "final_review_passed": true,
+    "final_score": 96
+  },
+  "all_checks_passed": true
+}

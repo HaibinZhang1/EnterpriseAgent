@@ -104,5 +104,11 @@ public class AuditLog {
 
     public UUID getId() { return id; }
     public String getRequestId() { return requestId; }
+    public UUID getActorId() { return actorId; }
+    public String getObjectType() { return objectType; }
+    public String getObjectId() { return objectId; }
+    public String getAction() { return action; }
+    public AuditResult getResult() { return result; }
+    public Map<String, Object> getBeforeSummary() { return beforeSummary; }
     public Map<String, Object> getAfterSummary() { return afterSummary; }
 }

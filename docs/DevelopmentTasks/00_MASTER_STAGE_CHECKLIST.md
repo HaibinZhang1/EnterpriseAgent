@@ -9,21 +9,21 @@
 | 字段 | 当前值 | 更新说明 |
 |---|---|---|
 | 项目 | EnterpriseAgent / Enterprise Agent Hub | 固定 |
-| 当前阶段 | M1 | Agent 每次开始新阶段时更新 |
+| 当前阶段 | M2 | Agent 每次开始新阶段时更新 |
 | 总阶段数 | 8 | M1-M8 |
-| 总体完成率 | 12.5% | M1 已完成，1/8 阶段通过验收 |
-| 当前分支 | feature/m1-backend-foundation | Agent 填写 |
+| 总体完成率 | 25% | M1-M2 已完成，2/8 阶段通过验收 |
+| 当前分支 | feature/m2-auth-org-permission | Agent 填写 |
 | 最近提交 | 本次提交（以 git log 为准） | Agent 填写 commit hash |
-| 最近验证时间 | 2026-05-07 20:50:33 CST | Agent 填写 |
-| 当前阻塞项 | 无 M1 阻塞 | Agent 填写 |
-| 下一阶段 | M2 账号、组织、会话与权限基础 | Agent 更新 |
+| 最近验证时间 | 2026-05-07 23:05:17 CST | Agent 填写 |
+| 当前阻塞项 | 无 M2 阻塞 | Agent 填写 |
+| 下一阶段 | M3 扩展主档、版本、授权范围、可见性、搜索与统计 | Agent 更新 |
 
 ## 2. M1-M8 阶段总览
 
 | 阶段 | 名称 | 目标 | 状态 | 完成率 | 子清单 | 验收结论 |
 |---|---|---|---|---:|---|---|
 | M1 | 服务端基础工程 | Spring Boot 3 + Java 21 + PostgreSQL + Flyway + Docker Compose 基础可运行 | 已完成 | 100% | `01_M1_backend_foundation_checklist.md` | 通过 |
-| M2 | 账号、组织、会话与权限基础 | Auth、User、Department、Session、角色、权限边界 | 未开始 | 0% | `02_M2_auth_org_permission_checklist.md` | 待验收 |
+| M2 | 账号、组织、会话与权限基础 | Auth、User、Department、Session、角色、权限边界 | 已完成 | 100% | `02_M2_auth_org_permission_checklist.md` | 通过 |
 | M3 | 扩展主档、版本、授权范围、可见性、搜索与统计 | Extension、Version、Scope、Visibility、Search、Star、Statistics | 未开始 | 0% | `03_M3_extension_catalog_scope_statistics_checklist.md` | 待验收 |
 | M4 | 发布申请、系统预审、审核、审计与通知 | Submission、Revision、Rule Precheck、AI Precheck Adapter、Review、Notification、Audit 扩展 | 未开始 | 0% | `04_M4_submission_precheck_review_audit_notification_checklist.md` | 待验收 |
 | M5 | 包存储、下载凭证、安全校验与文件预览 | Package Storage、Download Ticket、Safe Zip、Hash、Preview、脱敏 | 未开始 | 0% | `05_M5_package_storage_download_security_preview_checklist.md` | 待验收 |
@@ -34,7 +34,7 @@
 ## 3. 阶段勾选区
 
 - [x] M1 服务端基础工程完成并通过验收。
-- [ ] M2 账号、组织、会话与权限基础完成并通过验收。
+- [x] M2 账号、组织、会话与权限基础完成并通过验收。
 - [ ] M3 扩展主档、版本、授权范围、可见性、搜索与统计完成并通过验收。
 - [ ] M4 发布申请、系统预审、审核、审计与通知完成并通过验收。
 - [ ] M5 包存储、下载凭证、安全校验与文件预览完成并通过验收。
@@ -72,13 +72,13 @@ M1 服务端基础工程
 ### M2 完成记录
 
 ```text
-状态：
-完成时间：
-分支：
-提交：
-验证命令：
-验证结果：
-遗留问题：
+状态：已完成 / 验收通过
+完成时间：2026-05-07 23:05:17 CST
+分支：feature/m2-auth-org-permission
+提交：未提交（当前工作树）
+验证命令：docker compose up -d postgres；Docker Maven `mvn -q -f server/pom.xml test`；git diff --check；JSON manifest 校验
+验证结果：Docker Maven 测试通过（27 tests, 0 failures, 0 errors）；Flyway 校验 3 个迁移；统一响应/requestID/审计/M2 权限边界/幂等测试通过
+遗留问题：M2 按设计明确不支持 refresh；生产初始管理员不自动 seed，需部署流程注入
 ```
 
 ### M3 完成记录

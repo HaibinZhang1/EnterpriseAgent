@@ -5,6 +5,7 @@ import java.util.Locale;
 import java.util.Map;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -21,6 +22,15 @@ public class AuditService {
 
     @Transactional
     public AuditLog record(AuditRecord record) {
+        return saveSanitized(record);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public AuditLog recordFailure(AuditRecord record) {
+        return saveSanitized(record);
+    }
+
+    private AuditLog saveSanitized(AuditRecord record) {
         String requestId = StringUtils.hasText(record.requestId())
                 ? record.requestId()
                 : RequestContext.currentRequestId().orElse("req_system");
