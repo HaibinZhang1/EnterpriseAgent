@@ -1,0 +1,7 @@
+.DS_Store
+.omx/
+docs/.DS_Store
+server/target/
+*.class
+.env
+!.env.example

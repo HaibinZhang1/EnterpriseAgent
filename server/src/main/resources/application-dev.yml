@@ -1,0 +1,8 @@
+spring:
+  config:
+    activate:
+      on-profile: dev
+  datasource:
+    url: jdbc:postgresql://${EAH_DB_HOST:localhost}:${EAH_DB_PORT:5432}/${EAH_DB_NAME:enterprise_agent_hub}
+    username: ${EAH_DB_USERNAME:eah}
+    password: ${EAH_DB_PASSWORD:change_me}

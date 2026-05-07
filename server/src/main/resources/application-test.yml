@@ -1,0 +1,13 @@
+spring:
+  config:
+    activate:
+      on-profile: test
+  datasource:
+    url: jdbc:postgresql://${EAH_TEST_DB_HOST:localhost}:${EAH_TEST_DB_PORT:5432}/${EAH_TEST_DB_NAME:enterprise_agent_hub_test}
+    username: ${EAH_TEST_DB_USERNAME:eah_test}
+    password: ${EAH_TEST_DB_PASSWORD:eah_test_password}
+  flyway:
+    clean-disabled: false
+  jpa:
+    hibernate:
+      ddl-auto: validate
