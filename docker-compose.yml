@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: public.ecr.aws/docker/library/postgres:16.6-bookworm
+    container_name: enterprise-agent-hub-postgres
+    environment:
+      POSTGRES_DB: ${EAH_DB_NAME:-enterprise_agent_hub}
+      POSTGRES_USER: ${EAH_DB_USERNAME:-eah}
+      POSTGRES_PASSWORD: ${EAH_DB_PASSWORD:-change_me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: enterprise-agent-hub-api:0.1.0
+    container_name: enterprise-agent-hub-api
+    environment:
+      SERVER_PORT: 8080
+      EAH_DB_HOST: postgres
+      EAH_DB_PORT: 5432
+      EAH_DB_NAME: ${EAH_DB_NAME:-enterprise_agent_hub}
+      EAH_DB_USERNAME: ${EAH_DB_USERNAME:-eah}
+      EAH_DB_PASSWORD: ${EAH_DB_PASSWORD:-change_me}
+      EAH_REQUEST_ID_HEADER: ${EAH_REQUEST_ID_HEADER:-X-Request-ID}
+      APP_VERSION: 0.1.0-SNAPSHOT
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres_data:

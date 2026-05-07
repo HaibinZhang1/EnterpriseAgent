@@ -1,0 +1,57 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: enterprise-agent-hub-server
+  datasource:
+    url: jdbc:postgresql://${EAH_DB_HOST:localhost}:${EAH_DB_PORT:5432}/${EAH_DB_NAME:enterprise_agent_hub}
+    username: ${EAH_DB_USERNAME:eah}
+    password: ${EAH_DB_PASSWORD:change_me}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: false
+  profiles:
+    default: dev
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+enterprise-agent:
+  request-id-header: ${EAH_REQUEST_ID_HEADER:X-Request-ID}
+  auth:
+    desktop-session-ttl: ${EAH_DESKTOP_SESSION_TTL:30d}
+    admin-session-ttl: ${EAH_ADMIN_SESSION_TTL:8h}
+    admin-idle-ttl: ${EAH_ADMIN_IDLE_TTL:30m}
+    login-failure-window: ${EAH_LOGIN_FAILURE_WINDOW:15m}
+    max-login-failures: ${EAH_MAX_LOGIN_FAILURES:5}
+    lock-duration: ${EAH_LOGIN_LOCK_DURATION:15m}
+    reset-token-ttl: ${EAH_RESET_TOKEN_TTL:1h}
+    password-policy:
+      min-length: ${EAH_PASSWORD_MIN_LENGTH:8}
+      require-letter: ${EAH_PASSWORD_REQUIRE_LETTER:true}
+      require-digit: ${EAH_PASSWORD_REQUIRE_DIGIT:true}
+      require-special: ${EAH_PASSWORD_REQUIRE_SPECIAL:true}
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] requestId=%X{requestId:-} %logger{36} - %msg%n"
+
+info:
+  app:
+    name: enterprise-agent-hub-server
+    version: ${APP_VERSION:0.1.0-SNAPSHOT}

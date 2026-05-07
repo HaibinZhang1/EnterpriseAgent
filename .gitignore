@@ -1,0 +1,8 @@
+.DS_Store
+.omx/
+.m2-docker/
+docs/.DS_Store
+server/target/
+*.class
+.env
+!.env.example

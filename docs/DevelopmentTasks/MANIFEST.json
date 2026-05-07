@@ -1,0 +1,77 @@
+{
+  "name": "EnterpriseAgent Agent Development Stage Checklists",
+  "generated_at": "2026-05-07 11:26:17",
+  "recommended_target_dir": "docs/DevelopmentTasks/",
+  "stages": [
+    {
+      "id": "M1",
+      "name": "服务端基础工程",
+      "file": "01_M1_backend_foundation_checklist.md",
+      "branch": "feature/m1-backend-foundation",
+      "commit_message": "feat(server): initialize Spring Boot foundation"
+    },
+    {
+      "id": "M2",
+      "name": "账号、组织、会话与权限基础",
+      "file": "02_M2_auth_org_permission_checklist.md",
+      "branch": "feature/m2-auth-org-permission",
+      "commit_message": "feat(server): implement auth org permission foundation"
+    },
+    {
+      "id": "M3",
+      "name": "扩展主档、版本、授权范围、可见性、搜索与统计",
+      "file": "03_M3_extension_catalog_scope_statistics_checklist.md",
+      "branch": "feature/m3-extension-catalog-scope-statistics",
+      "commit_message": "feat(server): implement extension catalog scope statistics"
+    },
+    {
+      "id": "M4",
+      "name": "发布申请、系统预审、审核、审计与通知",
+      "file": "04_M4_submission_precheck_review_audit_notification_checklist.md",
+      "branch": "feature/m4-submission-precheck-review-audit-notification",
+      "commit_message": "feat(server): implement submission precheck review notification"
+    },
+    {
+      "id": "M5",
+      "name": "包存储、下载凭证、安全校验与文件预览",
+      "file": "05_M5_package_storage_download_security_preview_checklist.md",
+      "branch": "feature/m5-package-storage-download-security-preview",
+      "commit_message": "feat(server): implement package storage download security preview"
+    },
+    {
+      "id": "M6",
+      "name": "桌面客户端后端基础、本地数据库与 IPC",
+      "file": "06_M6_desktop_backend_foundation_localdb_ipc_checklist.md",
+      "branch": "feature/m6-desktop-backend-foundation-localdb-ipc",
+      "commit_message": "feat(client): initialize desktop backend localdb ipc"
+    },
+    {
+      "id": "M7",
+      "name": "本地执行器、Tool Adapter、Skill/MCP/Plugin 本地执行",
+      "file": "07_M7_local_executor_tool_adapter_extension_execution_checklist.md",
+      "branch": "feature/m7-local-executor-tool-adapter-extension-execution",
+      "commit_message": "feat(client): implement local executor tool adapters extension execution"
+    },
+    {
+      "id": "M8",
+      "name": "设备、客户端更新、备份恢复、部署与最终验收",
+      "file": "08_M8_device_update_backup_deploy_acceptance_checklist.md",
+      "branch": "feature/m8-device-update-backup-deploy-acceptance",
+      "commit_message": "feat(ops): implement device update backup deploy acceptance"
+    }
+  ],
+  "files": [
+    "00_MASTER_STAGE_CHECKLIST.md",
+    "01_M1_backend_foundation_checklist.md",
+    "02_M2_auth_org_permission_checklist.md",
+    "03_M3_extension_catalog_scope_statistics_checklist.md",
+    "04_M4_submission_precheck_review_audit_notification_checklist.md",
+    "05_M5_package_storage_download_security_preview_checklist.md",
+    "06_M6_desktop_backend_foundation_localdb_ipc_checklist.md",
+    "07_M7_local_executor_tool_adapter_extension_execution_checklist.md",
+    "08_M8_device_update_backup_deploy_acceptance_checklist.md",
+    "09_AGENT_WORKING_RULES.md",
+    "README.md"
+  ],
+  "usage_rule": "Agent must update checkboxes and completion records after each verified task. Unverified items must remain unchecked."
+}

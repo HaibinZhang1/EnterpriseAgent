@@ -1,0 +1,5 @@
+.git
+.omx
+**/.DS_Store
+server/target
+server/.mvn/wrapper/maven-wrapper.jar
