@@ -6,3 +6,7 @@ server/target/
 *.class
 .env
 !.env.example
+
+desktop/node_modules/
+desktop/dist/
+desktop/coverage/

@@ -35,8 +35,28 @@ class FlywayMigrationTests extends PostgresIntegrationTestBase {
             assertThat(exists(connection, "select to_regclass('public.uk_sessions_token_hash') is not null")).isTrue();
             assertThat(exists(connection, "select to_regclass('public.uk_password_reset_token_hash') is not null")).isTrue();
             assertThat(exists(connection, "select to_regclass('public.uk_idempotency_actor_operation_key') is not null")).isTrue();
-            assertThat(exists(connection, "select to_regclass('public.extensions') is null")).isTrue();
-            assertThat(exists(connection, "select to_regclass('public.submissions') is null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.extensions') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.extension_versions') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.extension_authorization_scopes') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.stars') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.metric_period_aggregates') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.submissions') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.submission_revisions') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.system_prechecks') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.reviews') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.notifications') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.outbox_events') is not null")).isTrue();
+            assertThat(exists(connection, "select exists (select 1 from information_schema.columns where table_name = 'outbox_events' and column_name = 'retry_count')")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.temp_uploads') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.package_objects') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.package_files') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.package_previews') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.download_tickets') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.uk_download_ticket_hash') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.idx_package_objects_hash') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.local_events') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.uk_local_event_idempotency') is not null")).isTrue();
+            assertThat(exists(connection, "select exists (select 1 from information_schema.columns where table_name = 'local_events' and column_name = 'payload_summary' and is_nullable = 'NO')")).isTrue();
         }
     }
 

@@ -11,3 +11,14 @@ spring:
   jpa:
     hibernate:
       ddl-auto: validate
+
+enterprise-agent:
+  package-storage:
+    root: ${EAH_TEST_STORAGE_ROOT:${java.io.tmpdir}/enterprise-agent-hub-test-storage}
+    max-compressed-size: 5242880
+    max-uncompressed-size: 20971520
+    max-single-file-size: 2097152
+    max-file-count: 100
+    preview-max-bytes: 262144
+    temp-ttl: 24h
+    ticket-ttl: 10m

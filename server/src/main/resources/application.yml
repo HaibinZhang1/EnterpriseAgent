@@ -33,6 +33,15 @@ management:
 
 enterprise-agent:
   request-id-header: ${EAH_REQUEST_ID_HEADER:X-Request-ID}
+  package-storage:
+    root: ${EAH_STORAGE_ROOT:storage}
+    max-compressed-size: ${EAH_PACKAGE_MAX_COMPRESSED_SIZE:5242880}
+    max-uncompressed-size: ${EAH_PACKAGE_MAX_UNCOMPRESSED_SIZE:20971520}
+    max-single-file-size: ${EAH_PACKAGE_MAX_SINGLE_FILE_SIZE:2097152}
+    max-file-count: ${EAH_PACKAGE_MAX_FILE_COUNT:100}
+    preview-max-bytes: ${EAH_PACKAGE_PREVIEW_MAX_BYTES:262144}
+    temp-ttl: ${EAH_PACKAGE_TEMP_TTL:24h}
+    ticket-ttl: ${EAH_PACKAGE_TICKET_TTL:10m}
   auth:
     desktop-session-ttl: ${EAH_DESKTOP_SESSION_TTL:30d}
     admin-session-ttl: ${EAH_ADMIN_SESSION_TTL:8h}
