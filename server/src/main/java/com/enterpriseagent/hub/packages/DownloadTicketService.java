@@ -59,6 +59,45 @@ public class DownloadTicketService {
     }
 
     @Transactional
+    public Map<String, Object> issueClientUpdate(CurrentUser actor, UUID versionId, String deviceId, String currentVersion) {
+        if (versionId == null || !StringUtils.hasText(deviceId)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "客户端更新下载缺少版本或设备");
+        }
+        requireRegisteredDevice(actor, deviceId);
+        Map<String, Object> version = jdbc.queryForList("""
+                select cv.id as version_id, cv.version, cv.status, cv.signature_status, cv.package_object_id,
+                       cv.package_sha256, cv.package_size, po.sha256, po.size_bytes, po.original_filename
+                  from client_versions cv
+                  join package_objects po on po.id = cv.package_object_id
+                 where cv.id = ? for update of cv
+                """, versionId).stream().findFirst()
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "客户端更新版本不存在"));
+        if (!"PUBLISHED".equals(String.valueOf(version.get("status")))) {
+            throw new BusinessException(ErrorCode.STATE_CONFLICT, "客户端更新版本未发布");
+        }
+        if (!"VALID".equals(String.valueOf(version.get("signature_status")))) {
+            throw new BusinessException(ErrorCode.SIGNATURE_INVALID, "客户端更新包签名无效");
+        }
+        Map<String, Object> packageObject = new LinkedHashMap<>();
+        packageObject.put("id", version.get("package_object_id"));
+        packageObject.put("extension_pk", null);
+        packageObject.put("extension_business_id", "client-update");
+        packageObject.put("version", version.get("version"));
+        packageObject.put("sha256", version.get("package_sha256") != null && StringUtils.hasText(String.valueOf(version.get("package_sha256")))
+                ? version.get("package_sha256") : version.get("sha256"));
+        packageObject.put("size_bytes", version.get("package_size") == null
+                ? version.get("size_bytes") : version.get("package_size"));
+        DownloadTicketRequest request = new DownloadTicketRequest(DownloadObjectType.CLIENT_UPDATE,
+                (UUID) version.get("package_object_id"), null, String.valueOf(version.get("version")),
+                DownloadPurpose.CLIENT_UPDATE, deviceId);
+        Map<String, Object> response = issueFresh(actor, request, packageObject, null);
+        response.put("versionId", versionId);
+        response.put("version", version.get("version"));
+        response.put("currentVersion", currentVersion);
+        return response;
+    }
+
+    @Transactional
     public DownloadFile authorizeDownload(CurrentUser actor, String ticket) {
         String hash = hash(ticket);
         var rows = jdbc.queryForList("""
@@ -251,12 +290,56 @@ public class DownloadTicketService {
 
     private void recordDownloadEvent(CurrentUser actor, Map<String, Object> ticketRow) {
         String purpose = String.valueOf(ticketRow.get("purpose"));
+        String objectType = String.valueOf(ticketRow.get("object_type"));
+        if ("CLIENT_UPDATE".equals(purpose) || "CLIENT_UPDATE".equals(objectType)) {
+            recordClientUpdateDownloadEvent(actor, ticketRow);
+            return;
+        }
         String eventType = "INSTALL".equals(purpose) ? "EXTENSION_DOWNLOAD" : "PACKAGE_DOWNLOAD";
         jdbc.update("""
                 insert into activity_events (id, event_type, user_id, extension_pk, payload)
                 values (?, ?, ?, ?, ?::jsonb)
                 """, UUID.randomUUID(), eventType, actor.id(), ticketRow.get("extension_id"),
                 json.write(Map.of("purpose", purpose, "ticketId", ticketRow.get("id"), "objectId", ticketRow.get("object_id"))));
+    }
+
+    private void requireRegisteredDevice(CurrentUser actor, String deviceId) {
+        Long count = jdbc.queryForObject("""
+                select count(*) from client_devices
+                 where device_id = ? and user_id = ? and status = 'ACTIVE'
+                """, Long.class, deviceId, actor.id());
+        if (count == null || count == 0) {
+            throw new BusinessException(ErrorCode.DEVICE_NOT_FOUND, "设备不存在或不属于当前用户");
+        }
+    }
+
+    private void recordClientUpdateDownloadEvent(CurrentUser actor, Map<String, Object> ticketRow) {
+        var versionRows = jdbc.queryForList("""
+                select id, version from client_versions where package_object_id = ?
+                """, ticketRow.get("object_id"));
+        UUID versionId = versionRows.isEmpty() ? null : (UUID) versionRows.get(0).get("id");
+        String version = versionRows.isEmpty() ? String.valueOf(ticketRow.get("version")) : String.valueOf(versionRows.get(0).get("version"));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("ticketId", String.valueOf(ticketRow.get("id")));
+        payload.put("objectId", String.valueOf(ticketRow.get("object_id")));
+        payload.put("purpose", ticketRow.get("purpose"));
+        jdbc.update("""
+                insert into client_update_events (id, version_id, device_id, user_id, event_type, result, error_code,
+                  request_id, from_version, to_version, payload_summary, occurred_at)
+                values (?, ?, ?, ?, 'PACKAGE_DOWNLOADED', 'SUCCESS', null, ?, null, ?, ?::jsonb, ?)
+                """, UUID.randomUUID(), versionId, ticketRow.get("device_id"), actor.id(),
+                RequestContext.requireRequestId(), version, json.write(payload), OffsetDateTime.now());
+        auditService.record(AuditRecord.builder()
+                .actorId(actor.id())
+                .objectType("client_update")
+                .objectId(versionId == null ? null : versionId.toString())
+                .objectNameSnapshot(version)
+                .action("client_update.package_download")
+                .result(AuditResult.SUCCESS)
+                .afterSummary(payload)
+                .deviceId((String) ticketRow.get("device_id"))
+                .clientVersion(actor.clientVersion())
+                .build());
     }
 
     private String newToken() {

@@ -23,6 +23,9 @@ describe('IPC router and preload API', () => {
       const installPlan = await services.router.invoke(IPC_CHANNELS.extensionInstall, { extensionID: 'ext', targetPath: path.join(temp.root, 'skills/ext') }, { requestID: 'req_install' });
       expect(installPlan).toMatchObject({ success: true, requestID: 'req_install', data: { operation: 'SKILL_ENABLE' } });
 
+      const pendingUpdate = await services.router.invoke(IPC_CHANNELS.clientUpdateGetPending, undefined, { requestID: 'req_update_pending' });
+      expect(pendingUpdate).toMatchObject({ success: true, requestID: 'req_update_pending' });
+
       const unknown = await services.router.invoke('raw.ipcRenderer', {}, { requestID: 'req_unknown' });
       expect(unknown).toMatchObject({ success: false, error: { code: 'unknown_ipc_channel' } });
       await services.db.close();
@@ -33,7 +36,8 @@ describe('IPC router and preload API', () => {
 
   it('preload exposes only whitelisted grouped methods, never raw ipcRenderer or Node objects', () => {
     const api = createPreloadApi(async <T>(channel: any, _payload?: unknown, requestID?: string) => ({ success: true, data: channel as T, requestID: requestID ?? 'req' }));
-    expect(Object.keys(api).sort()).toEqual(['auth', 'catalog', 'device', 'extension', 'local', 'logs', 'settings']);
+    expect(Object.keys(api).sort()).toEqual(['auth', 'catalog', 'clientUpdate', 'device', 'extension', 'local', 'logs', 'settings']);
+    expect(Object.keys(api.clientUpdate).sort()).toEqual(['cancel', 'check', 'confirmDownload', 'confirmInstall', 'getPending']);
     expect(JSON.stringify(api)).not.toContain('ipcRenderer');
     expect('fs' in api).toBe(false);
     expect('process' in api).toBe(false);

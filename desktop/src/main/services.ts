@@ -9,12 +9,15 @@ import { LocalDatabase } from './db/local-database';
 import { LocalEventQueue } from './events/local-event-queue';
 import { LocalEventSyncService } from './events/local-event-sync-service';
 import { LocalExecutor } from './executor/local-executor';
+import { DeviceRegistrationService } from './device/device-registration-service';
 import { LocalLifecycleRepository } from './lifecycle/local-lifecycle-repository';
 import { ClientLogger } from './logging/client-logger';
 import { McpService } from './mcp/mcp-service';
 import { PackageDownloadService } from './packages/package-download-service';
 import { PluginService } from './plugin/plugin-service';
 import { SkillService } from './skill/skill-service';
+import { ClientUpdateService, ShellClientUpdateLauncher, type ClientUpdateLauncher } from './update/client-update-service';
+import { WindowsAuthenticodeSignatureVerifier, type SignatureVerifier } from './update/signature-verifier';
 import { MemorySecureStore, SafeStorageSecureStore, type SecureStore } from './security/secure-store';
 import { createDesktopIpcRouter } from './ipc/handlers';
 import type { IpcRouter } from './ipc/ipc-router';
@@ -26,6 +29,8 @@ export interface CreateDesktopServicesOptions {
   clientVersion?: string;
   fetchImpl?: typeof fetch;
   safeStorage?: SafeStorageLike;
+  signatureVerifier?: SignatureVerifier;
+  updateLauncher?: ClientUpdateLauncher;
 }
 
 export interface DesktopServices {
@@ -35,6 +40,8 @@ export interface DesktopServices {
   deviceInfo: DeviceInfo;
   eventQueue: LocalEventQueue;
   eventSyncService: LocalEventSyncService;
+  deviceRegistrationService: DeviceRegistrationService;
+  clientUpdateService: ClientUpdateService;
   localExecutor: LocalExecutor;
   lifecycleRepository: LocalLifecycleRepository;
   mcpService: McpService;
@@ -79,6 +86,14 @@ export async function createDesktopServices(options: CreateDesktopServicesOption
   const packageDownloadService = new PackageDownloadService(apiClient, paths);
   const pluginService = new PluginService();
   const skillService = new SkillService(paths);
+  const deviceRegistrationService = new DeviceRegistrationService(apiClient, async () => deviceInfo);
+  const clientUpdateService = new ClientUpdateService({
+    apiClient,
+    getDeviceInfo: async () => deviceInfo,
+    downloadsDir: path.join(paths.root, 'updates'),
+    signatureVerifier: options.signatureVerifier ?? new WindowsAuthenticodeSignatureVerifier(),
+    launcher: options.updateLauncher ?? new ShellClientUpdateLauncher()
+  });
   const router = createDesktopIpcRouter({
     apiClient,
     cacheRepository,
@@ -90,7 +105,9 @@ export async function createDesktopServices(options: CreateDesktopServicesOption
     offlinePolicy,
     paths,
     secureStore,
-    skillService
+    skillService,
+    deviceRegistrationService,
+    clientUpdateService
   });
 
   return {
@@ -100,6 +117,8 @@ export async function createDesktopServices(options: CreateDesktopServicesOption
     deviceInfo,
     eventQueue,
     eventSyncService,
+    deviceRegistrationService,
+    clientUpdateService,
     lifecycleRepository,
     localExecutor,
     logger,

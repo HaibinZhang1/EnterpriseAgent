@@ -11,8 +11,6 @@ export type DesktopErrorCode =
   | 'unauthenticated'
   | 'server_unavailable'
   | 'api_error'
-  | 'api_contract_stub'
-  | 'scope_not_supported_in_m6'
   | 'permission_denied'
   | 'scope_restricted'
   | 'resource_not_found'
@@ -21,6 +19,9 @@ export type DesktopErrorCode =
   | 'offline_authorization_required'
   | 'invalid_execution_plan'
   | 'hash_mismatch'
+  | 'signature_verification_failed'
+  | 'installer_launch_failed'
+  | 'update_confirmation_required'
   | 'adapter_manifest_invalid'
   | 'unknown_error';
 

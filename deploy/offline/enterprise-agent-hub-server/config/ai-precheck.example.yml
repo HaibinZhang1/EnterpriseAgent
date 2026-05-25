@@ -1,0 +1,7 @@
+# Example AI precheck settings for offline deployments.
+# Keep disabled unless an approved intranet endpoint is configured.
+aiPrecheck:
+  enabled: false
+  endpoint: ""
+  apiKeySecretName: ""
+  timeoutSeconds: 10

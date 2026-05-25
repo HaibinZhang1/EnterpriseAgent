@@ -4,6 +4,8 @@
 docs/.DS_Store
 server/target/
 *.class
+__pycache__/
+*.py[cod]
 .env
 !.env.example
 

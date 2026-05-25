@@ -13,7 +13,12 @@ export const IPC_CHANNELS = {
   localListPendingEvents: 'local.listPendingEvents',
   settingsGetLocalConfig: 'settings.getLocalConfig',
   logsGetRecent: 'logs.getRecent',
-  extensionInstall: 'extension.install'
+  extensionInstall: 'extension.install',
+  clientUpdateCheck: 'clientUpdate.check',
+  clientUpdateGetPending: 'clientUpdate.getPending',
+  clientUpdateConfirmDownload: 'clientUpdate.confirmDownload',
+  clientUpdateCancel: 'clientUpdate.cancel',
+  clientUpdateConfirmInstall: 'clientUpdate.confirmInstall'
 } as const;
 
 export type IpcChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS];

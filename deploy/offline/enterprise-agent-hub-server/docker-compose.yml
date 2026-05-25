@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    container_name: enterprise-agent-hub-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-enterprise_agent_hub}
+      POSTGRES_USER: ${POSTGRES_USER:-enterprise_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in config/.env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  server:
+    image: ${SERVER_IMAGE:-enterprise-agent-hub-server:offline}
+    container_name: enterprise-agent-hub-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ./config/server.env
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-enterprise_agent_hub}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-enterprise_agent}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in config/.env}
+      ENTERPRISE_AGENT_STORAGE_ROOT: /var/lib/enterprise-agent-hub/storage
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    volumes:
+      - server-storage:/var/lib/enterprise-agent-hub/storage
+      - ./config:/opt/enterprise-agent-hub/config:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/actuator/health >/dev/null || curl -fsS http://127.0.0.1:8080/actuator/health >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres-data:
+  server-storage:

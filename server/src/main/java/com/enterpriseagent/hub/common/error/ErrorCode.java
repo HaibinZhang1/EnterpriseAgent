@@ -36,7 +36,9 @@ public enum ErrorCode {
     DOWNLOAD_TICKET_USED("download_ticket_used", HttpStatus.CONFLICT, false),
     DOWNLOAD_PURPOSE_INVALID("download_purpose_invalid", HttpStatus.BAD_REQUEST, false),
     PLUGIN_DOWNLOAD_SOURCE_EXPIRED("plugin_download_source_expired", HttpStatus.GONE, false),
-    PLUGIN_DOWNLOAD_FAILED("plugin_download_failed", HttpStatus.BAD_REQUEST, true);
+    PLUGIN_DOWNLOAD_FAILED("plugin_download_failed", HttpStatus.BAD_REQUEST, true),
+    SIGNATURE_INVALID("signature_invalid", HttpStatus.BAD_REQUEST, false),
+    DEVICE_NOT_FOUND("device_not_found", HttpStatus.NOT_FOUND, false);
 
     private final String code;
     private final HttpStatus httpStatus;

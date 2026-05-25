@@ -1,0 +1,7 @@
+# Example storage settings for an offline Enterprise Agent Hub server.
+# Copy values into application config or environment-specific config management.
+storage:
+  root: /var/lib/enterprise-agent-hub/storage
+  packages: /var/lib/enterprise-agent-hub/storage/packages
+  clientUpdates: /var/lib/enterprise-agent-hub/storage/client-updates
+  manifests: /var/lib/enterprise-agent-hub/storage/manifests

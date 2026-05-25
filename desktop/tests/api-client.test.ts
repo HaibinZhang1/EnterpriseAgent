@@ -52,12 +52,70 @@ describe('ApiClient', () => {
     }
   });
 
-  it('maps unauthenticated and M8 server contracts to stable errors', async () => {
+  it('maps unauthenticated responses to stable errors', async () => {
     const unauthorizedFetch: typeof fetch = async () => new Response(JSON.stringify({ success: false }), { status: 401 });
     const client = new ApiClient({ baseURL: 'http://server.test', clientVersion: '0.1.0-m6', fetchImpl: unauthorizedFetch });
     await expect(client.me('req_auth')).rejects.toMatchObject({ desktopError: { code: 'unauthenticated', requestID: 'req_auth' } });
-    await expect(client.registerDevice()).rejects.toMatchObject({ desktopError: { code: 'api_contract_stub' } });
-    await expect(client.checkClientUpdate()).rejects.toMatchObject({ desktopError: { code: 'api_contract_stub' } });
+  });
+
+  it('calls M8 device and client update endpoints with stable payloads and redacted tickets', async () => {
+    const temp = await tempRoot();
+    try {
+      const calls: Array<{ url: string; init: RequestInit }> = [];
+      const expectedUpdateBytes = new Uint8Array([9, 8, 7]);
+      const fetchImpl: typeof fetch = async (input, init) => {
+        calls.push({ url: String(input), init: init ?? {} });
+        const url = String(input);
+        if (url.endsWith('/api/client-devices/register')) {
+          return new Response(JSON.stringify({ success: true, data: { registered: true } }), { status: 200 });
+        }
+        if (url.includes('/api/client-updates/check?')) {
+          return new Response(JSON.stringify({ success: true, data: { updateAvailable: true, version: '0.1.0-m8' } }), { status: 200 });
+        }
+        if (url.endsWith('/api/client-updates/version-1/download-ticket')) {
+          return new Response(JSON.stringify({ success: true, data: { ticket: 'ticket-raw-secret' } }), { status: 200 });
+        }
+        if (url.endsWith('/api/download-tickets/ticket-raw-secret/download')) {
+          return new Response(expectedUpdateBytes, { status: 200 });
+        }
+        if (url.endsWith('/api/client-updates/events') || url.endsWith('/api/client-devices/events')) {
+          return new Response(JSON.stringify({ success: true, data: { accepted: true } }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ success: false }), { status: 404 });
+      };
+      const logger = new ClientLogger(path.join(temp.root, 'desktop.log'));
+      const client = new ApiClient({
+        baseURL: 'http://server.test',
+        getSessionToken: async () => 'raw-token',
+        getDeviceID: async () => 'device_1',
+        clientVersion: '0.1.0-m8',
+        fetchImpl,
+        logger
+      });
+
+      await expect(client.registerDevice({ deviceID: 'device_1', createdAt: 'now', updatedAt: 'now', clientVersion: '0.1.0-m8' }, 'req_register')).resolves.toEqual({ registered: true });
+      await expect(client.checkClientUpdate({ deviceId: 'device_1', currentVersion: '0.1.0-m7', platform: 'win32', arch: 'x64' }, 'req_check')).resolves.toMatchObject({ updateAvailable: true });
+      await expect(client.createClientUpdateDownloadTicket({ deviceId: 'device_1', versionId: 'version-1', currentVersion: '0.1.0-m7' }, 'req_ticket')).resolves.toEqual({ ticket: 'ticket-raw-secret' });
+      await expect(client.downloadClientUpdate('ticket-raw-secret', 'req_download_update')).resolves.toBeInstanceOf(ArrayBuffer);
+      await client.reportClientUpdateEvents('device_1', [{ eventType: 'USER_CANCELLED', result: 'cancelled' }], 'req_event');
+
+      expect(calls.map((call) => call.url)).toEqual([
+        'http://server.test/api/client-devices/register',
+        'http://server.test/api/client-updates/check?deviceId=device_1&currentVersion=0.1.0-m7&platform=win32&arch=x64',
+        'http://server.test/api/client-updates/version-1/download-ticket',
+        'http://server.test/api/download-tickets/ticket-raw-secret/download',
+        'http://server.test/api/client-updates/events'
+      ]);
+      expect(JSON.parse(calls[0].init.body as string)).toMatchObject({ deviceId: 'device_1', clientVersion: '0.1.0-m8', osVersion: process.platform, arch: process.arch });
+      expect(JSON.parse(calls[2].init.body as string)).toEqual({ deviceId: 'device_1', currentVersion: '0.1.0-m7' });
+      const headers = calls[0].init.headers as Record<string, string>;
+      expect(headers.Authorization).toBe('Bearer raw-token');
+      const logText = await readFile(path.join(temp.root, 'desktop.log'), 'utf8');
+      expect(logText).not.toContain('raw-token');
+      expect(logText).not.toContain('ticket-raw-secret/download');
+    } finally {
+      await temp.cleanup();
+    }
   });
 
   it('preserves typed server authorization errors from M7 definition endpoints', async () => {

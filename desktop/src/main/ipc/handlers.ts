@@ -6,12 +6,14 @@ import type { CacheRepository } from '../cache/cache-repository';
 import type { OfflinePolicy } from '../cache/offline-policy';
 import type { AppPaths } from '../config/app-paths';
 import type { DeviceInfo } from '../config/device-id-store';
+import type { DeviceRegistrationService } from '../device/device-registration-service';
 import type { LocalEventQueue } from '../events/local-event-queue';
 import type { LocalExecutor } from '../executor/local-executor';
 import type { LocalLifecycleRepository } from '../lifecycle/local-lifecycle-repository';
 import type { ClientLogger } from '../logging/client-logger';
 import type { SecureStore } from '../security/secure-store';
 import type { SkillService } from '../skill/skill-service';
+import type { ClientUpdateService } from '../update/client-update-service';
 import { IPC_CHANNELS } from './channels';
 import { IpcRouter } from './ipc-router';
 import { sanitizeLoginResult } from './sanitize';
@@ -25,6 +27,8 @@ export interface DesktopIpcServices {
   localExecutor: LocalExecutor;
   lifecycleRepository: LocalLifecycleRepository;
   skillService: SkillService;
+  deviceRegistrationService: DeviceRegistrationService;
+  clientUpdateService: ClientUpdateService;
   logger: ClientLogger;
   paths: AppPaths;
   getDeviceInfo: () => Promise<DeviceInfo>;
@@ -37,9 +41,17 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
     const record = assertRecord(payload, context.requestID);
     const username = requiredString(record, 'username', context.requestID);
     const password = requiredString(record, 'password', context.requestID);
-    const result = await services.apiClient.login({ username, password }, context.requestID);
+    const device = await services.getDeviceInfo();
+    const result = await services.apiClient.login({
+      phone: username,
+      password,
+      clientType: 'DESKTOP',
+      deviceId: device.deviceID,
+      clientVersion: device.clientVersion
+    }, context.requestID);
     if (typeof result === 'object' && result && 'token' in result && typeof result.token === 'string') {
       await services.secureStore.set('session.token', result.token);
+      await services.deviceRegistrationService.register(context.requestID);
     }
     return sanitizeLoginResult(result);
   });
@@ -83,6 +95,14 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
   router.register(IPC_CHANNELS.localListPendingEvents, () => services.eventQueue.listPending());
   router.register(IPC_CHANNELS.settingsGetLocalConfig, async () => JSON.parse(await readFile(services.paths.configFile, 'utf8')) as unknown);
   router.register(IPC_CHANNELS.logsGetRecent, () => services.logger.recent());
+  router.register(IPC_CHANNELS.clientUpdateCheck, (_payload, context) => services.clientUpdateService.check(context.requestID));
+  router.register(IPC_CHANNELS.clientUpdateGetPending, () => services.clientUpdateService.getPending());
+  router.register(IPC_CHANNELS.clientUpdateConfirmDownload, (_payload, context) => services.clientUpdateService.confirmDownload(context.requestID));
+  router.register(IPC_CHANNELS.clientUpdateCancel, (payload, context) => {
+    const record = payload === undefined ? {} : assertRecord(payload, context.requestID);
+    return services.clientUpdateService.cancel(optionalString(record, 'reason', context.requestID) ?? 'USER_CANCELLED', context.requestID);
+  });
+  router.register(IPC_CHANNELS.clientUpdateConfirmInstall, (_payload, context) => services.clientUpdateService.confirmInstall(context.requestID));
   router.register(IPC_CHANNELS.extensionInstall, async (payload, context) => {
     const record = assertRecord(payload, context.requestID);
     const extensionId = requiredString(record, 'extensionID', context.requestID);

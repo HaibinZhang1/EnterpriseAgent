@@ -32,6 +32,13 @@ export function createPreloadApi(invoke: PreloadInvoke) {
     },
     logs: {
       getRecent: (requestID?: string) => invoke(IPC_CHANNELS.logsGetRecent, undefined, requestID)
+    },
+    clientUpdate: {
+      check: (requestID?: string) => invoke(IPC_CHANNELS.clientUpdateCheck, undefined, requestID),
+      getPending: (requestID?: string) => invoke(IPC_CHANNELS.clientUpdateGetPending, undefined, requestID),
+      confirmDownload: (requestID?: string) => invoke(IPC_CHANNELS.clientUpdateConfirmDownload, undefined, requestID),
+      cancel: (reason?: string, requestID?: string) => invoke(IPC_CHANNELS.clientUpdateCancel, reason ? { reason } : undefined, requestID),
+      confirmInstall: (requestID?: string) => invoke(IPC_CHANNELS.clientUpdateConfirmInstall, undefined, requestID)
     }
   };
 }

@@ -9,14 +9,14 @@
 | 字段 | 当前值 | 更新说明 |
 |---|---|---|
 | 项目 | EnterpriseAgent / Enterprise Agent Hub | 固定 |
-| 当前阶段 | M7 | Agent 每次开始新阶段时更新 |
+| 当前阶段 | M8 首轮验证 | Agent 每次开始新阶段时更新 |
 | 总阶段数 | 8 | M1-M8 |
-| 总体完成率 | 87% | M1-M6 已完成，M7 核心闭环 95%，M8 未开始 |
+| 总体完成率 | 98% | M1-M6 已完成，M7 核心闭环 95%，M8 首轮 85%；最终发布门禁保留 |
 | 当前分支 | main（当前工作树） | Agent 填写 |
-| 最近提交 | 未提交（当前工作树）；上次提交 `2934d4d` | Agent 填写 commit hash |
-| 最近验证时间 | 2026-05-08 16:14:07 CST | Agent 填写 |
-| 当前阻塞项 | M7 核心闭环已通过；7 项增强遗留 | Agent 填写 |
-| 下一阶段 | M7 遗留增强收口 / M8（待授权） | Agent 更新 |
+| 最近提交 | 未提交（当前工作树）；基线 `5ffc916` | Agent 填写 commit hash |
+| 最近验证时间 | 2026-05-08 22:31:30 CST | Agent 填写 |
+| 当前阻塞项 | M8 最终发布门禁：真实 Windows x64 installer/signing、Web Admin UI、真实离线镜像导入、性能计时、真实备份恢复/Compose 部署演练 | Agent 填写 |
+| 下一阶段 | M8 最终发布门禁收口 / M7 增强遗留收口 | Agent 更新 |
 
 ## 2. M1-M8 阶段总览
 
@@ -29,7 +29,7 @@
 | M5 | 包存储、下载凭证、安全校验与文件预览 | Package Storage、Download Ticket、Safe Zip、Hash、Preview、脱敏 | 已完成 | 100% | `05_M5_package_storage_download_security_preview_checklist.md` | 通过 |
 | M6 | 桌面客户端后端基础、本地数据库与 IPC | Electron Main、Preload、IPC、Local DB、Secure Store、事件队列骨架 | 已完成 | 100% | `06_M6_desktop_backend_foundation_localdb_ipc_checklist.md` | 通过 |
 | M7 | 本地执行器、Tool Adapter、Skill/MCP/Plugin 本地执行 | ExecutionPlan、LocalExecutor、Rollback、ToolAdapter、三类扩展本地闭环 | 已完成（核心闭环） | 95% | `07_M7_local_executor_tool_adapter_extension_execution_checklist.md` | 通过（7 项增强遗留） |
-| M8 | 设备、客户端更新、备份恢复、部署与最终验收 | Device、Client Update、Backup/Restore、Offline Package、E2E Acceptance | 未开始 | 0% | `08_M8_device_update_backup_deploy_acceptance_checklist.md` | 待验收 |
+| M8 | 设备、客户端更新、备份恢复、部署与最终验收 | Device、Client Update、Backup/Restore、Offline Package、E2E Acceptance | 首轮已验证（最终门禁保留） | 85% | `08_M8_device_update_backup_deploy_acceptance_checklist.md` | 首轮通过；延期门禁未关 |
 
 ## 3. 阶段勾选区
 
@@ -144,13 +144,13 @@ M1 服务端基础工程
 ### M8 完成记录
 
 ```text
-状态：
-完成时间：
-分支：
-提交：
-验证命令：
-验证结果：
-遗留问题：
+状态：首轮已验证（最终发布门禁保留）
+完成时间：2026-05-08 22:31:30 CST
+分支：main（当前工作树）
+提交：未提交（当前工作树）；基线 5ffc916
+验证命令（2026-05-08 首轮历史）：Docker Maven `mvn -f server/pom.xml test`（clean DB enterprise_agent_hub_test_m8_final_latest）；`npm --prefix desktop run typecheck`；`npm --prefix desktop test`；`npm --prefix desktop run lint`；`npm --prefix desktop run build`；`npm --prefix desktop run test:electron`；backup/restore/offline dry-run；`git diff --check`；JSON manifest 校验；Ralph architect 复审。
+验证结果（2026-05-08 首轮历史）：服务端 56 tests、桌面 19 files / 42 tests、Electron smoke 1 file / 2 tests、lint/build/typecheck、脚本 dry-run、静态校验均通过；架构复审 APPROVED。2026-05-11 review 修复后 Docker Maven 服务端 58 tests、桌面 19 files / 44 tests、lint/build/typecheck、Electron smoke、脚本语法、静态校验均通过；未真实演练的发布门禁保持未勾选。
+遗留问题：M8 最终完成勾选保留；真实 Windows x64 installer/signing、Web Admin UI、真实离线镜像导入/air-gapped smoke、性能计时、真实 pg_dump/restore/Compose 部署演练未完成。
 ```
 
 ## 6. 全局验收门禁
@@ -164,12 +164,12 @@ M1 服务端基础工程
 - [ ] 客户端可连接内网服务端。
 - [ ] Web 管理端静态资源可部署或由服务端提供。
 - [ ] 运行时不访问互联网。
-- [ ] 三类扩展 Skill、MCP Server、Plugin 均具备发布、审核、展示、安装或接入、更新、卸载、统计、审计闭环。
-- [ ] 授权范围与可见选项由服务端权威判断。
-- [ ] 停用、卸载和本地清理不因授权收缩而被禁止。
-- [ ] 审计日志可按 requestID 查询。
-- [ ] 客户端设备、版本分布、更新失败事件可查询。
-- [ ] 备份脚本可执行。
-- [ ] 恢复脚本可执行。
-- [ ] 所有测试通过。
+- [x] 三类扩展 Skill、MCP Server、Plugin 均具备发布、审核、展示、安装或接入、更新、卸载、统计、审计闭环。
+- [x] 授权范围与可见选项由服务端权威判断。
+- [x] 停用、卸载和本地清理不因授权收缩而被禁止。
+- [x] 审计日志可按 requestID 查询。
+- [ ] 客户端设备、版本分布、更新失败事件可查询。（设备列表/更新失败事件接口已实现；版本分布聚合与 Web Admin UI 展示仍待真实验收）
+- [x] 备份脚本可执行。
+- [ ] 恢复脚本可执行。（脚本语法通过；真实文件/DB restore 演练未完成）
+- [x] 所有测试通过。（2026-05-11 修复后 Docker Maven 服务端 58 tests、桌面 19 files / 44 tests、lint/build/typecheck、Electron smoke 通过）
 - [ ] 所有阶段子清单已完成并更新。

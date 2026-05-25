@@ -1,5 +1,6 @@
 import { DesktopErrorException, makeDesktopError, mapHttpStatus, type DesktopErrorCode } from '../../shared/errors';
 import { ensureRequestID } from '../../shared/request-id';
+import type { DeviceInfo } from '../config/device-id-store';
 import type { LocalEventRecord } from '../events/local-event-queue';
 import { mapServerLocalEventStatus, type LocalEventSyncTransportResult, type ServerLocalEventSyncResponse } from '../events/local-event-sync-service';
 import type { ClientLogger } from '../logging/client-logger';
@@ -21,6 +22,64 @@ export interface ApiEnvelope<T> {
   requestID?: string;
 }
 
+export interface LoginPayload {
+  phone: string;
+  password: string;
+  clientType?: 'DESKTOP' | 'ADMIN_WEB';
+  deviceId?: string;
+  clientVersion?: string;
+}
+
+export interface DeviceRegistrationPayload {
+  deviceId: string;
+  clientVersion: string;
+  osVersion: string;
+  arch: string;
+  hostnameHash?: string;
+}
+
+export interface DeviceEventPayload {
+  idempotencyKey?: string;
+  eventType: string;
+  result?: string;
+  errorCode?: string;
+  requestID?: string;
+  payloadSummary?: Record<string, unknown>;
+}
+
+export interface ClientUpdateCheckPayload {
+  deviceId: string;
+  currentVersion: string;
+  platform: string;
+  arch: string;
+  channel?: string;
+}
+
+export interface ClientUpdateSignatureMetadata {
+  status?: string;
+  publisher?: string;
+  certificateThumbprint?: string;
+  signature?: string;
+}
+
+export interface ClientUpdateInfo {
+  updateAvailable: boolean;
+  versionId?: string;
+  version?: string;
+  build?: string;
+  force?: boolean;
+  minSupportedVersion?: string;
+  packageSha256?: string;
+  packageSize?: number;
+  signature?: ClientUpdateSignatureMetadata;
+  releaseNotes?: string;
+}
+
+export interface ClientUpdateDownloadTicket {
+  ticket: string;
+  expiresAt?: string;
+}
+
 export class ApiClient {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
@@ -30,7 +89,7 @@ export class ApiClient {
     this.timeoutMs = options.timeoutMs ?? 10_000;
   }
 
-  login(payload: { username: string; password: string }, requestID?: string): Promise<unknown> {
+  login(payload: LoginPayload, requestID?: string): Promise<unknown> {
     return this.request('POST', '/api/auth/login', payload, requestID, { auth: false });
   }
 
@@ -98,12 +157,37 @@ export class ApiClient {
     };
   }
 
-  async registerDevice(): Promise<never> {
-    throw new DesktopErrorException(makeDesktopError('api_contract_stub', 'Client device server API is mocked in M6'));
+  async registerDevice(device: DeviceInfo | DeviceRegistrationPayload, requestID?: string): Promise<unknown> {
+    const payload = toDeviceRegistrationPayload(device, this.options.clientVersion);
+    return this.request('POST', '/api/client-devices/register', payload, requestID);
   }
 
-  async checkClientUpdate(): Promise<never> {
-    throw new DesktopErrorException(makeDesktopError('api_contract_stub', 'Client update server API is mocked in M6'));
+  heartbeat(payload: { deviceId: string; clientVersion: string; queueSummary?: unknown }, requestID?: string): Promise<unknown> {
+    return this.request('POST', '/api/client-devices/heartbeat', payload, requestID);
+  }
+
+  reportDeviceEvents(deviceId: string, events: DeviceEventPayload[], requestID?: string): Promise<unknown> {
+    return this.request('POST', '/api/client-devices/events', { deviceId, events }, requestID);
+  }
+
+  async checkClientUpdate(payload: ClientUpdateCheckPayload, requestID?: string): Promise<ClientUpdateInfo> {
+    const response = await this.request<Record<string, unknown>>('GET', `/api/client-updates/check?deviceId=${encodeURIComponent(payload.deviceId)}&currentVersion=${encodeURIComponent(payload.currentVersion)}&platform=${encodeURIComponent(payload.platform)}&arch=${encodeURIComponent(payload.arch)}${payload.channel ? `&channel=${encodeURIComponent(payload.channel)}` : ''}`, undefined, requestID);
+    return normalizeClientUpdateInfo(response);
+  }
+
+  createClientUpdateDownloadTicket(payload: { deviceId: string; versionId: string; currentVersion?: string }, requestID?: string): Promise<ClientUpdateDownloadTicket> {
+    return this.request('POST', `/api/client-updates/${encodeURIComponent(payload.versionId)}/download-ticket`, {
+      deviceId: payload.deviceId,
+      currentVersion: payload.currentVersion
+    }, requestID);
+  }
+
+  downloadClientUpdate(ticket: string, requestID?: string): Promise<ArrayBuffer> {
+    return this.requestBinary('GET', `/api/download-tickets/${encodeURIComponent(ticket)}/download`, requestID);
+  }
+
+  reportClientUpdateEvents(deviceId: string, events: DeviceEventPayload[], requestID?: string): Promise<unknown> {
+    return this.request('POST', '/api/client-updates/events', { deviceId, events }, requestID);
   }
 
   private async request<T>(method: string, path: string, body: unknown, requestID?: string, options: { auth?: boolean } = {}): Promise<T> {
@@ -166,6 +250,35 @@ export class ApiClient {
     if (token) headers.Authorization = `Bearer ${token}`;
     return headers;
   }
+}
+
+function toDeviceRegistrationPayload(device: DeviceInfo | DeviceRegistrationPayload, fallbackClientVersion: string): DeviceRegistrationPayload {
+  if ('deviceId' in device) return device;
+  return {
+    deviceId: device.deviceID,
+    clientVersion: device.clientVersion ?? fallbackClientVersion,
+    osVersion: process.platform,
+    arch: process.arch
+  };
+}
+
+function normalizeClientUpdateInfo(response: Record<string, unknown>): ClientUpdateInfo {
+  const build = response.buildNo ?? response.build;
+  const packageSha256 = response.packageSha256 ?? response.sha256;
+  return {
+    updateAvailable: Boolean(response.updateAvailable),
+    versionId: response.versionId === undefined ? undefined : String(response.versionId),
+    version: response.version === undefined ? undefined : String(response.version),
+    build: build === undefined ? undefined : String(build),
+    force: response.forceUpdate === undefined ? Boolean(response.force) : Boolean(response.forceUpdate),
+    minSupportedVersion: response.minSupportedVersion === undefined ? undefined : String(response.minSupportedVersion),
+    packageSha256: packageSha256 === undefined ? undefined : String(packageSha256),
+    packageSize: typeof response.packageSize === 'number' ? response.packageSize : undefined,
+    signature: {
+      status: response.signatureStatus === undefined ? undefined : String(response.signatureStatus)
+    },
+    releaseNotes: response.releaseNotes === undefined ? undefined : String(response.releaseNotes)
+  };
 }
 
 function isApiEnvelope<T>(value: ApiEnvelope<T> | T | undefined): value is ApiEnvelope<T> {

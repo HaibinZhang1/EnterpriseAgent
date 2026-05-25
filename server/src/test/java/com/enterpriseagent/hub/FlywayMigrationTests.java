@@ -57,6 +57,13 @@ class FlywayMigrationTests extends PostgresIntegrationTestBase {
             assertThat(exists(connection, "select to_regclass('public.local_events') is not null")).isTrue();
             assertThat(exists(connection, "select to_regclass('public.uk_local_event_idempotency') is not null")).isTrue();
             assertThat(exists(connection, "select exists (select 1 from information_schema.columns where table_name = 'local_events' and column_name = 'payload_summary' and is_nullable = 'NO')")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.client_devices') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.client_device_events') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.client_versions') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.client_update_events') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.uk_client_devices_device_id') is not null")).isTrue();
+            assertThat(exists(connection, "select to_regclass('public.idx_client_update_events_device_created') is not null")).isTrue();
+            assertThat(exists(connection, "select exists (select 1 from pg_constraint where conname = 'ck_package_objects_object_type' and pg_get_constraintdef(oid) like '%CLIENT_UPDATE_PACKAGE%')")).isTrue();
         }
     }
 

@@ -1,0 +1,1884 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Enterprise Agent Hub · Glassmorphism SaaS Client Demo</title>
+  <style>
+    :root {
+      --bg-base: #EEF3FF;
+      --bg-gradient-start: #EAF1FF;
+      --bg-gradient-mid: #F8ECFF;
+      --bg-gradient-end: #E8FFF7;
+      --bg-orb-blue: rgba(80, 140, 255, 0.35);
+      --bg-orb-purple: rgba(170, 105, 255, 0.28);
+      --bg-orb-cyan: rgba(70, 220, 210, 0.25);
+
+      --glass-primary: rgba(255, 255, 255, 0.58);
+      --glass-secondary: rgba(255, 255, 255, 0.42);
+      --glass-subtle: rgba(255, 255, 255, 0.28);
+      --glass-solid: rgba(255, 255, 255, 0.78);
+      --glass-border: rgba(255, 255, 255, 0.62);
+      --glass-border-soft: rgba(255, 255, 255, 0.36);
+
+      --text-primary: #101828;
+      --text-secondary: #344054;
+      --text-tertiary: #667085;
+      --text-placeholder: #98A2B3;
+      --text-inverse: #FFFFFF;
+
+      --color-primary: #4F7CFF;
+      --color-primary-hover: #3E68E8;
+      --color-secondary: #8B5CF6;
+      --color-accent: #20D6C7;
+      --color-success: #16A34A;
+      --color-warning: #F59E0B;
+      --color-danger: #EF4444;
+      --color-info: #0EA5E9;
+
+      --font-display: 40px;
+      --font-h1: 32px;
+      --font-h2: 24px;
+      --font-h3: 20px;
+      --font-body-lg: 16px;
+      --font-body: 14px;
+      --font-caption: 12px;
+      --font-mini: 11px;
+
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 20px;
+      --space-6: 24px;
+      --space-8: 32px;
+      --space-10: 40px;
+      --space-12: 48px;
+
+      --radius-xs: 6px;
+      --radius-sm: 10px;
+      --radius-md: 14px;
+      --radius-lg: 20px;
+      --radius-xl: 24px;
+      --radius-2xl: 32px;
+      --radius-full: 999px;
+
+      --shadow-xs: 0 4px 12px rgba(15, 23, 42, 0.06);
+      --shadow-sm: 0 8px 24px rgba(15, 23, 42, 0.08);
+      --shadow-md: 0 16px 48px rgba(15, 23, 42, 0.12);
+      --shadow-lg: 0 24px 80px rgba(15, 23, 42, 0.18);
+      --shadow-glow: 0 0 32px rgba(79, 124, 255, 0.24);
+
+      --blur-main: blur(20px) saturate(160%);
+      --blur-card: blur(14px) saturate(145%);
+      --blur-float: blur(28px) saturate(165%);
+      --sidebar-width: 260px;
+      --topbar-height: 68px;
+    }
+
+    html[data-theme="dark"] {
+      --bg-base: #080B16;
+      --bg-gradient-start: #07111F;
+      --bg-gradient-mid: #161124;
+      --bg-gradient-end: #081A1A;
+      --bg-orb-blue: rgba(61, 120, 255, 0.32);
+      --bg-orb-purple: rgba(145, 84, 255, 0.28);
+      --bg-orb-cyan: rgba(32, 214, 199, 0.22);
+
+      --glass-primary: rgba(18, 25, 43, 0.68);
+      --glass-secondary: rgba(18, 25, 43, 0.52);
+      --glass-subtle: rgba(18, 25, 43, 0.36);
+      --glass-solid: rgba(18, 25, 43, 0.86);
+      --glass-border: rgba(255, 255, 255, 0.18);
+      --glass-border-soft: rgba(255, 255, 255, 0.10);
+
+      --text-primary: #F8FAFC;
+      --text-secondary: #CBD5E1;
+      --text-tertiary: #94A3B8;
+      --text-placeholder: #64748B;
+      --text-inverse: #0F172A;
+
+      --color-primary: #6D8DFF;
+      --color-primary-hover: #8AA2FF;
+      --color-secondary: #A78BFA;
+      --color-accent: #2DD4BF;
+      --color-success: #22C55E;
+      --color-warning: #FBBF24;
+      --color-danger: #F87171;
+      --color-info: #38BDF8;
+
+      --shadow-xs: 0 4px 12px rgba(0, 0, 0, 0.18);
+      --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.24);
+      --shadow-md: 0 16px 48px rgba(0, 0, 0, 0.30);
+      --shadow-lg: 0 24px 80px rgba(0, 0, 0, 0.42);
+      --shadow-glow: 0 0 36px rgba(109, 141, 255, 0.24);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { min-height: 100%; }
+
+    body {
+      margin: 0;
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+      font-size: var(--font-body);
+      line-height: 1.55;
+      background:
+        radial-gradient(circle at 18% 20%, var(--bg-orb-blue), transparent 32%),
+        radial-gradient(circle at 82% 18%, var(--bg-orb-purple), transparent 30%),
+        radial-gradient(circle at 60% 78%, var(--bg-orb-cyan), transparent 34%),
+        linear-gradient(135deg, var(--bg-gradient-start) 0%, var(--bg-gradient-mid) 48%, var(--bg-gradient-end) 100%);
+      overflow: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.34;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.18) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.18) 1px, transparent 1px);
+      background-size: 42px 42px;
+      mask-image: linear-gradient(180deg, rgba(0,0,0,0.55), transparent 82%);
+    }
+
+    a, button, input, select { font: inherit; }
+    button { border: 0; cursor: pointer; color: inherit; }
+    input, select { outline: none; color: inherit; }
+
+    .app-frame {
+      position: relative;
+      width: min(1540px, calc(100vw - 32px));
+      height: calc(100vh - 32px);
+      margin: 16px auto;
+      display: grid;
+      grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+      overflow: hidden;
+      border-radius: var(--radius-2xl);
+      background: var(--glass-primary);
+      border: 1px solid var(--glass-border);
+      box-shadow: var(--shadow-lg);
+      backdrop-filter: var(--blur-main);
+      -webkit-backdrop-filter: var(--blur-main);
+    }
+
+    .app-frame::before,
+    .glass::before,
+    .glass-card::before,
+    .drawer::before,
+    .modal-card::before {
+      content: "";
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      top: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.72), transparent);
+      opacity: 0.78;
+      pointer-events: none;
+    }
+
+    html[data-theme="dark"] .app-frame::before,
+    html[data-theme="dark"] .glass::before,
+    html[data-theme="dark"] .glass-card::before,
+    html[data-theme="dark"] .drawer::before,
+    html[data-theme="dark"] .modal-card::before {
+      opacity: 0.32;
+    }
+
+    .sidebar {
+      position: relative;
+      padding: var(--space-5);
+      border-right: 1px solid var(--glass-border-soft);
+      background: linear-gradient(180deg, var(--glass-secondary), var(--glass-subtle));
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-2) var(--space-2) var(--space-5);
+    }
+
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border-radius: 15px;
+      color: var(--text-inverse);
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      background:
+        radial-gradient(circle at 30% 25%, rgba(255,255,255,0.78), transparent 28%),
+        linear-gradient(135deg, var(--color-primary), var(--color-secondary));
+      box-shadow: var(--shadow-glow);
+    }
+
+    .brand-title { font-size: 16px; font-weight: 700; line-height: 1.2; }
+    .brand-subtitle { margin-top: 2px; color: var(--text-tertiary); font-size: 12px; }
+
+    .nav-section-title {
+      margin: var(--space-4) var(--space-2) var(--space-2);
+      color: var(--text-tertiary);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .nav-list { display: grid; gap: 8px; }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      width: 100%;
+      min-height: 44px;
+      padding: 0 var(--space-4);
+      border-radius: var(--radius-md);
+      color: var(--text-secondary);
+      background: transparent;
+      transition: transform 180ms ease, background 180ms ease, color 180ms ease, box-shadow 180ms ease;
+    }
+
+    .nav-item:hover {
+      transform: translateY(-1px);
+      background: var(--glass-subtle);
+      color: var(--text-primary);
+    }
+
+    .nav-item.active {
+      color: var(--text-primary);
+      background: linear-gradient(135deg, rgba(79,124,255,0.18), rgba(45,212,191,0.12)), var(--glass-secondary);
+      box-shadow: var(--shadow-xs);
+      border: 1px solid var(--glass-border-soft);
+    }
+
+    .nav-ico {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border-radius: 9px;
+      background: var(--glass-subtle);
+      border: 1px solid var(--glass-border-soft);
+      font-size: 13px;
+    }
+
+    .sidebar-bottom {
+      margin-top: auto;
+      display: grid;
+      gap: var(--space-3);
+    }
+
+    .status-card {
+      position: relative;
+      padding: var(--space-4);
+      border-radius: var(--radius-lg);
+      background: var(--glass-secondary);
+      border: 1px solid var(--glass-border-soft);
+      box-shadow: var(--shadow-xs);
+      overflow: hidden;
+    }
+
+    .status-row,
+    .row-center {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+    }
+
+    .status-label { color: var(--text-tertiary); font-size: 12px; }
+    .status-value { font-weight: 700; }
+
+    .main {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: var(--topbar-height) minmax(0, 1fr);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-5);
+      padding: 0 var(--space-6);
+      border-bottom: 1px solid var(--glass-border-soft);
+      background: linear-gradient(180deg, var(--glass-secondary), rgba(255,255,255,0));
+      backdrop-filter: blur(14px) saturate(150%);
+      -webkit-backdrop-filter: blur(14px) saturate(150%);
+      min-width: 0;
+    }
+
+    html[data-theme="dark"] .topbar {
+      background: linear-gradient(180deg, var(--glass-secondary), rgba(18,25,43,0));
+    }
+
+    .page-heading { min-width: 0; }
+    .page-title { margin: 0; font-size: 20px; line-height: 1.2; font-weight: 800; }
+    .page-desc { margin: 3px 0 0; color: var(--text-tertiary); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      flex-shrink: 0;
+    }
+
+    .content {
+      min-height: 0;
+      overflow: auto;
+      padding: var(--space-6);
+      scroll-behavior: smooth;
+    }
+
+    .content::-webkit-scrollbar,
+    .drawer-body::-webkit-scrollbar { width: 10px; }
+    .content::-webkit-scrollbar-thumb,
+    .drawer-body::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 999px; border: 3px solid transparent; background-clip: padding-box; }
+
+    .view { display: none; animation: viewIn 220ms ease both; }
+    .view.active { display: block; }
+
+    @keyframes viewIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .glass,
+    .glass-card {
+      position: relative;
+      background: var(--glass-secondary);
+      border: 1px solid var(--glass-border-soft);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow-sm);
+      backdrop-filter: var(--blur-card);
+      -webkit-backdrop-filter: var(--blur-card);
+      overflow: hidden;
+    }
+
+    .glass-panel {
+      position: relative;
+      padding: var(--space-6);
+      background: var(--glass-primary);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-2xl);
+      box-shadow: var(--shadow-md);
+      backdrop-filter: var(--blur-main);
+      -webkit-backdrop-filter: var(--blur-main);
+      overflow: hidden;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+      gap: var(--space-6);
+    }
+
+    .agent-stage {
+      min-height: 420px;
+      padding: var(--space-8);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      gap: var(--space-6);
+      background:
+        radial-gradient(circle at 18% 20%, rgba(79, 124, 255, 0.16), transparent 30%),
+        radial-gradient(circle at 74% 70%, rgba(32, 214, 199, 0.12), transparent 32%),
+        var(--glass-secondary);
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      width: fit-content;
+      min-height: 28px;
+      padding: 0 10px;
+      color: var(--color-primary);
+      border-radius: var(--radius-full);
+      background: rgba(79, 124, 255, 0.10);
+      border: 1px solid rgba(79, 124, 255, 0.18);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    html[data-theme="dark"] .eyebrow {
+      background: rgba(109, 141, 255, 0.14);
+      border-color: rgba(109, 141, 255, 0.24);
+    }
+
+    .hero-title {
+      margin: var(--space-4) 0 0;
+      font-size: clamp(28px, 3.4vw, 46px);
+      line-height: 1.08;
+      letter-spacing: -0.04em;
+      font-weight: 800;
+    }
+
+    .hero-copy {
+      margin: var(--space-4) 0 0;
+      max-width: 720px;
+      color: var(--text-secondary);
+      font-size: 16px;
+      line-height: 1.7;
+    }
+
+    .workspace-placeholder {
+      display: grid;
+      place-items: center;
+      min-height: 180px;
+      padding: var(--space-6);
+      border-radius: var(--radius-xl);
+      background: linear-gradient(135deg, var(--glass-subtle), transparent);
+      border: 1px dashed var(--glass-border);
+      color: var(--text-tertiary);
+      text-align: center;
+    }
+
+    .placeholder-title { color: var(--text-primary); font-size: 18px; font-weight: 800; margin-bottom: 6px; }
+
+    .quick-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-3);
+    }
+
+    .metric-grid {
+      display: grid;
+      gap: var(--space-4);
+    }
+
+    .metric-card {
+      padding: var(--space-5);
+      min-height: 118px;
+    }
+
+    .metric-value {
+      margin-top: 8px;
+      font-size: 28px;
+      line-height: 1.1;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+
+    .metric-note { color: var(--text-tertiary); font-size: 12px; }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 40px;
+      padding: 0 16px;
+      border-radius: var(--radius-md);
+      font-weight: 700;
+      white-space: nowrap;
+      transition: transform 180ms ease, box-shadow 180ms ease, background 180ms ease, border-color 180ms ease, opacity 180ms ease;
+      user-select: none;
+    }
+
+    .button:hover { transform: translateY(-1px); }
+    .button:active { transform: translateY(0); }
+    .button:disabled { opacity: 0.52; cursor: not-allowed; transform: none; }
+
+    .button-primary {
+      color: var(--text-inverse);
+      background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
+      box-shadow: var(--shadow-glow);
+    }
+
+    .button-primary:hover { box-shadow: 0 0 38px rgba(79,124,255,0.32); }
+
+    .button-secondary {
+      background: var(--glass-secondary);
+      border: 1px solid var(--glass-border-soft);
+      color: var(--text-primary);
+      box-shadow: var(--shadow-xs);
+    }
+
+    .button-ghost {
+      background: transparent;
+      color: var(--text-secondary);
+      border: 1px solid transparent;
+    }
+
+    .button-ghost:hover {
+      color: var(--text-primary);
+      background: var(--glass-subtle);
+      border-color: var(--glass-border-soft);
+    }
+
+    .icon-button {
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      display: inline-grid;
+      place-items: center;
+      border-radius: var(--radius-md);
+      background: var(--glass-secondary);
+      border: 1px solid var(--glass-border-soft);
+      box-shadow: var(--shadow-xs);
+      transition: transform 180ms ease, background 180ms ease, box-shadow 180ms ease;
+    }
+
+    .icon-button:hover { transform: translateY(-1px); background: var(--glass-solid); }
+
+    .search-hero {
+      display: grid;
+      gap: var(--space-4);
+      margin-bottom: var(--space-6);
+    }
+
+    .search-strip {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: var(--space-3);
+      align-items: center;
+      padding: var(--space-3);
+      border-radius: var(--radius-xl);
+      background: var(--glass-solid);
+      border: 1px solid var(--glass-border);
+      box-shadow: var(--shadow-sm);
+      backdrop-filter: var(--blur-card);
+      -webkit-backdrop-filter: var(--blur-card);
+    }
+
+    .search-input-wrap {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      min-width: 0;
+      min-height: 46px;
+      padding: 0 var(--space-4);
+      border-radius: var(--radius-lg);
+      background: var(--glass-subtle);
+      border: 1px solid var(--glass-border-soft);
+    }
+
+    .search-input-wrap input {
+      width: 100%;
+      min-width: 0;
+      border: 0;
+      background: transparent;
+      font-size: 15px;
+    }
+
+    .search-input-wrap input::placeholder { color: var(--text-placeholder); }
+
+    .section-heading {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: var(--space-4);
+      margin: var(--space-8) 0 var(--space-4);
+    }
+
+    .section-heading h2,
+    .section-heading h3 { margin: 0; }
+    .section-heading h2 { font-size: 22px; letter-spacing: -0.02em; }
+    .section-heading h3 { font-size: 18px; letter-spacing: -0.02em; }
+    .section-note { margin: 4px 0 0; color: var(--text-tertiary); font-size: 12px; }
+
+    .ranking-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: var(--space-4);
+    }
+
+    .rank-card {
+      padding: var(--space-5);
+      min-height: 356px;
+    }
+
+    .rank-card-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: var(--space-3);
+      margin-bottom: var(--space-4);
+    }
+
+    .rank-title { font-size: 16px; font-weight: 800; }
+    .rank-subtitle { color: var(--text-tertiary); font-size: 12px; margin-top: 2px; }
+
+    .period-tabs,
+    .type-tabs,
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .period-tab,
+    .type-tab,
+    .chip {
+      min-height: 30px;
+      padding: 0 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--radius-full);
+      background: var(--glass-subtle);
+      border: 1px solid var(--glass-border-soft);
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 700;
+      transition: background 180ms ease, transform 180ms ease, color 180ms ease, border-color 180ms ease;
+    }
+
+    .period-tab:hover,
+    .type-tab:hover,
+    .chip:hover { transform: translateY(-1px); color: var(--text-primary); }
+
+    .period-tab.active,
+    .type-tab.active,
+    .chip.active {
+      color: var(--color-primary);
+      background: rgba(79, 124, 255, 0.12);
+      border-color: rgba(79, 124, 255, 0.24);
+    }
+
+    html[data-theme="dark"] .period-tab.active,
+    html[data-theme="dark"] .type-tab.active,
+    html[data-theme="dark"] .chip.active {
+      background: rgba(109, 141, 255, 0.16);
+      border-color: rgba(109, 141, 255, 0.28);
+    }
+
+    .rank-list { display: grid; gap: 10px; margin: 0 0 var(--space-4); padding: 0; list-style: none; }
+
+    .rank-item {
+      display: grid;
+      grid-template-columns: 30px minmax(0, 1fr) auto;
+      gap: var(--space-3);
+      align-items: center;
+      min-height: 54px;
+      padding: 8px;
+      border-radius: var(--radius-md);
+      background: var(--glass-subtle);
+      border: 1px solid transparent;
+      transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+    }
+
+    .rank-item:hover {
+      transform: translateY(-1px);
+      border-color: var(--glass-border-soft);
+      background: var(--glass-secondary);
+    }
+
+    .rank-no {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 900;
+      color: var(--text-inverse);
+      background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
+      box-shadow: 0 8px 20px rgba(79, 124, 255, 0.20);
+    }
+
+    .rank-main { min-width: 0; }
+    .rank-name { display: flex; gap: 6px; align-items: center; min-width: 0; font-weight: 800; }
+    .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rank-meta { margin-top: 2px; color: var(--text-tertiary); font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .rank-stat { color: var(--text-secondary); font-weight: 800; font-size: 12px; text-align: right; }
+
+    .type-entry-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: var(--space-4);
+      margin-top: var(--space-6);
+    }
+
+    .entry-card {
+      padding: var(--space-5);
+      min-height: 120px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: var(--space-4);
+    }
+
+    .entry-title { margin: 0; font-size: 18px; font-weight: 800; }
+    .entry-copy { margin: 8px 0 0; color: var(--text-tertiary); font-size: 13px; }
+    .entry-arrow { width: 38px; height: 38px; border-radius: 14px; display: grid; place-items: center; color: var(--text-inverse); background: linear-gradient(135deg, var(--color-primary), var(--color-accent)); flex-shrink: 0; }
+
+    .result-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: var(--space-4);
+      margin-bottom: var(--space-4);
+    }
+
+    .result-header h1 { margin: 0; font-size: 28px; letter-spacing: -0.03em; }
+    .result-header p { margin: 6px 0 0; color: var(--text-tertiary); }
+
+    .filter-bar {
+      display: grid;
+      gap: var(--space-3);
+      padding: var(--space-4);
+      margin: var(--space-4) 0 var(--space-5);
+      border-radius: var(--radius-xl);
+      background: var(--glass-secondary);
+      border: 1px solid var(--glass-border-soft);
+      box-shadow: var(--shadow-xs);
+    }
+
+    .filter-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+    }
+
+    .filter-label { color: var(--text-tertiary); font-size: 12px; font-weight: 700; }
+
+    .select-like {
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: var(--radius-md);
+      background: var(--glass-solid);
+      border: 1px solid var(--glass-border-soft);
+      color: var(--text-secondary);
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: var(--space-4);
+    }
+
+    .cards-grid.single-type { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+    .extension-card {
+      min-height: 212px;
+      padding: var(--space-5);
+      display: grid;
+      grid-template-rows: auto minmax(44px, auto) auto auto auto;
+      gap: var(--space-3);
+      transition: transform 180ms ease, background 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+    }
+
+    .extension-card:hover {
+      transform: translateY(-3px);
+      background: var(--glass-solid);
+      box-shadow: var(--shadow-md);
+      border-color: var(--glass-border);
+    }
+
+    .card-top {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: var(--space-3);
+      align-items: center;
+      min-width: 0;
+    }
+
+    .ext-icon {
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      border-radius: 14px;
+      color: var(--text-inverse);
+      font-size: 13px;
+      font-weight: 900;
+      background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
+      box-shadow: 0 10px 30px rgba(79, 124, 255, 0.18);
+    }
+
+    .ext-icon.mcp { background: linear-gradient(135deg, var(--color-accent), var(--color-primary)); }
+    .ext-icon.plugin { background: linear-gradient(135deg, var(--color-secondary), var(--color-info)); }
+
+    .card-title { margin: 0; min-width: 0; font-size: 16px; font-weight: 850; letter-spacing: -0.02em; }
+    .card-desc { margin: 0; color: var(--text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .card-meta, .card-stats, .card-status { color: var(--text-tertiary); font-size: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+    .card-stats { color: var(--text-secondary); font-weight: 700; }
+    .dot { color: var(--text-placeholder); }
+
+    .star-button {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      background: var(--glass-subtle);
+      border: 1px solid var(--glass-border-soft);
+      color: var(--text-tertiary);
+      transition: color 160ms ease, background 160ms ease, transform 160ms ease;
+    }
+    .star-button:hover { transform: scale(1.04); color: var(--color-warning); }
+    .star-button.starred { color: var(--color-warning); background: rgba(245, 158, 11, 0.12); }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 0 8px;
+      border-radius: var(--radius-full);
+      background: var(--glass-subtle);
+      border: 1px solid var(--glass-border-soft);
+      color: var(--text-secondary);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .tag.success { color: var(--color-success); background: rgba(22, 163, 74, 0.10); border-color: rgba(22, 163, 74, 0.16); }
+    .tag.warning { color: var(--color-warning); background: rgba(245, 158, 11, 0.12); border-color: rgba(245, 158, 11, 0.20); }
+    .tag.danger { color: var(--color-danger); background: rgba(239, 68, 68, 0.10); border-color: rgba(239, 68, 68, 0.18); }
+    .tag.info { color: var(--color-info); background: rgba(14, 165, 233, 0.10); border-color: rgba(14, 165, 233, 0.18); }
+
+    .empty-state {
+      padding: var(--space-10);
+      display: grid;
+      place-items: center;
+      text-align: center;
+      min-height: 260px;
+    }
+    .empty-icon { width: 56px; height: 56px; display: grid; place-items: center; margin-bottom: var(--space-4); border-radius: 20px; background: var(--glass-subtle); border: 1px solid var(--glass-border-soft); font-size: 24px; }
+    .empty-title { margin: 0; font-size: 18px; font-weight: 800; }
+    .empty-copy { margin: 8px 0 var(--space-5); color: var(--text-tertiary); }
+
+    .local-list { display: grid; gap: var(--space-3); }
+    .local-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: var(--space-4);
+      align-items: center;
+      padding: var(--space-4);
+      border-radius: var(--radius-lg);
+      background: var(--glass-secondary);
+      border: 1px solid var(--glass-border-soft);
+    }
+
+    .modal-backdrop,
+    .drawer-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      background: rgba(15, 23, 42, 0.20);
+      z-index: 40;
+    }
+
+    html[data-theme="dark"] .modal-backdrop,
+    html[data-theme="dark"] .drawer-backdrop { background: rgba(0, 0, 0, 0.34); }
+
+    .modal-backdrop.active,
+    .drawer-backdrop.active { display: block; animation: fadeIn 180ms ease both; }
+
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    .drawer {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      bottom: 16px;
+      width: min(520px, calc(100vw - 32px));
+      z-index: 50;
+      transform: translateX(calc(100% + 20px));
+      transition: transform 220ms ease;
+      background: var(--glass-solid);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-2xl);
+      box-shadow: var(--shadow-lg);
+      backdrop-filter: var(--blur-float);
+      -webkit-backdrop-filter: var(--blur-float);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+    }
+
+    .drawer.active { transform: translateX(0); }
+    .drawer-head { padding: var(--space-6); border-bottom: 1px solid var(--glass-border-soft); display: flex; justify-content: space-between; gap: var(--space-4); align-items: flex-start; }
+    .drawer-title { margin: 10px 0 0; font-size: 24px; line-height: 1.2; font-weight: 850; letter-spacing: -0.03em; }
+    .drawer-subtitle { margin: 8px 0 0; color: var(--text-tertiary); }
+    .drawer-body { padding: var(--space-6); overflow: auto; }
+    .drawer-foot { padding: var(--space-5) var(--space-6); border-top: 1px solid var(--glass-border-soft); display: flex; justify-content: flex-end; gap: var(--space-3); }
+
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+    .detail-item { padding: var(--space-4); border-radius: var(--radius-lg); background: var(--glass-subtle); border: 1px solid var(--glass-border-soft); }
+    .detail-label { color: var(--text-tertiary); font-size: 12px; font-weight: 700; }
+    .detail-value { margin-top: 6px; font-weight: 800; }
+    .detail-block { margin-top: var(--space-5); }
+    .detail-block h4 { margin: 0 0 var(--space-3); font-size: 15px; }
+    .code-box { padding: var(--space-4); border-radius: var(--radius-lg); background: rgba(15, 23, 42, 0.72); color: #E2E8F0; font-family: "SF Mono", "JetBrains Mono", "Cascadia Code", Consolas, monospace; font-size: 12px; overflow: auto; }
+
+    .modal-wrap {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      z-index: 60;
+      padding: var(--space-6);
+    }
+
+    .modal-wrap.active { display: grid; animation: fadeIn 180ms ease both; }
+
+    .modal-card {
+      position: relative;
+      width: min(680px, 100%);
+      max-height: min(760px, calc(100vh - 48px));
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      overflow: hidden;
+      background: var(--glass-solid);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-2xl);
+      box-shadow: var(--shadow-lg);
+      backdrop-filter: var(--blur-float);
+      -webkit-backdrop-filter: var(--blur-float);
+    }
+
+    .modal-head,
+    .modal-foot { padding: var(--space-5) var(--space-6); display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+    .modal-head { border-bottom: 1px solid var(--glass-border-soft); }
+    .modal-foot { border-top: 1px solid var(--glass-border-soft); justify-content: flex-end; }
+    .modal-title { margin: 0; font-size: 20px; font-weight: 850; }
+    .modal-body { padding: var(--space-6); overflow: auto; }
+
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+    .field { display: grid; gap: 8px; }
+    .field.full { grid-column: 1 / -1; }
+    .field label { color: var(--text-secondary); font-size: 12px; font-weight: 800; }
+    .input-like, textarea.input-like {
+      width: 100%;
+      min-height: 42px;
+      padding: 10px 12px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--glass-border-soft);
+      background: var(--glass-subtle);
+      resize: vertical;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 28px;
+      z-index: 80;
+      display: none;
+      transform: translateX(-50%);
+      padding: 12px 16px;
+      border-radius: var(--radius-full);
+      background: var(--glass-solid);
+      border: 1px solid var(--glass-border);
+      box-shadow: var(--shadow-md);
+      color: var(--text-primary);
+      backdrop-filter: blur(18px) saturate(150%);
+      -webkit-backdrop-filter: blur(18px) saturate(150%);
+      font-weight: 800;
+    }
+    .toast.show { display: block; animation: toastIn 260ms ease both; }
+    @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+
+    .kbd {
+      display: inline-grid;
+      place-items: center;
+      min-width: 22px;
+      height: 22px;
+      padding: 0 7px;
+      border-radius: 7px;
+      background: var(--glass-subtle);
+      border: 1px solid var(--glass-border-soft);
+      color: var(--text-tertiary);
+      font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+      font-size: 11px;
+    }
+
+    .muted { color: var(--text-tertiary); }
+    .strong { font-weight: 850; }
+    .mt-0 { margin-top: 0 !important; }
+    .mt-4 { margin-top: var(--space-4) !important; }
+    .mt-5 { margin-top: var(--space-5) !important; }
+    .mt-6 { margin-top: var(--space-6) !important; }
+
+    :focus-visible {
+      outline: 3px solid rgba(79, 124, 255, 0.36);
+      outline-offset: 2px;
+    }
+
+    @supports not ((backdrop-filter: blur(20px)) or (-webkit-backdrop-filter: blur(20px))) {
+      .app-frame, .glass, .glass-card, .glass-panel, .drawer, .modal-card, .search-strip { background: var(--glass-solid); }
+    }
+
+    @media (max-width: 1280px) {
+      .ranking-grid { grid-template-columns: 1fr; }
+      .cards-grid, .cards-grid.single-type { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .hero-grid { grid-template-columns: 1fr; }
+      .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 920px) {
+      body { overflow: auto; }
+      .app-frame { width: 100vw; height: auto; min-height: 100vh; margin: 0; border-radius: 0; grid-template-columns: 1fr; }
+      .sidebar { border-right: 0; border-bottom: 1px solid var(--glass-border-soft); }
+      .nav-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .nav-item { justify-content: center; padding: 0 10px; }
+      .nav-text, .nav-section-title, .sidebar-bottom, .brand-subtitle { display: none; }
+      .main { grid-template-rows: auto minmax(0, 1fr); }
+      .topbar { min-height: 72px; flex-wrap: wrap; padding: var(--space-4); }
+      .content { overflow: visible; padding: var(--space-4); }
+      .search-strip, .result-header, .filter-top { grid-template-columns: 1fr; flex-direction: column; align-items: stretch; }
+      .type-entry-grid, .metric-grid, .cards-grid, .cards-grid.single-type, .detail-grid, .form-grid { grid-template-columns: 1fr; }
+      .drawer { top: 8px; right: 8px; bottom: 8px; width: calc(100vw - 16px); border-radius: var(--radius-xl); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-frame" aria-label="Enterprise Agent Hub Glassmorphism SaaS Client">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">EA</div>
+        <div>
+          <div class="brand-title">Enterprise Agent Hub</div>
+          <div class="brand-subtitle">Glassmorphism SaaS Client</div>
+        </div>
+      </div>
+
+      <div class="nav-section-title">客户端入口</div>
+      <nav class="nav-list" aria-label="主导航">
+        <button class="nav-item active" data-nav="agent"><span class="nav-ico">✦</span><span class="nav-text">Agent 首页</span></button>
+        <button class="nav-item" data-nav="community"><span class="nav-ico">⌘</span><span class="nav-text">社区</span></button>
+        <button class="nav-item" data-nav="search"><span class="nav-ico">⌕</span><span class="nav-text">搜索结果</span></button>
+        <button class="nav-item" data-nav="local"><span class="nav-ico">▣</span><span class="nav-text">本地扩展</span></button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="status-card">
+          <div class="status-row">
+            <span class="status-label">服务连接</span>
+            <span class="tag success" id="connectionTag">在线</span>
+          </div>
+          <div class="metric-value" style="font-size: 22px;">Agent Ready</div>
+          <div class="metric-note">在线状态允许搜索、发布和配置写入。</div>
+          <div class="quick-actions mt-4">
+            <button class="button button-secondary" id="toggleConnection" style="min-height:34px;padding:0 12px;">切换离线</button>
+          </div>
+        </div>
+        <button class="nav-item" data-open-settings="agent"><span class="nav-ico">⚙</span><span class="nav-text">服务连接设置</span></button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="page-heading">
+          <h1 class="page-title" id="topTitle">Agent 首页入口</h1>
+          <p class="page-desc" id="topDesc">只定义 Enterprise Agent Hub 页面边界，Agent 工作区由独立文档承接。</p>
+        </div>
+        <div class="top-actions">
+          <button class="button button-secondary" id="themeToggle">深色模式</button>
+          <button class="button button-primary" id="topPublish" data-action="publish">+ 发布</button>
+        </div>
+      </header>
+
+      <section class="content">
+        <div class="view active" id="view-agent">
+          <div class="hero-grid">
+            <section class="glass-panel agent-stage">
+              <div>
+                <span class="eyebrow">D-02 · Agent 首页入口</span>
+                <h2 class="hero-title">Agent 工作区入口</h2>
+                <p class="hero-copy">本页面仅承载 Agent 首页边界和快捷入口。具体 Agent 输入区、能力编排、任务会话和执行结果均由独立 Agent 设计文档定义。</p>
+              </div>
+
+              <div class="workspace-placeholder">
+                <div>
+                  <div class="placeholder-title">Agent 工作区 / 输入区占位</div>
+                  <div>此处不放置审核入口、部门和用户管理、社区卡片网格、发布状态大列表或审计日志。</div>
+                </div>
+              </div>
+
+              <div class="quick-actions" aria-label="Agent 首页快捷入口">
+                <button class="button button-primary" data-nav="community">打开社区</button>
+                <button class="button button-secondary" data-nav="local">打开本地扩展</button>
+                <button class="button button-secondary" data-open-settings="agent">服务连接设置</button>
+              </div>
+            </section>
+
+            <aside class="metric-grid">
+              <div class="glass-card metric-card">
+                <span class="eyebrow">边界说明</span>
+                <div class="metric-value">入口页</div>
+                <div class="metric-note">只承载入口，不承载复杂管理和审核能力。</div>
+              </div>
+              <div class="glass-card metric-card">
+                <span class="eyebrow">快捷操作</span>
+                <div class="metric-value">3</div>
+                <div class="metric-note">社区、本地扩展、服务连接设置。</div>
+              </div>
+              <div class="glass-card metric-card">
+                <span class="eyebrow">设计风格</span>
+                <div class="metric-value">Glass</div>
+                <div class="metric-note">渐变背景、玻璃容器、柔和高光与克制动效。</div>
+              </div>
+            </aside>
+          </div>
+        </div>
+
+        <div class="view" id="view-community">
+          <section class="search-hero">
+            <div class="result-header">
+              <div>
+                <span class="eyebrow">D-03 · 社区首页</span>
+                <h1>社区</h1>
+                <p>用于发现入口，不在首页展示搜索结果卡片网格。先展示搜索、发布、类型化榜单和类型入口。</p>
+              </div>
+              <button class="button button-primary" data-action="publish">+ 发布</button>
+            </div>
+            <div class="search-strip">
+              <div class="search-input-wrap">
+                <span class="muted">⌕</span>
+                <input id="communitySearch" placeholder="搜索 Skill、MCP Server、Plugin、作者、部门或标签" autocomplete="off" />
+              </div>
+              <button class="button button-primary" data-action="community-search">搜索</button>
+            </div>
+          </section>
+
+          <div id="rankingContainer"></div>
+
+          <section class="section-heading">
+            <div>
+              <h2>类型入口</h2>
+              <p class="section-note">进入对应类型探索页，搜索结果页将按照类型展示筛选项。</p>
+            </div>
+          </section>
+          <div class="type-entry-grid">
+            <button class="glass-card entry-card" data-open-type="Skill">
+              <span><h3 class="entry-title">Skill 探索</h3><p class="entry-copy">发现可复用的 Agent 技能、提示词能力和自动化步骤。</p></span>
+              <span class="entry-arrow">→</span>
+            </button>
+            <button class="glass-card entry-card" data-open-type="MCP Server">
+              <span><h3 class="entry-title">MCP Server 探索</h3><p class="entry-copy">查找 remote-http、SSE 兼容和本地 stdio 接入服务。</p></span>
+              <span class="entry-arrow">→</span>
+            </button>
+            <button class="glass-card entry-card" data-open-type="Plugin">
+              <span><h3 class="entry-title">Plugin 探索</h3><p class="entry-copy">浏览适配 Codex、Cursor、Easydict 等工具的插件。</p></span>
+              <span class="entry-arrow">→</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="view" id="view-search">
+          <div class="result-header">
+            <div>
+              <button class="button button-ghost" data-nav="community" style="padding-left:0;">← 返回社区首页</button>
+              <h1 id="resultTitle">搜索结果：默认探索</h1>
+              <p id="resultSubtitle">全部视图按 Skill、MCP Server、Plugin 分组展示；单类型视图展示对应卡片网格。</p>
+            </div>
+            <button class="button button-primary" data-action="publish">+ 发布</button>
+          </div>
+
+          <div class="search-strip">
+            <div class="search-input-wrap">
+              <span class="muted">⌕</span>
+              <input id="resultSearch" placeholder="搜索扩展、作者、部门或标签" autocomplete="off" />
+            </div>
+            <button class="button button-primary" data-action="result-search">搜索</button>
+          </div>
+
+          <div class="filter-bar">
+            <div class="filter-top">
+              <div class="type-tabs" role="tablist" aria-label="类型切换">
+                <button class="type-tab active" data-result-type="全部">全部</button>
+                <button class="type-tab" data-result-type="Skill">Skill</button>
+                <button class="type-tab" data-result-type="MCP Server">MCP Server</button>
+                <button class="type-tab" data-result-type="Plugin">Plugin</button>
+              </div>
+              <div class="row-center" style="justify-content:flex-end;">
+                <span class="filter-label">排序</span>
+                <select class="select-like" id="sortSelect">
+                  <option>相关度</option>
+                  <option>最新发布</option>
+                  <option>Star 数</option>
+                  <option>下载量 / 配置量 / 安装量 / 使用量</option>
+                  <option>最近更新</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <div class="filter-label" style="margin-bottom:8px;">筛选栏</div>
+              <div class="chip-row" id="filterChips"></div>
+            </div>
+          </div>
+
+          <div id="resultsContainer"></div>
+        </div>
+
+        <div class="view" id="view-local">
+          <div class="result-header">
+            <div>
+              <span class="eyebrow">D-14 · 本地已安装扩展</span>
+              <h1>本地扩展</h1>
+              <p>本页为 Agent 首页快捷入口的目标占位，仅演示本机扩展状态，不承载社区榜单或审核管理。</p>
+            </div>
+            <button class="button button-secondary" data-nav="community">打开社区</button>
+          </div>
+          <div class="local-list" id="localList"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+  <aside class="drawer" id="detailDrawer" aria-label="扩展详情抽屉" aria-hidden="true">
+    <div class="drawer-head">
+      <div>
+        <span class="eyebrow" id="drawerType">Skill</span>
+        <h2 class="drawer-title" id="drawerTitle">扩展名称</h2>
+        <p class="drawer-subtitle" id="drawerDesc">扩展描述</p>
+      </div>
+      <button class="icon-button" data-close-drawer aria-label="关闭详情">×</button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+    <div class="drawer-foot">
+      <button class="button button-secondary" data-close-drawer>关闭</button>
+      <button class="button button-primary" id="drawerPrimaryAction">主操作</button>
+    </div>
+  </aside>
+
+  <div class="modal-backdrop" id="modalBackdrop"></div>
+  <div class="modal-wrap" id="publishModal" role="dialog" aria-modal="true" aria-labelledby="publishModalTitle">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 class="modal-title" id="publishModalTitle">D-12 发布向导</h2>
+        <button class="icon-button" data-close-modal="publish" aria-label="关闭发布向导">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted mt-0">已登录状态下直接打开发布向导；离线状态下发布按钮置灰并提示不能提交发布申请。</p>
+        <div class="form-grid mt-5">
+          <div class="field">
+            <label>扩展类型</label>
+            <select class="input-like">
+              <option>Skill</option>
+              <option>MCP Server</option>
+              <option>Plugin</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>可见范围</label>
+            <select class="input-like">
+              <option>默认可见</option>
+              <option>仅授权范围内展示</option>
+            </select>
+          </div>
+          <div class="field full">
+            <label>名称</label>
+            <input class="input-like" placeholder="请输入扩展名称" />
+          </div>
+          <div class="field full">
+            <label>简短描述</label>
+            <textarea class="input-like" rows="4" placeholder="两行以内描述，便于社区卡片展示"></textarea>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="button button-secondary" data-close-modal="publish">取消</button>
+        <button class="button button-primary" data-toast="已提交发布申请，等待审核流处理。">提交发布申请</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-wrap" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 class="modal-title" id="settingsModalTitle">D-22 设置 · Agent 接入 / 本地环境</h2>
+        <button class="icon-button" data-close-modal="settings" aria-label="关闭设置">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="field">
+            <label>Agent 接入地址</label>
+            <input class="input-like" value="https://agent-gateway.internal" />
+          </div>
+          <div class="field">
+            <label>本地执行环境</label>
+            <select class="input-like">
+              <option>自动检测</option>
+              <option>Codex CLI</option>
+              <option>Cursor</option>
+              <option>自定义</option>
+            </select>
+          </div>
+          <div class="field full">
+            <label>MCP 配置写入路径</label>
+            <input class="input-like" value="~/.enterprise-agent-hub/mcp.json" />
+          </div>
+          <div class="field full">
+            <label>连接检测</label>
+            <div class="local-row">
+              <span class="ext-icon mcp">MCP</span>
+              <span><span class="strong">服务连接正常</span><br><span class="muted">最近检测：刚刚 · Streamable HTTP 可用</span></span>
+              <span class="tag success">正常</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="button button-secondary" data-close-modal="settings">取消</button>
+        <button class="button button-primary" data-toast="设置已保存。">保存设置</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast">提示</div>
+
+  <script>
+    const state = {
+      view: 'agent',
+      keyword: '',
+      resultType: '全部',
+      online: true,
+      loggedIn: true,
+      theme: 'light',
+      currentPeriod: {}
+    };
+
+    const datasets = {
+      'Skill': [
+        { id:'skill-1', type:'Skill', name:'对账高峰分析 Skill', desc:'面向交易峰值、下载流量和异常延迟的快速诊断技能。', category:'运维分析', tags:['对账','限流','诊断'], author:'林辰', dept:'平台研发部', version:'v1.2.0', star:128, countLabel:'下载', count:824, status:'有更新', statusTone:'warning', local:'已安装', risk:'低', visible:'默认可见', allowed:true },
+        { id:'skill-2', type:'Skill', name:'Java CVE 升级分析', desc:'根据组件坐标、JDK 约束和 Maven 依赖树输出升级建议。', category:'安全治理', tags:['CVE','Maven','Java'], author:'周言', dept:'安全架构部', version:'v2.4.1', star:96, countLabel:'下载', count:612, status:'已安装', statusTone:'success', local:'已安装', risk:'中', visible:'默认可见', allowed:true },
+        { id:'skill-3', type:'Skill', name:'方案评审摘要助手', desc:'将技术方案整理成面向领导汇报的结构化摘要。', category:'文档助手', tags:['评审','汇报','摘要'], author:'沈默', dept:'企业架构部', version:'v1.8.3', star:76, countLabel:'下载', count:430, status:'未安装', statusTone:'info', local:'未安装', risk:'低', visible:'默认可见', allowed:true },
+        { id:'skill-4', type:'Skill', name:'Drawio 流程图生成器', desc:'根据泳道、节点和边界规则生成可编辑流程图草稿。', category:'设计资产', tags:['drawio','流程','泳道'], author:'顾清', dept:'体验设计部', version:'v1.0.7', star:66, countLabel:'下载', count:385, status:'未安装', statusTone:'info', local:'未安装', risk:'低', visible:'默认可见', allowed:true },
+        { id:'skill-5', type:'Skill', name:'内网 Agent 任务拆分', desc:'将复杂漏洞修复分析拆成阶段化卡片，降低上下文占用。', category:'研发效率', tags:['内网','Agent','拆分'], author:'何屿', dept:'基础平台部', version:'v0.9.5', star:58, countLabel:'下载', count:302, status:'安全风险', statusTone:'danger', local:'未安装', risk:'高', visible:'默认可见', allowed:false },
+        { id:'skill-6', type:'Skill', name:'SaaS 原型验收 Skill', desc:'按页面边界、字段和禁止项检查原型是否满足需求。', category:'产品验收', tags:['SaaS','原型','验收'], author:'许诺', dept:'产品中心', version:'v1.1.0', star:44, countLabel:'下载', count:188, status:'未安装', statusTone:'info', local:'未安装', risk:'低', visible:'默认可见', allowed:true }
+      ],
+      'MCP Server': [
+        { id:'mcp-1', type:'MCP Server', name:'企业知识库 MCP', desc:'为 Agent 提供知识库检索、引用和权限校验能力。', access:'remote-http', transport:'streamable-http', transportLabel:'Streamable HTTP', tools:'Codex/Cursor', author:'陈澈', dept:'知识平台部', version:'v1.0.3', star:115, countLabel:'使用', count:982, enterprise:'正常', local:'已接入', risk:'低', visible:'默认可见', allowed:true },
+        { id:'mcp-2', type:'MCP Server', name:'制品库查询 MCP', desc:'查询内部 Maven、NPM 和通用制品库元数据。', access:'remote-http', transport:'streamable-http', transportLabel:'Streamable HTTP', tools:'Codex', author:'温禾', dept:'DevOps 平台部', version:'v1.3.2', star:82, countLabel:'使用', count:637, enterprise:'正常', local:'未接入', risk:'中', visible:'默认可见', allowed:true },
+        { id:'mcp-3', type:'MCP Server', name:'本地 Git 工具 MCP', desc:'通过 stdio 方式读取本地仓库状态和变更摘要。', access:'local-command', transport:'stdio', transportLabel:'stdio', tools:'Codex/Cursor', author:'林初', dept:'研发效能部', version:'v0.8.9', star:73, countLabel:'使用', count:456, enterprise:'正常', local:'未接入', risk:'低', visible:'默认可见', allowed:true },
+        { id:'mcp-4', type:'MCP Server', name:'审计只读 MCP', desc:'以只读方式查询发布申请和审批流关联状态。', access:'remote-sse', transport:'sse', transportLabel:'SSE（兼容）', tools:'Cursor', author:'苏言', dept:'合规管理部', version:'v2.0.1', star:69, countLabel:'使用', count:332, enterprise:'正常', local:'未接入', risk:'中', visible:'默认可见', allowed:false },
+        { id:'mcp-5', type:'MCP Server', name:'数据库元数据 MCP', desc:'获取表结构、索引和字段说明，禁止执行写操作。', access:'remote-http', transport:'streamable-http', transportLabel:'Streamable HTTP', tools:'Codex/Cursor', author:'唐立', dept:'数据平台部', version:'v1.1.4', star:54, countLabel:'使用', count:288, enterprise:'维护中', local:'未接入', risk:'中', visible:'默认可见', allowed:true },
+        { id:'mcp-6', type:'MCP Server', name:'Nginx 配置检查 MCP', desc:'读取网关限流、缓存和 Range 相关配置并生成检查建议。', access:'local-command', transport:'stdio', transportLabel:'stdio', tools:'Codex', author:'白屿', dept:'基础架构部', version:'v0.7.2', star:31, countLabel:'使用', count:116, enterprise:'正常', local:'未接入', risk:'低', visible:'默认可见', allowed:true }
+      ],
+      'Plugin': [
+        { id:'plugin-1', type:'Plugin', name:'Codex 任务卡片插件', desc:'在客户端内展示 Agent 阶段化任务卡片和执行状态。', tool:'Codex', installMode:'managed-package', author:'顾清', dept:'体验设计部', version:'v2.1.0', star:88, countLabel:'安装', count:534, enterprise:'正常', local:'已安装', risk:'低', visible:'默认可见', allowed:true },
+        { id:'plugin-2', type:'Plugin', name:'Cursor 审阅侧栏', desc:'为代码审阅场景提供漏洞组件、依赖树和修改说明侧栏。', tool:'Cursor', installMode:'managed-package', author:'何屿', dept:'基础平台部', version:'v1.6.2', star:72, countLabel:'安装', count:412, enterprise:'正常', local:'未安装', risk:'低', visible:'默认可见', allowed:true },
+        { id:'plugin-3', type:'Plugin', name:'Easydict 截图覆盖翻译', desc:'在截图区域上方叠加 OCR 译文，用于客户端即时阅读。', tool:'Easydict', installMode:'manual-download', author:'姜北', dept:'工具链小组', version:'v0.5.8', star:61, countLabel:'下载', count:260, enterprise:'正常', local:'未安装', risk:'中', visible:'默认可见', allowed:true },
+        { id:'plugin-4', type:'Plugin', name:'WindTerm 文件树增强', desc:'模拟多级文件树展示和批量命令辅助输入能力。', tool:'WindTerm', installMode:'manual-download', author:'陈澈', dept:'知识平台部', version:'v1.0.0', star:45, countLabel:'下载', count:198, enterprise:'正常', local:'未安装', risk:'低', visible:'默认可见', allowed:true },
+        { id:'plugin-5', type:'Plugin', name:'安全基线提示插件', desc:'在本地工具中提示高危操作、弱配置和敏感路径。', tool:'Codex', installMode:'managed-package', author:'周言', dept:'安全架构部', version:'v1.4.4', star:38, countLabel:'安装', count:156, enterprise:'限制', local:'未安装', risk:'高', visible:'默认可见', allowed:false },
+        { id:'plugin-6', type:'Plugin', name:'Markdown 方案美化器', desc:'将方案文档导出为轻量 SaaS 风格的可读页面。', tool:'Browser', installMode:'managed-package', author:'沈默', dept:'企业架构部', version:'v0.9.1', star:32, countLabel:'安装', count:128, enterprise:'正常', local:'未安装', risk:'低', visible:'默认可见', allowed:true }
+      ]
+    };
+
+    const filters = {
+      '全部': ['关键词', '分类', '标签', '作者', '部门', '风险等级'],
+      'Skill': ['分类', '标签', '适用工具', '安装状态', '风险等级'],
+      'MCP Server': ['接入方式', 'transport', '适用工具', '权限等级', '风险等级', '本机接入状态'],
+      'Plugin': ['目标工具', '安装模式', '兼容版本', '风险等级', '本机安装状态']
+    };
+
+    const pageMeta = {
+      agent: ['Agent 首页入口', '只定义 Enterprise Agent Hub 页面边界，Agent 工作区由独立文档承接。'],
+      community: ['社区首页', '发现入口：搜索、发布、类型化榜单和类型入口。'],
+      search: ['社区搜索结果页', '支持全部视图和单类型视图，筛选栏按类型变化。'],
+      local: ['本地已安装扩展', '展示本机安装和接入状态，作为 Agent 首页快捷入口目标。']
+    };
+
+    const qs = (selector, root = document) => root.querySelector(selector);
+    const qsa = (selector, root = document) => [...root.querySelectorAll(selector)];
+
+    function allItems() {
+      return [...datasets.Skill, ...datasets['MCP Server'], ...datasets.Plugin];
+    }
+
+    function formatNumber(num) {
+      return Number(num).toLocaleString('zh-CN');
+    }
+
+    function iconText(type) {
+      if (type === 'MCP Server') return 'MCP';
+      if (type === 'Plugin') return 'Plugin';
+      return 'Skill';
+    }
+
+    function iconClass(type) {
+      if (type === 'MCP Server') return 'mcp';
+      if (type === 'Plugin') return 'plugin';
+      return '';
+    }
+
+    function getToneClass(tone) {
+      return tone || 'info';
+    }
+
+    function getStatusHtml(item) {
+      if (item.type === 'Skill') {
+        return `<span class="tag ${getToneClass(item.statusTone)}">状态：${item.status}</span>`;
+      }
+      return `<span class="tag ${item.enterprise === '正常' ? 'success' : item.enterprise === '维护中' ? 'warning' : 'danger'}">企业状态：${item.enterprise}</span><span class="tag ${item.local.includes('已') ? 'success' : 'info'}">本机：${item.local}</span>`;
+    }
+
+    function createCard(item, compact = false) {
+      const skillMeta = item.type === 'Skill'
+        ? `${item.category} · ${item.tags.slice(0, 3).map(t => '#' + t).join(' ')}`
+        : item.type === 'MCP Server'
+          ? `${item.access} · ${item.transportLabel} · ${item.tools}`
+          : `${item.tool} · ${item.installMode}`;
+      const usageTitle = item.type === 'MCP Server' ? 'title="MCP 使用量口径：去重成功配置写入用户数"' : '';
+      return `
+        <article class="glass-card extension-card" role="button" tabindex="0" data-card-id="${item.id}" aria-label="打开 ${item.name} 详情">
+          <div class="card-top">
+            <div class="ext-icon ${iconClass(item.type)}">${iconText(item.type)}</div>
+            <h3 class="card-title truncate">${item.name}</h3>
+            <button class="star-button ${item.starred ? 'starred' : ''}" data-star-id="${item.id}" aria-label="Star ${item.name}">${item.starred ? '★' : '☆'}</button>
+          </div>
+          <p class="card-desc">${item.desc}</p>
+          <div class="card-meta truncate">${skillMeta}</div>
+          <div class="card-meta"><span>${item.author}</span><span class="dot">·</span><span>${item.dept}</span></div>
+          <div class="card-stats" ${usageTitle}><span>${item.version}</span><span class="dot">·</span><span>Star ${formatNumber(item.star)}</span><span class="dot">·</span><span>${item.countLabel} ${formatNumber(item.count)}</span></div>
+          <div class="card-status">${getStatusHtml(item)}</div>
+        </article>`;
+    }
+
+    function findItemById(id) {
+      return allItems().find(item => item.id === id);
+    }
+
+    function renderRankings() {
+      const container = qs('#rankingContainer');
+      const rankingDefs = {
+        'Skill': [
+          ['hot', '热榜', '综合热度'],
+          ['star', 'Star榜', '总/月/周'],
+          ['download', '下载量', '总/月/周']
+        ],
+        'MCP Server': [
+          ['hot', '热榜', '综合热度'],
+          ['star', 'Star榜', '总/月/周'],
+          ['usage', '使用量', '总/月/周']
+        ],
+        'Plugin': [
+          ['hot', '热榜', '综合热度'],
+          ['star', 'Star榜', '总/月/周'],
+          ['install', '下载/安装', '总/月/周']
+        ]
+      };
+
+      container.innerHTML = Object.entries(rankingDefs).map(([type, cards]) => `
+        <section>
+          <div class="section-heading">
+            <div>
+              <h2>${type}</h2>
+              <p class="section-note">已按可见性规则过滤：仅授权范围内展示的扩展不进入榜单。</p>
+            </div>
+          </div>
+          <div class="ranking-grid">
+            ${cards.map(([metric, title, sub]) => renderRankCard(type, metric, title, sub)).join('')}
+          </div>
+        </section>
+      `).join('');
+    }
+
+    function renderRankCard(type, metric, title, sub) {
+      const key = `${type}-${metric}`;
+      const period = state.currentPeriod[key] || '总榜';
+      const pool = datasets[type]
+        .filter(item => item.visible !== '仅授权范围内展示')
+        .slice()
+        .sort((a, b) => metric === 'star' ? b.star - a.star : b.count + b.star * 3 - (a.count + a.star * 3))
+        .slice(0, 5);
+      return `
+        <article class="glass-card rank-card" data-rank-card="${key}">
+          <div class="rank-card-head">
+            <div>
+              <div class="rank-title">${title}</div>
+              <div class="rank-subtitle">${sub}</div>
+            </div>
+            <div class="period-tabs" aria-label="榜单周期">
+              ${['总榜','月榜','周榜'].map(p => `<button class="period-tab ${period === p ? 'active' : ''}" data-period-key="${key}" data-period="${p}">${p.replace('榜','')}</button>`).join('')}
+            </div>
+          </div>
+          <ol class="rank-list">
+            ${pool.map((item, index) => `
+              <li class="rank-item" data-card-id="${item.id}" tabindex="0">
+                <span class="rank-no">${index + 1}</span>
+                <span class="rank-main">
+                  <span class="rank-name"><span class="tag">${iconText(item.type)}</span><span class="truncate">${item.name}</span></span>
+                  <span class="rank-meta">${item.desc} · ${item.author} · ${item.dept}</span>
+                </span>
+                <span class="rank-stat">★ ${formatNumber(item.star)}<br>${item.countLabel} ${formatNumber(item.count)}</span>
+              </li>`).join('')}
+          </ol>
+          <button class="button button-ghost" data-more-type="${type}" data-more-metric="${metric}" style="width:100%;">查看更多</button>
+        </article>`;
+    }
+
+    function renderFilters() {
+      const chips = filters[state.resultType] || filters['全部'];
+      qs('#filterChips').innerHTML = chips.map((text, index) => `<button class="chip ${index === 0 ? 'active' : ''}">${text}</button>`).join('') + `<button class="chip" data-clear-filter>清空筛选</button>`;
+    }
+
+    function filterByKeyword(items) {
+      const keyword = state.keyword.trim().toLowerCase();
+      if (!keyword) return items;
+      return items.filter(item => [
+        item.name,
+        item.desc,
+        item.author,
+        item.dept,
+        item.category,
+        item.tool,
+        item.access,
+        item.transportLabel,
+        item.tools,
+        ...(item.tags || [])
+      ].filter(Boolean).join(' ').toLowerCase().includes(keyword));
+    }
+
+    function renderResults() {
+      renderFilters();
+      const container = qs('#resultsContainer');
+      const label = state.keyword ? state.keyword : '默认探索';
+      qs('#resultTitle').textContent = `搜索结果：${label}`;
+      qs('#resultSubtitle').textContent = state.resultType === '全部'
+        ? '全部视图按 Skill / MCP Server / Plugin 分组展示，每组展示 Top 3。'
+        : `${state.resultType} 单类型视图，筛选栏和排序项已按当前类型展示。`;
+      qs('#resultSearch').value = state.keyword;
+
+      qsa('.type-tab').forEach(tab => tab.classList.toggle('active', tab.dataset.resultType === state.resultType));
+
+      if (state.resultType === '全部') {
+        const sections = ['Skill', 'MCP Server', 'Plugin'].map(type => {
+          const items = filterByKeyword(datasets[type]).slice(0, 3);
+          if (!items.length) return '';
+          return `
+            <section class="mt-6">
+              <div class="section-heading mt-0">
+                <div><h3>${type} 结果</h3><p class="section-note">点击卡片打开详情抽屉；点击 Star 可收藏或取消收藏。</p></div>
+                <button class="button button-ghost" data-open-type="${type}">查看全部</button>
+              </div>
+              <div class="cards-grid">${items.map(item => createCard(item)).join('')}</div>
+            </section>`;
+        }).join('');
+        container.innerHTML = sections || renderEmptyState();
+      } else {
+        const items = filterByKeyword(datasets[state.resultType]);
+        container.innerHTML = items.length
+          ? `<div class="cards-grid single-type">${items.map(item => createCard(item)).join('')}</div><div class="row-center mt-6" style="justify-content:center;"><button class="button button-secondary" data-toast="已加载当前演示数据的全部结果。">加载更多</button></div>`
+          : renderEmptyState();
+      }
+    }
+
+    function renderEmptyState() {
+      return `
+        <section class="glass-card empty-state">
+          <div>
+            <div class="empty-icon">⌕</div>
+            <h3 class="empty-title">没有找到符合条件的扩展</h3>
+            <p class="empty-copy">可以清空筛选，或返回社区首页浏览榜单。</p>
+            <div class="quick-actions" style="justify-content:center;">
+              <button class="button button-secondary" data-clear-filter>清空筛选</button>
+              <button class="button button-primary" data-nav="community">返回社区首页</button>
+            </div>
+          </div>
+        </section>`;
+    }
+
+    function renderLocalList() {
+      const installed = allItems().filter(item => item.local && item.local.includes('已')).slice(0, 6);
+      qs('#localList').innerHTML = installed.map(item => `
+        <article class="local-row" data-card-id="${item.id}" tabindex="0">
+          <span class="ext-icon ${iconClass(item.type)}">${iconText(item.type)}</span>
+          <span class="truncate"><span class="strong">${item.name}</span><br><span class="muted">${item.type} · ${item.version} · ${item.author} / ${item.dept}</span></span>
+          <span class="tag success">${item.local}</span>
+        </article>`).join('') || renderEmptyState();
+    }
+
+    function navigate(view) {
+      state.view = view;
+      qsa('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`));
+      qsa('.nav-item[data-nav]').forEach(el => el.classList.toggle('active', el.dataset.nav === view));
+      const [title, desc] = pageMeta[view] || pageMeta.agent;
+      qs('#topTitle').textContent = title;
+      qs('#topDesc').textContent = desc;
+      qs('#topPublish').style.display = (view === 'community' || view === 'search') ? 'inline-flex' : 'none';
+      if (view === 'community') renderRankings();
+      if (view === 'search') renderResults();
+      if (view === 'local') renderLocalList();
+      qs('.content').scrollTop = 0;
+    }
+
+    function searchFrom(inputSelector) {
+      const raw = qs(inputSelector).value.trim();
+      state.keyword = raw;
+      state.resultType = '全部';
+      navigate('search');
+    }
+
+    function openType(type) {
+      state.resultType = type;
+      if (!state.keyword) state.keyword = '默认探索';
+      if (state.keyword === '默认探索') state.keyword = '';
+      navigate('search');
+    }
+
+    function showToast(message) {
+      const toast = qs('#toast');
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove('show'), 2200);
+    }
+
+    function setOnline(online) {
+      state.online = online;
+      qs('#connectionTag').textContent = online ? '在线' : '离线';
+      qs('#connectionTag').className = `tag ${online ? 'success' : 'warning'}`;
+      qs('#toggleConnection').textContent = online ? '切换离线' : '切换在线';
+      qsa('[data-action="publish"]').forEach(btn => {
+        btn.disabled = !online;
+        btn.title = online ? '' : '离线状态下不能提交发布申请';
+      });
+      if (!online) showToast('离线状态下不能提交发布申请。');
+    }
+
+    function openPublish() {
+      if (!state.online) {
+        showToast('离线状态下不能提交发布申请。');
+        return;
+      }
+      if (!state.loggedIn) {
+        showToast('会话失效，请先登录。演示中默认登录后打开发布向导。');
+        state.loggedIn = true;
+      }
+      openModal('publish');
+    }
+
+    function openModal(type) {
+      qs('#modalBackdrop').classList.add('active');
+      qs(type === 'settings' ? '#settingsModal' : '#publishModal').classList.add('active');
+    }
+
+    function closeModal(type) {
+      qs(type === 'settings' ? '#settingsModal' : '#publishModal').classList.remove('active');
+      if (!qs('#settingsModal').classList.contains('active') && !qs('#publishModal').classList.contains('active')) {
+        qs('#modalBackdrop').classList.remove('active');
+      }
+    }
+
+    function openDrawer(item) {
+      if (!item) return;
+      qs('#drawerType').textContent = item.type;
+      qs('#drawerTitle').textContent = item.name;
+      qs('#drawerDesc').textContent = item.desc;
+      const isMcp = item.type === 'MCP Server';
+      const isPlugin = item.type === 'Plugin';
+      const primary = qs('#drawerPrimaryAction');
+      primary.disabled = !item.allowed;
+      primary.textContent = !item.allowed
+        ? '未授权，主操作不可用'
+        : item.type === 'Skill'
+          ? '在详情页安装 Skill'
+          : isMcp
+            ? '写入本机 MCP 配置'
+            : '安装 Plugin';
+
+      const typeSpecific = item.type === 'Skill'
+        ? [
+          ['分类', item.category], ['标签', item.tags.map(t => '#' + t).join(' ')], ['本机安装状态', item.local], ['安全状态', item.status]
+        ]
+        : isMcp
+          ? [
+            ['接入方式', item.access], ['transport', item.transportLabel], ['适用工具', item.tools], ['MCP 使用量口径', '去重成功配置写入用户数']
+          ]
+          : [
+            ['目标工具', item.tool], ['安装模式', item.installMode], ['企业状态', item.enterprise], ['本机安装状态', item.local]
+          ];
+
+      qs('#drawerBody').innerHTML = `
+        <div class="detail-grid">
+          ${[
+            ['作者', item.author],
+            ['部门', item.dept],
+            ['版本', item.version],
+            ['Star', formatNumber(item.star)],
+            [item.countLabel, formatNumber(item.count)],
+            ['风险等级', item.risk],
+            ['可见性', item.visible],
+            ['授权状态', item.allowed ? '当前用户可执行主操作' : '未授权，详情可见但主操作置灰'],
+            ...typeSpecific
+          ].map(([label, value]) => `<div class="detail-item"><div class="detail-label">${label}</div><div class="detail-value">${value}</div></div>`).join('')}
+        </div>
+        <div class="detail-block">
+          <h4>详情抽屉交互说明</h4>
+          <p class="muted">卡片本身只允许打开详情和切换 Star，不在卡片上放安装、下载、更新、卸载、复制配置或连接检测等主操作。</p>
+        </div>
+        <div class="detail-block">
+          <h4>演示配置片段</h4>
+          <pre class="code-box">${JSON.stringify({ id: item.id, type: item.type, version: item.version, allowed: item.allowed, localStatus: item.local }, null, 2)}</pre>
+        </div>`;
+
+      qs('#drawerBackdrop').classList.add('active');
+      qs('#detailDrawer').classList.add('active');
+      qs('#detailDrawer').setAttribute('aria-hidden', 'false');
+    }
+
+    function closeDrawer() {
+      qs('#drawerBackdrop').classList.remove('active');
+      qs('#detailDrawer').classList.remove('active');
+      qs('#detailDrawer').setAttribute('aria-hidden', 'true');
+    }
+
+    function toggleStar(id, btn) {
+      const item = findItemById(id);
+      if (!item) return;
+      item.starred = !item.starred;
+      item.star += item.starred ? 1 : -1;
+      btn.classList.toggle('starred', item.starred);
+      btn.textContent = item.starred ? '★' : '☆';
+      showToast(item.starred ? `已 Star：${item.name}` : `已取消 Star：${item.name}`);
+      if (state.view === 'community') renderRankings();
+      if (state.view === 'search') renderResults();
+    }
+
+    function toggleTheme() {
+      state.theme = state.theme === 'light' ? 'dark' : 'light';
+      document.documentElement.dataset.theme = state.theme;
+      qs('#themeToggle').textContent = state.theme === 'light' ? '深色模式' : '浅色模式';
+    }
+
+    document.addEventListener('click', (event) => {
+      const nav = event.target.closest('[data-nav]');
+      if (nav) {
+        navigate(nav.dataset.nav);
+        return;
+      }
+
+      const publish = event.target.closest('[data-action="publish"]');
+      if (publish) {
+        openPublish();
+        return;
+      }
+
+      const communitySearch = event.target.closest('[data-action="community-search"]');
+      if (communitySearch) {
+        searchFrom('#communitySearch');
+        return;
+      }
+
+      const resultSearch = event.target.closest('[data-action="result-search"]');
+      if (resultSearch) {
+        searchFrom('#resultSearch');
+        return;
+      }
+
+      const type = event.target.closest('[data-result-type]');
+      if (type) {
+        state.resultType = type.dataset.resultType;
+        renderResults();
+        return;
+      }
+
+      const openTypeButton = event.target.closest('[data-open-type]');
+      if (openTypeButton) {
+        openType(openTypeButton.dataset.openType);
+        return;
+      }
+
+      const more = event.target.closest('[data-more-type]');
+      if (more) {
+        state.keyword = '';
+        state.resultType = more.dataset.moreType;
+        navigate('search');
+        showToast(`已进入 ${more.dataset.moreType} ${more.dataset.moreMetric} 榜单结果页。`);
+        return;
+      }
+
+      const period = event.target.closest('[data-period-key]');
+      if (period) {
+        state.currentPeriod[period.dataset.periodKey] = period.dataset.period;
+        renderRankings();
+        showToast(`已切换为${period.dataset.period}，仅刷新当前榜单。`);
+        return;
+      }
+
+      const star = event.target.closest('[data-star-id]');
+      if (star) {
+        event.stopPropagation();
+        toggleStar(star.dataset.starId, star);
+        return;
+      }
+
+      const card = event.target.closest('[data-card-id]');
+      if (card) {
+        openDrawer(findItemById(card.dataset.cardId));
+        return;
+      }
+
+      if (event.target.closest('[data-close-drawer]') || event.target.id === 'drawerBackdrop') {
+        closeDrawer();
+        return;
+      }
+
+      const settings = event.target.closest('[data-open-settings]');
+      if (settings) {
+        openModal('settings');
+        return;
+      }
+
+      const closeModalBtn = event.target.closest('[data-close-modal]');
+      if (closeModalBtn) {
+        closeModal(closeModalBtn.dataset.closeModal);
+        return;
+      }
+
+      if (event.target.id === 'modalBackdrop') {
+        closeModal('settings');
+        closeModal('publish');
+        return;
+      }
+
+      const toastBtn = event.target.closest('[data-toast]');
+      if (toastBtn) {
+        showToast(toastBtn.dataset.toast);
+        return;
+      }
+
+      if (event.target.closest('[data-clear-filter]')) {
+        state.keyword = '';
+        qs('#resultSearch').value = '';
+        renderResults();
+        showToast('已清空筛选，保留当前类型视图。');
+      }
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        closeDrawer();
+        closeModal('settings');
+        closeModal('publish');
+      }
+      if (event.key === 'Enter') {
+        if (document.activeElement?.id === 'communitySearch') searchFrom('#communitySearch');
+        if (document.activeElement?.id === 'resultSearch') searchFrom('#resultSearch');
+        const card = document.activeElement?.closest?.('[data-card-id]');
+        if (card) openDrawer(findItemById(card.dataset.cardId));
+      }
+    });
+
+    qs('#toggleConnection').addEventListener('click', () => setOnline(!state.online));
+    qs('#themeToggle').addEventListener('click', toggleTheme);
+
+    qs('#topPublish').style.display = 'none';
+    renderRankings();
+    renderResults();
+    renderLocalList();
+  </script>
+</body>
+</html>
