@@ -17,6 +17,7 @@ export interface AppPaths {
   mcpConfigsDir: string;
   mcpVariablesDir: string;
   adaptersDir: string;
+  projectsDir: string;
   tempDir: string;
   backupsDir: string;
   eventsDir: string;
@@ -54,6 +55,7 @@ export function buildAppPaths(root: string): AppPaths {
     mcpConfigsDir: path.join(resolvedRoot, 'mcp', 'configs'),
     mcpVariablesDir: path.join(resolvedRoot, 'mcp', 'variables'),
     adaptersDir: path.join(resolvedRoot, 'adapters'),
+    projectsDir: path.join(resolvedRoot, 'projects'),
     tempDir: path.join(resolvedRoot, 'temp'),
     backupsDir: path.join(resolvedRoot, 'backups'),
     eventsDir: path.join(resolvedRoot, 'events'),
@@ -70,6 +72,7 @@ export const REQUIRED_APP_DIRECTORIES: Array<keyof Pick<AppPaths,
   | 'mcpConfigsDir'
   | 'mcpVariablesDir'
   | 'adaptersDir'
+  | 'projectsDir'
   | 'tempDir'
   | 'backupsDir'
   | 'eventsDir'
@@ -83,6 +86,7 @@ export const REQUIRED_APP_DIRECTORIES: Array<keyof Pick<AppPaths,
   'mcpConfigsDir',
   'mcpVariablesDir',
   'adaptersDir',
+  'projectsDir',
   'tempDir',
   'backupsDir',
   'eventsDir',
@@ -105,7 +109,7 @@ export async function initializeAppDataLayout(root: string): Promise<AppPaths> {
     for (const key of REQUIRED_APP_DIRECTORIES) {
       await mkdir(paths[key], { recursive: true });
     }
-    await ensureJsonFile(paths.configFile, { baseURL: 'http://localhost:8080' });
+    await ensureJsonFile(paths.configFile, { baseURL: 'http://localhost:8080', theme: 'system', notificationsEnabled: true });
     return paths;
   } catch (error) {
     throw new DesktopErrorException(makeDesktopError('io_error', 'Failed to initialize desktop app-data layout', undefined, error));

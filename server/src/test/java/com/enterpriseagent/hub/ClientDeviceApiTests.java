@@ -30,6 +30,7 @@ class ClientDeviceApiTests extends PostgresIntegrationTestBase {
     void desktopRegistersHeartbeatsSyncsIdempotentEventsAndAdminCanInspectDevice() throws Exception {
         User user = M8TestSupport.createUser(userRepository, M8TestSupport.uniquePhone("136"), Role.NORMAL_USER);
         String deviceId = "m8-device-" + java.util.UUID.randomUUID();
+        String heartbeatVersion = "1.0." + Long.toUnsignedString(System.nanoTime());
         String token = M8TestSupport.login(mockMvc, user.getPhone(), "Temp#123456", "DESKTOP", deviceId);
         String adminToken = M8TestSupport.login(mockMvc, "13800000000", "Admin#123456", "ADMIN_WEB", "admin-m8");
 
@@ -61,7 +62,7 @@ class ClientDeviceApiTests extends PostgresIntegrationTestBase {
         mockMvc.perform(post("/api/client-devices/heartbeat")
                         .header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"deviceId\":\"" + deviceId + "\",\"clientVersion\":\"1.0.1\",\"localEventQueueSize\":2}"))
+                        .content("{\"deviceId\":\"" + deviceId + "\",\"clientVersion\":\"" + heartbeatVersion + "\",\"localEventQueueSize\":2}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.accepted").value(true));
 
@@ -84,6 +85,12 @@ class ClientDeviceApiTests extends PostgresIntegrationTestBase {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items[0].device_id").value(deviceId));
 
+        String distributionResponse = mockMvc.perform(get("/api/admin/client-devices/version-distribution")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(distributionResponse).contains(heartbeatVersion).contains("deviceCount");
+
         mockMvc.perform(get("/api/admin/client-devices/" + deviceId)
                         .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
@@ -91,6 +98,9 @@ class ClientDeviceApiTests extends PostgresIntegrationTestBase {
                 .andExpect(jsonPath("$.data.events[0].event_type").exists());
 
         mockMvc.perform(get("/api/admin/client-devices")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/admin/client-devices/version-distribution")
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isForbidden());
 

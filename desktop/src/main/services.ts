@@ -9,8 +9,10 @@ import { LocalDatabase } from './db/local-database';
 import { LocalEventQueue } from './events/local-event-queue';
 import { LocalEventSyncService } from './events/local-event-sync-service';
 import { LocalExecutor } from './executor/local-executor';
+import { DeviceHeartbeatScheduler } from './device/device-heartbeat-scheduler';
 import { DeviceRegistrationService } from './device/device-registration-service';
 import { LocalLifecycleRepository } from './lifecycle/local-lifecycle-repository';
+import { LocalInventoryScanner } from './lifecycle/local-inventory-scanner';
 import { ClientLogger } from './logging/client-logger';
 import { McpService } from './mcp/mcp-service';
 import { PackageDownloadService } from './packages/package-download-service';
@@ -31,6 +33,7 @@ export interface CreateDesktopServicesOptions {
   safeStorage?: SafeStorageLike;
   signatureVerifier?: SignatureVerifier;
   updateLauncher?: ClientUpdateLauncher;
+  heartbeatIntervalMs?: number;
 }
 
 export interface DesktopServices {
@@ -40,10 +43,12 @@ export interface DesktopServices {
   deviceInfo: DeviceInfo;
   eventQueue: LocalEventQueue;
   eventSyncService: LocalEventSyncService;
+  deviceHeartbeatScheduler: DeviceHeartbeatScheduler;
   deviceRegistrationService: DeviceRegistrationService;
   clientUpdateService: ClientUpdateService;
   localExecutor: LocalExecutor;
   lifecycleRepository: LocalLifecycleRepository;
+  localInventoryScanner: LocalInventoryScanner;
   mcpService: McpService;
   packageDownloadService: PackageDownloadService;
   pluginService: PluginService;
@@ -79,6 +84,7 @@ export async function createDesktopServices(options: CreateDesktopServicesOption
   const offlinePolicy = new OfflinePolicy();
   const localExecutor = new LocalExecutor();
   const lifecycleRepository = new LocalLifecycleRepository(db);
+  const localInventoryScanner = new LocalInventoryScanner(paths, lifecycleRepository);
   const eventSyncService = new LocalEventSyncService(eventQueue, (events) => apiClient.syncLocalEvents(events), {
     applyServerStateHints: (hints) => lifecycleRepository.applyServerStateHints(hints)
   });
@@ -86,11 +92,16 @@ export async function createDesktopServices(options: CreateDesktopServicesOption
   const packageDownloadService = new PackageDownloadService(apiClient, paths);
   const pluginService = new PluginService();
   const skillService = new SkillService(paths);
-  const deviceRegistrationService = new DeviceRegistrationService(apiClient, async () => deviceInfo);
+  const deviceRegistrationService = new DeviceRegistrationService(apiClient, async () => deviceInfo, () => eventQueue.listPending().length);
+  const deviceHeartbeatScheduler = new DeviceHeartbeatScheduler((requestID) => deviceRegistrationService.heartbeat(requestID), {
+    intervalMs: options.heartbeatIntervalMs,
+    onError: (error) => logger.warn('device.heartbeat.failed', error)
+  });
   const clientUpdateService = new ClientUpdateService({
     apiClient,
     getDeviceInfo: async () => deviceInfo,
     downloadsDir: path.join(paths.root, 'updates'),
+    startupStateFile: path.join(paths.root, 'client-update-startup.json'),
     signatureVerifier: options.signatureVerifier ?? new WindowsAuthenticodeSignatureVerifier(),
     launcher: options.updateLauncher ?? new ShellClientUpdateLauncher()
   });
@@ -98,14 +109,19 @@ export async function createDesktopServices(options: CreateDesktopServicesOption
     apiClient,
     cacheRepository,
     eventQueue,
+    eventSyncService,
     getDeviceInfo: async () => deviceInfo,
     lifecycleRepository,
+    localInventoryScanner,
     localExecutor,
     logger,
+    mcpService,
     offlinePolicy,
     paths,
+    pluginService,
     secureStore,
     skillService,
+    db,
     deviceRegistrationService,
     clientUpdateService
   });
@@ -117,9 +133,11 @@ export async function createDesktopServices(options: CreateDesktopServicesOption
     deviceInfo,
     eventQueue,
     eventSyncService,
+    deviceHeartbeatScheduler,
     deviceRegistrationService,
     clientUpdateService,
     lifecycleRepository,
+    localInventoryScanner,
     localExecutor,
     logger,
     mcpService,

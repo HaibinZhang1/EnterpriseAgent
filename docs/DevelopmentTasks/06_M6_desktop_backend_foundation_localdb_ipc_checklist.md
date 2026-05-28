@@ -213,3 +213,13 @@
 遗留问题：服务端 local-events / client-devices / client-update / MCP/Plugin 详情接口仍按 M6 边界使用 mock/contract stub，后续 M7/M8 处理；无 M6 阻塞。
 是否更新总清单：是
 ```
+
+## 18. 后续补充记录：桌面 Renderer / IPC 联通
+
+```text
+补充时间：2026-05-25 CST
+补充内容：在不改变 Main/Preload/Renderer 安全边界的前提下，桌面 Renderer 从 smoke screen 替换为真实 React 客户端；preload 白名单补齐 auth.me/changePassword、extension star/definition/install、local lifecycle/local cleanup、settings save、MCP/Plugin 动作、publish、notifications 等必要通道；Main 层继续负责 API client、本地执行器、SecureStore、本地 DB 和事件队列。
+验证命令：npm --prefix desktop run typecheck；npm --prefix desktop test；npm --prefix desktop run lint；npm --prefix desktop run build；npm --prefix desktop run test:electron
+验证结果：desktop typecheck 通过；Vitest 20 files / 51 tests 通过；desktop lint 通过；Vite/Electron main build 通过；Electron runtime isolation smoke 与 electron-smoke 1 file / 2 tests 通过。
+未验证：未连接真实服务端跑完整桌面 E2E；未执行 Windows x64 签名安装包验证。
+```

@@ -43,8 +43,8 @@ export class PlanValidator {
         allowMissing: true
       }, requestID);
     }
-    if (step.sourcePath && step.action !== 'copy-file') {
-      throw new DesktopErrorException(makeDesktopError('invalid_execution_plan', 'Only copy steps can declare a source path', requestID));
+    if (step.sourcePath && step.action !== 'copy-file' && step.action !== 'symlink') {
+      throw new DesktopErrorException(makeDesktopError('invalid_execution_plan', 'Only copy and symlink steps can declare a source path', requestID));
     }
     if (step.sourcePath) {
       await this.guard.assertSafePath(step.sourcePath, { roots: options.allowedRoots, allowMissing: true }, requestID);

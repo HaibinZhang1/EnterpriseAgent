@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import rendererConfig from '../vite.config';
+import preloadConfig from '../vite.preload.config';
 import { createMainWindowOptions } from '../src/main/main-window';
 import { createDesktopServices } from '../src/main/services';
 import { createPreloadApi } from '../src/preload/api';
@@ -25,5 +27,11 @@ describe('Electron smoke boundaries', () => {
     } finally {
       await temp.cleanup();
     }
+  });
+
+  it('configures production assets for file-url and sandboxed preload runtime', () => {
+    expect(rendererConfig.base).toBe('./');
+    expect(preloadConfig.build?.lib).toMatchObject({ formats: ['cjs'] });
+    expect(preloadConfig.build?.rollupOptions?.external).toContain('electron');
   });
 });

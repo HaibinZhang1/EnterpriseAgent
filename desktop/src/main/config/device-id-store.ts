@@ -14,7 +14,18 @@ export class DeviceIdStore {
 
   async getOrCreate(): Promise<DeviceInfo> {
     const existing = await this.readExisting();
-    if (existing) return existing;
+    if (existing) {
+      if (existing.clientVersion !== this.clientVersion) {
+        const updated = {
+          ...existing,
+          clientVersion: this.clientVersion,
+          updatedAt: new Date().toISOString()
+        };
+        await writeFile(this.paths.deviceFile, `${JSON.stringify(updated, null, 2)}\n`, 'utf8');
+        return updated;
+      }
+      return existing;
+    }
     const now = new Date().toISOString();
     const info: DeviceInfo = {
       deviceID: `device_${randomUUID()}`,

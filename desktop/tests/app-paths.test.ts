@@ -25,6 +25,7 @@ describe('AppPaths and DeviceIdStore', () => {
       await expectPathExists(paths.mcpConfigsDir);
       await expectPathExists(paths.mcpVariablesDir);
       await expectPathExists(paths.adaptersDir);
+      await expectPathExists(paths.projectsDir);
       await expectPathExists(paths.tempDir);
       await expectPathExists(paths.backupsDir);
       await expectPathExists(paths.eventsDir);
@@ -41,10 +42,11 @@ describe('AppPaths and DeviceIdStore', () => {
     const temp = await tempRoot();
     try {
       const paths = await initializeAppDataLayout(temp.root);
-      const store = new DeviceIdStore(paths);
+      const store = new DeviceIdStore(paths, '0.1.0-m7');
       const first = await store.getOrCreate();
-      const second = await new DeviceIdStore(buildAppPaths(temp.root)).getOrCreate();
+      const second = await new DeviceIdStore(buildAppPaths(temp.root), '0.1.0-m8').getOrCreate();
       expect(second.deviceID).toBe(first.deviceID);
+      expect(second.clientVersion).toBe('0.1.0-m8');
       expect(resolveInsideRoot(paths.root, 'cache/result.json')).toContain(paths.root);
       expect(() => resolveInsideRoot(paths.root, '../outside')).toThrow(/escapes/);
     } finally {

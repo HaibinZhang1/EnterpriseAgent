@@ -192,6 +192,39 @@ public class ClientDeviceService {
     }
 
     @Transactional(readOnly = true)
+    public List<Map<String, Object>> versionDistribution(CurrentUser actor, String departmentId, boolean includeChildren) {
+        requireAdmin(actor);
+        List<Object> params = new ArrayList<>();
+        StringBuilder where = new StringBuilder(" where 1 = 1");
+        Set<UUID> departmentFilter = departmentFilter(actor, departmentId, includeChildren);
+        if (departmentFilter != null && departmentFilter.isEmpty()) {
+            return List.of();
+        }
+        if (departmentFilter != null) {
+            appendUuidFilter(where, params, "department_id", departmentFilter);
+        }
+        return jdbc.queryForList("""
+                select coalesce(client_version, 'unknown') as client_version,
+                       count(*) as device_count,
+                       count(*) filter (where status = 'ACTIVE') as active_count,
+                       max(last_seen_at) as last_seen_at
+                  from client_devices
+                """ + where + """
+                 group by coalesce(client_version, 'unknown')
+                 order by device_count desc, client_version asc
+                """, params.toArray()).stream()
+                .map(row -> {
+                    Map<String, Object> output = new LinkedHashMap<>();
+                    output.put("clientVersion", row.get("client_version"));
+                    output.put("deviceCount", row.get("device_count"));
+                    output.put("activeCount", row.get("active_count"));
+                    output.put("lastSeenAt", row.get("last_seen_at"));
+                    return output;
+                })
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
     public Map<String, Object> detail(CurrentUser actor, String deviceId) {
         requireAdmin(actor);
         var rows = jdbc.queryForList("""

@@ -52,6 +52,14 @@ public class ClientDeviceController {
                 includeChildren, clientVersion, status, page, pageSize));
     }
 
+    @GetMapping("/admin/client-devices/version-distribution")
+    public ApiResponse<java.util.List<Map<String, Object>>> versionDistribution(
+            @RequestParam(required = false) String departmentId,
+            @RequestParam(defaultValue = "false") boolean includeChildren) {
+        return ApiResponse.success(service.versionDistribution(currentUserProvider.requireCurrentUser(), departmentId,
+                includeChildren));
+    }
+
     @GetMapping("/admin/client-devices/{deviceId}")
     public ApiResponse<Map<String, Object>> detail(@PathVariable String deviceId) {
         return ApiResponse.success(service.detail(currentUserProvider.requireCurrentUser(), deviceId));

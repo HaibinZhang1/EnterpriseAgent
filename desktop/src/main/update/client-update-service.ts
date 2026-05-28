@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ensureRequestID } from '../../shared/request-id';
 import { DesktopErrorException, makeDesktopError } from '../../shared/errors';
@@ -22,6 +22,7 @@ export interface ClientUpdateServiceOptions {
   apiClient: ApiClient;
   getDeviceInfo: () => Promise<DeviceInfo>;
   downloadsDir: string;
+  startupStateFile?: string;
   signatureVerifier: SignatureVerifier;
   launcher: ClientUpdateLauncher;
   hashVerifier?: HashVerifier;
@@ -39,6 +40,31 @@ export class ClientUpdateService {
 
   getPending(): PendingClientUpdate | undefined {
     return this.pending;
+  }
+
+  async reportStartupVersion(requestID?: string): Promise<{ reported: boolean; currentVersion: string; previousVersion?: string; skippedReason?: string }> {
+    const device = await this.options.getDeviceInfo();
+    const currentVersion = device.clientVersion ?? 'unknown';
+    const state = await this.readStartupState();
+    const previousVersion = state.lastReportedVersion;
+    if (!previousVersion) {
+      await this.writeStartupState({ lastReportedVersion: currentVersion });
+      return { reported: false, currentVersion, skippedReason: 'initial_version_recorded' };
+    }
+    if (previousVersion === currentVersion) {
+      return { reported: false, currentVersion, previousVersion, skippedReason: 'version_unchanged' };
+    }
+    await this.options.apiClient.reportClientUpdateEvents(device.deviceID, [{
+      idempotencyKey: `UPDATED_FIRST_START:${device.deviceID}:${previousVersion}:${currentVersion}`,
+      eventType: 'UPDATED_FIRST_START',
+      result: 'SUCCESS',
+      fromVersion: previousVersion,
+      toVersion: currentVersion,
+      requestID,
+      payloadSummary: { previousVersion, currentVersion }
+    }], requestID);
+    await this.writeStartupState({ lastReportedVersion: currentVersion });
+    return { reported: true, currentVersion, previousVersion };
   }
 
   async check(requestID?: string): Promise<PendingClientUpdate | undefined> {
@@ -123,6 +149,27 @@ export class ClientUpdateService {
     const filePath = path.join(this.options.downloadsDir, `client-update-${safeVersion}-${Date.now()}.bin`);
     await writeFile(filePath, Buffer.from(bytes));
     return filePath;
+  }
+
+  private async readStartupState(): Promise<{ lastReportedVersion?: string }> {
+    try {
+      const parsed = JSON.parse(await readFile(this.startupStateFile(), 'utf8')) as Record<string, unknown>;
+      return typeof parsed.lastReportedVersion === 'string'
+        ? { lastReportedVersion: parsed.lastReportedVersion }
+        : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private async writeStartupState(state: { lastReportedVersion: string }): Promise<void> {
+    const file = this.startupStateFile();
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  }
+
+  private startupStateFile(): string {
+    return this.options.startupStateFile ?? path.join(this.options.downloadsDir, 'startup-state.json');
   }
 
   private report(deviceId: string, eventType: string, result: string, errorCode: string | undefined, requestID: string | undefined, payloadSummary: Record<string, unknown>): Promise<unknown> {

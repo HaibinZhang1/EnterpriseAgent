@@ -37,10 +37,11 @@ class LocalEventsSyncApiTests extends PostgresIntegrationTestBase {
     void syncPersistsEventsDeduplicatesAndRedactsPayloads() throws Exception {
         User user = createUser();
         String token = login(user.getPhone(), "Temp#123456");
-        String key = "device_1:skill.install:demo:1";
+        String deviceId = "device_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        String key = deviceId + ":skill.install:demo:1";
         String request = """
-                {"deviceId":"device_1","events":[{"idempotencyKey":"%s","extensionId":null,"version":"1.0.0","type":"SKILL_INSTALL","result":"SUCCESS","occurredAt":"2026-05-06T10:00:00Z","payloadSummary":{"token":"EAH_SENTINEL_SECRET_DO_NOT_PERSIST","targetCount":1}}]}
-                """.formatted(key);
+                {"deviceId":"%s","events":[{"idempotencyKey":"%s","extensionId":null,"version":"1.0.0","type":"SKILL_INSTALL","result":"SUCCESS","occurredAt":"2026-05-06T10:00:00Z","payloadSummary":{"token":"EAH_SENTINEL_SECRET_DO_NOT_PERSIST","targetCount":1}}]}
+                """.formatted(deviceId, key);
 
         mockMvc.perform(post("/api/local-events/sync")
                         .header("Authorization", "Bearer " + token)
@@ -59,7 +60,7 @@ class LocalEventsSyncApiTests extends PostgresIntegrationTestBase {
                 String.class, key);
         assertThat(payload).doesNotContain("EAH_SENTINEL_SECRET_DO_NOT_PERSIST");
         assertThat(jdbc.queryForObject("select count(*) from local_events where device_id = ? and idempotency_key = ?",
-                Long.class, "device_1", key)).isEqualTo(1L);
+                Long.class, deviceId, key)).isEqualTo(1L);
     }
 
     @Test

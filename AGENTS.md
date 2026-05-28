@@ -10,6 +10,9 @@ This repository is currently a documentation-first baseline for Enterprise Agent
 
 When application code is introduced, align it with `docs/DetailedDesign/23_technical_architecture.md`: Spring Boot 3 + Java 21 for the server, Electron + React for the Windows desktop client, and React for the admin web UI.
 
+## Frontend Design Guidelines
+When developing or modifying client, desktop, or admin frontend code, read `docs/UIDesign/Design.md` first and follow its Glassmorphism visual style. Treat that document as the source of truth for visual direction, color tokens, glass surfaces, backgrounds, spacing rhythm, interaction states, and readability constraints unless the user explicitly provides a newer design direction.
+
 ## Agent Execution Principles
 
 These rules adapt the core ideas from `multica-ai/andrej-karpathy-skills`: reduce hidden assumptions, avoid unnecessary complexity, keep diffs surgical, and make completion verifiable.

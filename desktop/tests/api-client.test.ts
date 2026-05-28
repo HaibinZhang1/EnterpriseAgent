@@ -69,6 +69,9 @@ describe('ApiClient', () => {
         if (url.endsWith('/api/client-devices/register')) {
           return new Response(JSON.stringify({ success: true, data: { registered: true } }), { status: 200 });
         }
+        if (url.endsWith('/api/client-devices/heartbeat')) {
+          return new Response(JSON.stringify({ success: true, data: { accepted: true } }), { status: 200 });
+        }
         if (url.includes('/api/client-updates/check?')) {
           return new Response(JSON.stringify({ success: true, data: { updateAvailable: true, version: '0.1.0-m8' } }), { status: 200 });
         }
@@ -94,6 +97,7 @@ describe('ApiClient', () => {
       });
 
       await expect(client.registerDevice({ deviceID: 'device_1', createdAt: 'now', updatedAt: 'now', clientVersion: '0.1.0-m8' }, 'req_register')).resolves.toEqual({ registered: true });
+      await expect(client.heartbeat({ deviceId: 'device_1', clientVersion: '0.1.0-m8', localEventQueueSize: 3 }, 'req_heartbeat')).resolves.toEqual({ accepted: true });
       await expect(client.checkClientUpdate({ deviceId: 'device_1', currentVersion: '0.1.0-m7', platform: 'win32', arch: 'x64' }, 'req_check')).resolves.toMatchObject({ updateAvailable: true });
       await expect(client.createClientUpdateDownloadTicket({ deviceId: 'device_1', versionId: 'version-1', currentVersion: '0.1.0-m7' }, 'req_ticket')).resolves.toEqual({ ticket: 'ticket-raw-secret' });
       await expect(client.downloadClientUpdate('ticket-raw-secret', 'req_download_update')).resolves.toBeInstanceOf(ArrayBuffer);
@@ -101,13 +105,15 @@ describe('ApiClient', () => {
 
       expect(calls.map((call) => call.url)).toEqual([
         'http://server.test/api/client-devices/register',
+        'http://server.test/api/client-devices/heartbeat',
         'http://server.test/api/client-updates/check?deviceId=device_1&currentVersion=0.1.0-m7&platform=win32&arch=x64',
         'http://server.test/api/client-updates/version-1/download-ticket',
         'http://server.test/api/download-tickets/ticket-raw-secret/download',
         'http://server.test/api/client-updates/events'
       ]);
       expect(JSON.parse(calls[0].init.body as string)).toMatchObject({ deviceId: 'device_1', clientVersion: '0.1.0-m8', osVersion: process.platform, arch: process.arch });
-      expect(JSON.parse(calls[2].init.body as string)).toEqual({ deviceId: 'device_1', currentVersion: '0.1.0-m7' });
+      expect(JSON.parse(calls[1].init.body as string)).toEqual({ deviceId: 'device_1', clientVersion: '0.1.0-m8', localEventQueueSize: 3 });
+      expect(JSON.parse(calls[3].init.body as string)).toEqual({ deviceId: 'device_1', currentVersion: '0.1.0-m7' });
       const headers = calls[0].init.headers as Record<string, string>;
       expect(headers.Authorization).toBe('Bearer raw-token');
       const logText = await readFile(path.join(temp.root, 'desktop.log'), 'utf8');

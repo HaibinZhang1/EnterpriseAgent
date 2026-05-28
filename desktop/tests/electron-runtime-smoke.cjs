@@ -61,8 +61,37 @@ contextBridge.exposeInMainWorld('enterpriseAgent', {
       app.exit(1);
       return;
     }
-    console.log('electron runtime isolation smoke passed');
     window.destroy();
+
+    const appWindow = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        preload: path.join(__dirname, '..', 'dist', 'preload', 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true
+      }
+    });
+    await appWindow.loadURL(pathToFileURL(path.join(__dirname, '..', 'dist', 'renderer', 'index.html')).toString());
+    const appResult = await appWindow.webContents.executeJavaScript(`new Promise((resolve) => {
+      setTimeout(() => resolve({
+        hasApi: Boolean(window.enterpriseAgent && window.enterpriseAgent.auth && window.enterpriseAgent.device),
+        hasRawIpc: Boolean(window.ipcRenderer),
+        text: document.body.innerText,
+        childCount: document.getElementById('root')?.children.length ?? 0
+      }), 250);
+    })`);
+    if (!appResult.hasApi) failures.push('built preload API missing');
+    if (appResult.hasRawIpc) failures.push('built preload exposed raw ipcRenderer');
+    if (!appResult.text.includes('Enterprise Agent Hub')) failures.push('built renderer did not render app text');
+    if (appResult.childCount === 0) failures.push('built renderer root is empty');
+    if (failures.length > 0) {
+      console.error(failures.join('\n'));
+      app.exit(1);
+      return;
+    }
+    console.log('electron runtime isolation smoke passed');
+    appWindow.destroy();
     app.quit();
   } finally {
     clearTimeout(timeout);

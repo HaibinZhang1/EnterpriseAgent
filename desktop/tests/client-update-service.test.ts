@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ApiClient, ClientUpdateInfo } from '../src/main/api/api-client';
 import { DesktopErrorException, makeDesktopError } from '../src/shared/errors';
@@ -207,5 +209,71 @@ describe('ClientUpdateService', () => {
 
     await expect(service.confirmInstall('req_install')).rejects.toMatchObject({ desktopError: { code: 'installer_launch_failed' } });
     expect(calls).toEqual(['event:LAUNCH_CONFIRMED']);
+  });
+
+  it('records the initial startup version without sending an update event', async () => {
+    const temp = await tempRoot();
+    try {
+      const events: unknown[] = [];
+      const service = new ClientUpdateService({
+        apiClient: {
+          reportClientUpdateEvents: async (_deviceID: string, reportedEvents: unknown[]) => {
+            events.push(...reportedEvents);
+            return { accepted: true };
+          }
+        } as unknown as ApiClient,
+        getDeviceInfo: async () => ({ deviceID: 'device_1', clientVersion: '0.1.0-m8', createdAt: 'now', updatedAt: 'now' }),
+        downloadsDir: temp.root,
+        startupStateFile: path.join(temp.root, 'startup.json'),
+        signatureVerifier: { verify: async () => undefined },
+        launcher: { launchInstaller: async () => undefined }
+      });
+
+      await expect(service.reportStartupVersion('req_startup')).resolves.toMatchObject({
+        reported: false,
+        currentVersion: '0.1.0-m8',
+        skippedReason: 'initial_version_recorded'
+      });
+      expect(events).toEqual([]);
+      await expect(readFile(path.join(temp.root, 'startup.json'), 'utf8')).resolves.toContain('0.1.0-m8');
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('reports updated first start once the current client version changes', async () => {
+    const temp = await tempRoot();
+    try {
+      const events: Array<{ eventType?: string; fromVersion?: string; toVersion?: string; payloadSummary?: unknown }> = [];
+      await writeFile(path.join(temp.root, 'startup.json'), `${JSON.stringify({ lastReportedVersion: '0.1.0-m7' })}\n`, 'utf8');
+      const service = new ClientUpdateService({
+        apiClient: {
+          reportClientUpdateEvents: async (_deviceID: string, reportedEvents: typeof events) => {
+            events.push(...reportedEvents);
+            return { accepted: true };
+          }
+        } as unknown as ApiClient,
+        getDeviceInfo: async () => ({ deviceID: 'device_1', clientVersion: '0.1.0-m8', createdAt: 'now', updatedAt: 'now' }),
+        downloadsDir: temp.root,
+        startupStateFile: path.join(temp.root, 'startup.json'),
+        signatureVerifier: { verify: async () => undefined },
+        launcher: { launchInstaller: async () => undefined }
+      });
+
+      await expect(service.reportStartupVersion('req_startup')).resolves.toMatchObject({
+        reported: true,
+        currentVersion: '0.1.0-m8',
+        previousVersion: '0.1.0-m7'
+      });
+      expect(events).toEqual([expect.objectContaining({
+        eventType: 'UPDATED_FIRST_START',
+        fromVersion: '0.1.0-m7',
+        toVersion: '0.1.0-m8',
+        payloadSummary: { previousVersion: '0.1.0-m7', currentVersion: '0.1.0-m8' }
+      })]);
+      await expect(readFile(path.join(temp.root, 'startup.json'), 'utf8')).resolves.toContain('0.1.0-m8');
+    } finally {
+      await temp.cleanup();
+    }
   });
 });

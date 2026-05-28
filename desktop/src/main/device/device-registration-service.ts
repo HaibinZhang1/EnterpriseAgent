@@ -4,7 +4,8 @@ import type { DeviceInfo } from '../config/device-id-store';
 export class DeviceRegistrationService {
   constructor(
     private readonly apiClient: ApiClient,
-    private readonly getDeviceInfo: () => Promise<DeviceInfo>
+    private readonly getDeviceInfo: () => Promise<DeviceInfo>,
+    private readonly getLocalEventQueueSize: () => number | Promise<number> = () => 0
   ) {}
 
   async register(requestID?: string): Promise<unknown> {
@@ -16,7 +17,8 @@ export class DeviceRegistrationService {
     const device = await this.getDeviceInfo();
     return this.apiClient.heartbeat({
       deviceId: device.deviceID,
-      clientVersion: device.clientVersion ?? 'unknown'
+      clientVersion: device.clientVersion ?? 'unknown',
+      localEventQueueSize: await this.getLocalEventQueueSize()
     }, requestID);
   }
 }

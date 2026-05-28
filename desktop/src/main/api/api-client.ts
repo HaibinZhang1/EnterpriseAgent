@@ -20,6 +20,7 @@ export interface ApiEnvelope<T> {
   data?: T;
   error?: { code?: string; message?: string; details?: unknown };
   requestID?: string;
+  requestId?: string;
 }
 
 export interface LoginPayload {
@@ -44,6 +45,8 @@ export interface DeviceEventPayload {
   result?: string;
   errorCode?: string;
   requestID?: string;
+  fromVersion?: string;
+  toVersion?: string;
   payloadSummary?: Record<string, unknown>;
 }
 
@@ -97,8 +100,20 @@ export class ApiClient {
     return this.request('POST', '/api/auth/logout', undefined, requestID);
   }
 
+  health(requestID?: string): Promise<unknown> {
+    return this.request('GET', '/api/health', undefined, requestID, { auth: false });
+  }
+
   me(requestID?: string): Promise<unknown> {
     return this.request('GET', '/api/auth/me', undefined, requestID);
+  }
+
+  changePassword(payload: { oldPassword: string; newPassword: string }, requestID?: string): Promise<unknown> {
+    return this.request('POST', '/api/auth/change-password', payload, requestID);
+  }
+
+  completeResetPassword(payload: { resetToken: string; newPassword: string }, requestID?: string): Promise<unknown> {
+    return this.request('POST', '/api/auth/reset-password/complete', payload, requestID, { auth: false });
   }
 
   communityHome(requestID?: string): Promise<unknown> {
@@ -115,6 +130,41 @@ export class ApiClient {
 
   extensionVersions(extensionID: string, requestID?: string): Promise<unknown> {
     return this.request('GET', `/api/extensions/${encodeURIComponent(extensionID)}/versions`, undefined, requestID);
+  }
+
+  setStar(extensionID: string, starred: boolean, requestID?: string): Promise<unknown> {
+    if (!starred) {
+      return this.request('DELETE', `/api/extensions/${encodeURIComponent(extensionID)}/star`, undefined, requestID);
+    }
+    return this.request('POST', `/api/extensions/${encodeURIComponent(extensionID)}/star`, { starred }, requestID);
+  }
+
+  uploadPackage(payload: { uploadType: string; fileName: string; mimeType?: string; contentBase64: string }, requestID?: string): Promise<unknown> {
+    const form = new FormData();
+    form.set('uploadType', payload.uploadType);
+    const bytes = Buffer.from(payload.contentBase64, 'base64');
+    form.set('file', new Blob([bytes], { type: payload.mimeType || 'application/octet-stream' }), payload.fileName);
+    return this.request('POST', '/api/uploads/package', form, requestID, { rawBody: true });
+  }
+
+  createSubmission(payload: unknown, requestID?: string, idempotencyKey?: string): Promise<unknown> {
+    return this.request('POST', '/api/submissions', payload, requestID, { extraHeaders: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined });
+  }
+
+  listMySubmissions(requestID?: string): Promise<unknown> {
+    return this.request('GET', '/api/submissions/mine', undefined, requestID);
+  }
+
+  getSubmission(submissionID: string, requestID?: string): Promise<unknown> {
+    return this.request('GET', `/api/submissions/${encodeURIComponent(submissionID)}`, undefined, requestID);
+  }
+
+  withdrawSubmission(submissionID: string, requestID?: string, idempotencyKey?: string): Promise<unknown> {
+    return this.request('POST', `/api/submissions/${encodeURIComponent(submissionID)}/withdraw`, undefined, requestID, { extraHeaders: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined });
+  }
+
+  resubmitSubmission(submissionID: string, payload: unknown, requestID?: string, idempotencyKey?: string): Promise<unknown> {
+    return this.request('POST', `/api/submissions/${encodeURIComponent(submissionID)}/resubmit`, payload, requestID, { extraHeaders: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined });
   }
 
   createDownloadTicket(payload: { extensionID: string; version: string }, requestID?: string): Promise<unknown> {
@@ -162,7 +212,7 @@ export class ApiClient {
     return this.request('POST', '/api/client-devices/register', payload, requestID);
   }
 
-  heartbeat(payload: { deviceId: string; clientVersion: string; queueSummary?: unknown }, requestID?: string): Promise<unknown> {
+  heartbeat(payload: { deviceId: string; clientVersion: string; localEventQueueSize?: number }, requestID?: string): Promise<unknown> {
     return this.request('POST', '/api/client-devices/heartbeat', payload, requestID);
   }
 
@@ -190,17 +240,28 @@ export class ApiClient {
     return this.request('POST', '/api/client-updates/events', { deviceId, events }, requestID);
   }
 
-  private async request<T>(method: string, path: string, body: unknown, requestID?: string, options: { auth?: boolean } = {}): Promise<T> {
+  listNotifications(requestID?: string): Promise<unknown> {
+    return this.request('GET', '/api/notifications', undefined, requestID);
+  }
+
+  markNotificationRead(notificationID: string, requestID?: string): Promise<unknown> {
+    return this.request('POST', `/api/notifications/${encodeURIComponent(notificationID)}/read`, undefined, requestID);
+  }
+
+  private async request<T>(method: string, path: string, body: unknown, requestID?: string, options: { auth?: boolean; rawBody?: boolean; extraHeaders?: Record<string, string> } = {}): Promise<T> {
     const resolvedRequestID = ensureRequestID(requestID);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-    const headers = await this.buildHeaders(resolvedRequestID, options.auth !== false);
+    const headers = {
+      ...await this.buildHeaders(resolvedRequestID, options.auth !== false, options.rawBody ? undefined : 'application/json'),
+      ...(options.extraHeaders ?? {})
+    };
     try {
-      await this.options.logger?.info('api.request', { method, path, headers }, resolvedRequestID);
+      await this.options.logger?.info('api.request', { method, path, headers: redactHeaders(headers) }, resolvedRequestID);
       const response = await this.fetchImpl(`${this.options.baseURL}${path}`, {
         method,
         headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: body === undefined ? undefined : options.rawBody ? body as BodyInit : JSON.stringify(body),
         signal: controller.signal
       });
       const envelope = await response.json().catch(() => undefined) as ApiEnvelope<T> | T | undefined;
@@ -228,7 +289,7 @@ export class ApiClient {
     const resolvedRequestID = ensureRequestID(requestID);
     const headers = await this.buildHeaders(resolvedRequestID, true);
     try {
-      await this.options.logger?.info('api.download', { method, path, headers }, resolvedRequestID);
+      await this.options.logger?.info('api.download', { method, path, headers: redactHeaders(headers) }, resolvedRequestID);
       const response = await this.fetchImpl(`${this.options.baseURL}${path}`, { method, headers });
       if (!response.ok) throw new DesktopErrorException(mapHttpStatus(response.status, resolvedRequestID));
       return response.arrayBuffer();
@@ -238,12 +299,12 @@ export class ApiClient {
     }
   }
 
-  private async buildHeaders(requestID: string, includeAuth: boolean): Promise<Record<string, string>> {
+  private async buildHeaders(requestID: string, includeAuth: boolean, contentType: string | undefined = 'application/json'): Promise<Record<string, string>> {
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
       'X-Request-ID': requestID,
       'X-Client-Version': this.options.clientVersion
     };
+    if (contentType) headers['Content-Type'] = contentType;
     const deviceID = await this.options.getDeviceID?.();
     if (deviceID) headers['X-Device-ID'] = deviceID;
     const token = includeAuth ? await this.options.getSessionToken?.() : undefined;
@@ -287,7 +348,7 @@ function isApiEnvelope<T>(value: ApiEnvelope<T> | T | undefined): value is ApiEn
 
 function mapServerEnvelopeError<T>(envelope: ApiEnvelope<T> | T | undefined, status: number, requestID: string) {
   if (isApiEnvelope<T>(envelope) && envelope.error?.code) {
-    return makeDesktopError(toDesktopErrorCode(envelope.error.code), envelope.error.message ?? 'API request failed', envelope.requestID ?? requestID, envelope.error);
+    return makeDesktopError(toDesktopErrorCode(envelope.error.code), envelope.error.message ?? 'API request failed', envelope.requestID ?? envelope.requestId ?? requestID, envelope.error);
   }
   return mapHttpStatus(status, requestID, envelope);
 }
@@ -297,4 +358,10 @@ function toDesktopErrorCode(code: string): DesktopErrorCode {
     return code;
   }
   return 'api_error';
+}
+
+function redactHeaders(headers: Record<string, string>): Record<string, string> {
+  const redacted = { ...headers };
+  if (redacted.Authorization) redacted.Authorization = '[redacted]';
+  return redacted;
 }

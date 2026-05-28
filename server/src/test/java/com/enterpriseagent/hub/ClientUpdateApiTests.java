@@ -66,6 +66,18 @@ class ClientUpdateApiTests extends PostgresIntegrationTestBase {
                         .content("{\"deviceId\":\"" + deviceId + "\",\"clientVersion\":\"1.0.0\",\"arch\":\"X64\",\"installChannel\":\"STABLE\"}"))
                 .andExpect(status().isOk());
 
+        mockMvc.perform(post("/api/client-updates/events")
+                        .header("Authorization", "Bearer " + userToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"deviceId":"%s","events":[
+                                  {"idempotencyKey":"updated-first-start-%s","eventType":"UPDATED_FIRST_START","result":"SUCCESS",
+                                   "fromVersion":"1.0.0","toVersion":"%s","payloadSummary":{"phase":"first-start"}}
+                                ]}
+                                """.formatted(deviceId, versionId, version)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.results[0].status").value("ACCEPTED"));
+
         mockMvc.perform(get("/api/client-updates/check")
                         .header("Authorization", "Bearer " + userToken)
                         .param("deviceId", deviceId)
@@ -116,6 +128,10 @@ class ClientUpdateApiTests extends PostgresIntegrationTestBase {
                         .param("errorCode", "hash_mismatch"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items[0].error_code").value("hash_mismatch"));
+        assertThat(jdbc.queryForObject("""
+                select count(*) from client_update_events
+                 where device_id = ? and event_type = 'UPDATED_FIRST_START' and from_version = '1.0.0' and to_version = ?
+                """, Long.class, deviceId, version)).isEqualTo(1L);
 
         mockMvc.perform(post("/api/admin/client-updates/" + versionId + "/pause")
                         .header("Authorization", "Bearer " + adminToken)

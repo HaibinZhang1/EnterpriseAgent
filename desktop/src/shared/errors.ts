@@ -14,6 +14,25 @@ export type DesktopErrorCode =
   | 'permission_denied'
   | 'scope_restricted'
   | 'resource_not_found'
+  | 'download_ticket_required'
+  | 'download_ticket_expired'
+  | 'download_ticket_used'
+  | 'download_ticket_purpose_invalid'
+  | 'download_failed'
+  | 'local_hash_mismatch'
+  | 'target_path_not_writable'
+  | 'target_path_not_found'
+  | 'tool_not_detected'
+  | 'symlink_failed'
+  | 'backup_failed'
+  | 'rollback_failed'
+  | 'signature_invalid'
+  | 'signature_verify_failed'
+  | 'plugin_tool_version_incompatible'
+  | 'plugin_download_source_expired'
+  | 'plugin_download_source_failed'
+  | 'local_store_not_writable'
+  | 'temp_store_not_writable'
   | 'unknown_ipc_channel'
   | 'offline_server_authority_required'
   | 'offline_authorization_required'
@@ -29,6 +48,7 @@ export interface DesktopError {
   code: DesktopErrorCode;
   message: string;
   requestID: string;
+  retryable: boolean;
   details?: unknown;
 }
 
@@ -47,6 +67,7 @@ export function makeDesktopError(code: DesktopErrorCode, message: string, reques
     code,
     message,
     requestID: ensureRequestID(requestID),
+    retryable: retryableByDefault(code),
     details: details === undefined ? undefined : redactForLog(details)
   };
 }
@@ -78,4 +99,12 @@ export function mapHttpStatus(status: number, requestID?: string, details?: unkn
     return makeDesktopError('server_unavailable', 'Server is unavailable', requestID, details);
   }
   return makeDesktopError('api_error', `API request failed with status ${status}`, requestID, details);
+}
+
+export function withRetryable(error: DesktopError, retryable: boolean): DesktopError {
+  return { ...error, retryable };
+}
+
+function retryableByDefault(code: DesktopErrorCode): boolean {
+  return ['server_unavailable', 'download_failed', 'plugin_download_source_failed', 'temp_store_not_writable'].includes(code);
 }
