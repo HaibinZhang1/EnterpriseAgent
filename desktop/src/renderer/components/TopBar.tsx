@@ -9,7 +9,9 @@ export function TopBar({
   unreadCount,
   onNotifications,
   onAccount,
-  onSettings
+  onSettings,
+  theme,
+  onToggleTheme
 }: {
   active: AppTab;
   onChangeTab: (tab: AppTab) => void;
@@ -19,6 +21,8 @@ export function TopBar({
   onNotifications: () => void;
   onAccount: () => void;
   onSettings: () => void;
+  theme: 'light' | 'dark';
+  onToggleTheme: () => void;
 }) {
   return (
     <header className="top-bar">
@@ -32,7 +36,6 @@ export function TopBar({
       <NavTabs active={active} onChange={onChangeTab} />
       <div className="top-actions">
         <button type="button" className="icon-button" onClick={onNotifications} aria-label="通知">N{unreadCount > 0 ? ` ${unreadCount}` : ''}</button>
-        <button type="button" className="icon-button" onClick={onSettings} aria-label="设置">S</button>
         <button type="button" className="button ghost truncate" onClick={onAccount}>
           {user?.displayName ?? user?.username ?? '登录'}
         </button>

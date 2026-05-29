@@ -86,6 +86,15 @@ export class LocalExecutor {
       case 'symlink':
         await symlink(required(step.sourcePath), required(step.targetPath));
         break;
+      case 'json-upsert':
+        await upsertManagedJson(required(step.targetPath), step.metadata?.managedConfigId, step.content ?? '{}');
+        break;
+      case 'json-remove':
+        await removeManagedJson(required(step.targetPath), step.metadata?.managedConfigId);
+        break;
+      case 'verify-hash':
+        await this.hashVerifier.verifyFile(required(step.sourcePath), required(step.expectedSha256));
+        break;
       default:
         throw new Error(`Unsupported step action ${step.action}`);
     }
@@ -143,5 +152,42 @@ async function atomicWrite(filePath: string, content: string): Promise<void> {
 
 function required(value: string | undefined): string {
   if (!value) throw new Error('Required path is missing');
+  return value;
+}
+
+async function upsertManagedJson(filePath: string, managedConfigId: unknown, content: string): Promise<void> {
+  const id = requiredManagedConfigId(managedConfigId);
+  const root = await readJsonObject(filePath);
+  const managed = root.enterpriseAgentHubManaged && typeof root.enterpriseAgentHubManaged === 'object' && !Array.isArray(root.enterpriseAgentHubManaged)
+    ? root.enterpriseAgentHubManaged as Record<string, unknown>
+    : {};
+  managed[id] = JSON.parse(content);
+  await atomicWrite(filePath, JSON.stringify({ ...root, enterpriseAgentHubManaged: managed }, null, 2));
+}
+
+async function removeManagedJson(filePath: string, managedConfigId: unknown): Promise<void> {
+  const id = requiredManagedConfigId(managedConfigId);
+  const root = await readJsonObject(filePath);
+  const managed = root.enterpriseAgentHubManaged && typeof root.enterpriseAgentHubManaged === 'object' && !Array.isArray(root.enterpriseAgentHubManaged)
+    ? root.enterpriseAgentHubManaged as Record<string, unknown>
+    : {};
+  delete managed[id];
+  await atomicWrite(filePath, JSON.stringify({ ...root, enterpriseAgentHubManaged: managed }, null, 2));
+}
+
+async function readJsonObject(filePath: string): Promise<Record<string, unknown>> {
+  try {
+    const raw = await readFile(filePath, 'utf8');
+    if (!raw.trim()) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return {};
+    throw error;
+  }
+}
+
+function requiredManagedConfigId(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0) throw new Error('managedConfigId is required');
   return value;
 }

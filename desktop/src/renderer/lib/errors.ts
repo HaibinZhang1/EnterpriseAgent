@@ -28,7 +28,11 @@ export function toUiError(error: unknown): UiError {
 }
 
 export function readableErrorMessage(message: string, code?: string): string {
-  if (code === 'unauthenticated') return '登录已失效，请重新登录。';
+  if (code === 'unauthenticated') {
+    const trimmed = message.trim();
+    if (trimmed && !/(未登录|会话.*失效|登录已失效)/.test(trimmed)) return trimmed;
+    return '登录已失效，请重新登录。';
+  }
   if (code === 'permission_denied') return '当前账号没有执行该操作的权限。';
   if (code === 'scope_restricted') return '该扩展未授权给当前范围，主操作暂不可用。';
   if (code === 'offline_server_authority_required') return '当前离线，服务端授权操作暂不可用。';

@@ -14,7 +14,7 @@
 | 总体完成率 | 99% | M1-M7 已完成，M8 本地可验证发布门禁已收口到 94%；最终外部门禁保留 |
 | 当前分支 | main（当前工作树） | Agent 填写 |
 | 最近提交 | 未提交（当前工作树）；基线 `5ffc916` | Agent 填写 commit hash |
-| 最近验证时间 | 2026-05-25 CST | Agent 填写 |
+| 最近验证时间 | 2026-05-28 CST（桌面 P0/P1 本地闭环补强） | Agent 填写 |
 | 当前阻塞项 | M8 最终发布门禁保留：真实服务端桌面 E2E 联调、真实 Windows x64 installer/signing、Web Admin 服务端托管/离线镜像、真实离线镜像导入、Docker Compose 服务部署、air-gapped/no-internet 隔离验证 | Agent 填写 |
 | 下一阶段 | M8 最终验收与外部门禁交接 | Agent 更新 |
 
@@ -177,6 +177,19 @@ M1 服务端基础工程
 验证结果：desktop typecheck 通过；新增/相关 Vitest 4 files / 19 tests 通过；desktop 全量 Vitest 21 files / 60 tests 通过；desktop lint/build/test:electron 通过；服务端目标测试通过；服务端全量 Maven 测试通过。
 交付范围：桌面 Main 定时心跳调度、心跳队列数量上报、deviceID 稳定且 clientVersion 随当前构建刷新、客户端更新后首次启动 UPDATED_FIRST_START 上报、服务端版本分布聚合 API、客户端更新事件批量上报覆盖。
 未完成/未验证：真实 Windows 签名包更新后首次启动 E2E、真实 Windows 安装器启动、独立 Web Admin 展示、air-gapped image import、真实性能计时、真实备份恢复/Compose 部署演练；因此不勾选 M8 最终完成。
+```
+
+### 桌面 P0/P1 本地闭环补强记录
+
+```text
+状态：已完成（本地可验证 P0/P1 缺口；最终外部门禁仍保留）
+完成时间：2026-05-28 CST
+分支：main（当前工作树）
+提交：未提交（当前工作树）
+验证命令：npm --prefix desktop run typecheck；npm --prefix desktop test -- --run tests/api-client.test.ts tests/package-lifecycle-repository.test.ts tests/tool-adapter-plan-generation.test.ts tests/ipc-router.test.ts tests/m7-closeout.test.ts tests/renderer-app.test.tsx；npm --prefix desktop test；npm --prefix desktop run lint；npm --prefix desktop run build；npm --prefix desktop run test:electron
+验证结果：desktop typecheck 通过；目标 Vitest 6 files / 32 tests 通过；全量 Vitest 22 files / 67 tests 通过；lint 通过；build 通过；Electron smoke 1 file / 3 tests 通过。
+交付范围：Skill DownloadTicket/受控下载/Hash/Central Store/启用闭环；ToolAdapter 目标选择接入；MCP 托管 JSON 配置、managedConfigId/fullConfigRef、写入后 HTTP_HEALTH 检测、检测失败托管项回滚、托管项卸载；Plugin manual-download 受控下载和标记状态、managed/config manifest 受控动作；ApiClient retryable 错误与下载凭证幂等；运行中 baseURL 设置生效；安全下架强制禁用 hint 映射。
+未完成/未验证：未接真实企业服务端和真实用户工具目录执行破坏性写入；Windows installer/signing、真实内网 E2E、air-gapped/no-internet 外部门禁保持未勾选。
 ```
 
 ## 6. 全局验收门禁

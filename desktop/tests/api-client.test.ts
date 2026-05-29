@@ -137,6 +137,33 @@ describe('ApiClient', () => {
     });
   });
 
+  it('sends purpose-scoped download tickets with idempotency and preserves retryable server errors', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      calls.push({ url: String(input), init: init ?? {} });
+      return new Response(JSON.stringify({ success: true, data: { ticket: 'ticket-install', sha256: 'a'.repeat(64), fileName: 'skill.pkg' } }), { status: 200 });
+    };
+    const client = new ApiClient({ baseURL: 'http://server.test/', clientVersion: '0.1.0-m7', fetchImpl });
+    await expect(client.createDownloadTicket({
+      extensionID: 'skill.one',
+      version: '1.0.0',
+      purpose: 'INSTALL',
+      objectType: 'SKILL'
+    }, 'req_ticket', 'idem-ticket')).resolves.toMatchObject({ ticket: 'ticket-install' });
+    expect(calls[0].url).toBe('http://server.test/api/download-tickets');
+    expect((calls[0].init.headers as Record<string, string>)['Idempotency-Key']).toBe('idem-ticket');
+    expect(JSON.parse(calls[0].init.body as string)).toMatchObject({ extensionID: 'skill.one', extensionId: 'skill.one', purpose: 'INSTALL', objectType: 'SKILL' });
+
+    const retryableClient = new ApiClient({
+      baseURL: 'http://server.test',
+      clientVersion: '0.1.0-m7',
+      fetchImpl: async () => new Response(JSON.stringify({ success: false, error: { code: 'download_ticket_expired', message: 'expired', retryable: true }, requestID: 'req_retry' }), { status: 409 })
+    });
+    await expect(retryableClient.createDownloadTicket({ extensionID: 'skill.one', version: '1.0.0', purpose: 'INSTALL' }, 'req_retry')).rejects.toMatchObject({
+      desktopError: { code: 'download_ticket_expired', retryable: true, requestID: 'req_retry' }
+    });
+  });
+
   it('calls M7 definition and local-event sync endpoints', async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetchImpl: typeof fetch = async (input, init) => {

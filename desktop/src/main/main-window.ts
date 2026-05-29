@@ -9,6 +9,9 @@ export function createMainWindowOptions(baseDir = __dirname): BrowserWindowConst
   return {
     width: 1120,
     height: 760,
+    minWidth: 960,
+    minHeight: 640,
+    titleBarStyle: 'hiddenInset',
     webPreferences: {
       preload: getPreloadPath(baseDir),
       contextIsolation: true,

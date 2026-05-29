@@ -1,4 +1,4 @@
-import { DesktopErrorException, makeDesktopError, mapHttpStatus, type DesktopErrorCode } from '../../shared/errors';
+import { DesktopErrorException, makeDesktopError, mapHttpStatus, withRetryable, type DesktopErrorCode } from '../../shared/errors';
 import { ensureRequestID } from '../../shared/request-id';
 import type { DeviceInfo } from '../config/device-id-store';
 import type { LocalEventRecord } from '../events/local-event-queue';
@@ -18,7 +18,7 @@ export interface ApiClientOptions {
 export interface ApiEnvelope<T> {
   success: boolean;
   data?: T;
-  error?: { code?: string; message?: string; details?: unknown };
+  error?: { code?: string; message?: string; details?: unknown; retryable?: boolean };
   requestID?: string;
   requestId?: string;
 }
@@ -83,13 +83,41 @@ export interface ClientUpdateDownloadTicket {
   expiresAt?: string;
 }
 
+export type DownloadTicketPurpose = 'INSTALL' | 'UPDATE' | 'MANUAL_DOWNLOAD' | 'CLIENT_UPDATE';
+
+export interface DownloadTicketRequest {
+  extensionID: string;
+  version: string;
+  purpose: DownloadTicketPurpose;
+  objectType?: 'SKILL' | 'MCP' | 'PLUGIN' | 'EXTENSION_PACKAGE';
+}
+
+export interface DownloadTicketResponse {
+  ticket: string;
+  expiresAt?: string;
+  fileName?: string;
+  sha256?: string;
+  packageSha256?: string;
+  packageSize?: number;
+}
+
 export class ApiClient {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  private baseURL: string;
 
   constructor(private readonly options: ApiClientOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 10_000;
+    this.baseURL = normalizeBaseURL(options.baseURL);
+  }
+
+  setBaseURL(baseURL: string): void {
+    this.baseURL = normalizeBaseURL(baseURL);
+  }
+
+  getBaseURL(): string {
+    return this.baseURL;
   }
 
   login(payload: LoginPayload, requestID?: string): Promise<unknown> {
@@ -167,8 +195,14 @@ export class ApiClient {
     return this.request('POST', `/api/submissions/${encodeURIComponent(submissionID)}/resubmit`, payload, requestID, { extraHeaders: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined });
   }
 
-  createDownloadTicket(payload: { extensionID: string; version: string }, requestID?: string): Promise<unknown> {
-    return this.request('POST', '/api/download-tickets', payload, requestID);
+  createDownloadTicket(payload: DownloadTicketRequest, requestID?: string, idempotencyKey?: string): Promise<DownloadTicketResponse> {
+    return this.request('POST', '/api/download-tickets', {
+      extensionID: payload.extensionID,
+      extensionId: payload.extensionID,
+      version: payload.version,
+      purpose: payload.purpose,
+      objectType: payload.objectType ?? 'EXTENSION_PACKAGE'
+    }, requestID, { extraHeaders: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined });
   }
 
   downloadPackage(ticket: string, requestID?: string): Promise<ArrayBuffer> {
@@ -258,7 +292,7 @@ export class ApiClient {
     };
     try {
       await this.options.logger?.info('api.request', { method, path, headers: redactHeaders(headers) }, resolvedRequestID);
-      const response = await this.fetchImpl(`${this.options.baseURL}${path}`, {
+      const response = await this.fetchImpl(`${this.baseURL}${path}`, {
         method,
         headers,
         body: body === undefined ? undefined : options.rawBody ? body as BodyInit : JSON.stringify(body),
@@ -290,7 +324,7 @@ export class ApiClient {
     const headers = await this.buildHeaders(resolvedRequestID, true);
     try {
       await this.options.logger?.info('api.download', { method, path, headers: redactHeaders(headers) }, resolvedRequestID);
-      const response = await this.fetchImpl(`${this.options.baseURL}${path}`, { method, headers });
+      const response = await this.fetchImpl(`${this.baseURL}${path}`, { method, headers });
       if (!response.ok) throw new DesktopErrorException(mapHttpStatus(response.status, resolvedRequestID));
       return response.arrayBuffer();
     } catch (error) {
@@ -348,14 +382,35 @@ function isApiEnvelope<T>(value: ApiEnvelope<T> | T | undefined): value is ApiEn
 
 function mapServerEnvelopeError<T>(envelope: ApiEnvelope<T> | T | undefined, status: number, requestID: string) {
   if (isApiEnvelope<T>(envelope) && envelope.error?.code) {
-    return makeDesktopError(toDesktopErrorCode(envelope.error.code), envelope.error.message ?? 'API request failed', envelope.requestID ?? envelope.requestId ?? requestID, envelope.error);
+    const error = makeDesktopError(toDesktopErrorCode(envelope.error.code), envelope.error.message ?? 'API request failed', envelope.requestID ?? envelope.requestId ?? requestID, envelope.error);
+    return typeof envelope.error.retryable === 'boolean' ? withRetryable(error, envelope.error.retryable) : error;
   }
   return mapHttpStatus(status, requestID, envelope);
 }
 
 function toDesktopErrorCode(code: string): DesktopErrorCode {
-  if (code === 'permission_denied' || code === 'scope_restricted' || code === 'resource_not_found' || code === 'unauthenticated') {
-    return code;
+  const known = new Set<DesktopErrorCode>([
+    'permission_denied',
+    'scope_restricted',
+    'resource_not_found',
+    'unauthenticated',
+    'hash_mismatch',
+    'download_ticket_required',
+    'download_ticket_expired',
+    'download_ticket_used',
+    'download_ticket_purpose_invalid',
+    'signature_invalid',
+    'signature_verify_failed',
+    'plugin_download_source_expired',
+    'plugin_download_source_failed',
+    'plugin_tool_version_incompatible',
+    'target_path_not_writable',
+    'target_path_not_found',
+    'tool_not_detected',
+    'rollback_failed'
+  ]);
+  if (known.has(code as DesktopErrorCode)) {
+    return code as DesktopErrorCode;
   }
   return 'api_error';
 }
@@ -364,4 +419,8 @@ function redactHeaders(headers: Record<string, string>): Record<string, string> 
   const redacted = { ...headers };
   if (redacted.Authorization) redacted.Authorization = '[redacted]';
   return redacted;
+}
+
+function normalizeBaseURL(baseURL: string): string {
+  return baseURL.replace(/\/+$/, '');
 }

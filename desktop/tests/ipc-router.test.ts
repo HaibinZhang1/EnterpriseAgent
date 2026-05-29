@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { createDesktopServices } from '../src/main/services';
 import { IPC_CHANNELS } from '../src/main/ipc/channels';
 import { createPreloadApi } from '../src/preload/api';
@@ -53,8 +55,32 @@ describe('IPC router and preload API', () => {
     expect('process' in api).toBe(false);
   });
 
+  it('applies saved baseURL settings to the live ApiClient instance', async () => {
+    const temp = await tempRoot();
+    const calls: string[] = [];
+    try {
+      const fetchImpl: typeof fetch = async (input) => {
+        calls.push(String(input));
+        return new Response(JSON.stringify({ success: true, data: { ok: true } }), { status: 200 });
+      };
+      const services = await createDesktopServices({ rootOverride: temp.root, fetchImpl });
+      const saved = await services.router.invoke(IPC_CHANNELS.settingsSaveLocalConfig, { baseURL: 'http://changed.test/' }, { requestID: 'req_save_url' });
+      expect(saved).toMatchObject({ success: true, data: { baseURL: 'http://changed.test/' } });
+      await services.apiClient.health('req_health_changed');
+      expect(calls.at(-1)).toBe('http://changed.test/api/health');
+      await services.db.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
   it('normalizes server definition field names before local MCP and Plugin actions', async () => {
-    const server = createServer((_request, response) => {
+    const server = createServer((request, response) => {
+      if (request.url === '/fail') {
+        response.writeHead(503, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ ok: false }));
+        return;
+      }
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ ok: true }));
     });
@@ -70,6 +96,9 @@ describe('IPC router and preload API', () => {
         if (url.endsWith('/api/extensions/mcp-contract/mcp-definition')) {
           return new Response(JSON.stringify({ success: true, data: { extensionId: 'mcp-contract', version: '1.0.0', configTemplate: {}, connectionTest: { type: 'HTTP_HEALTH', target: healthUrl } } }), { status: 200 });
         }
+        if (url.endsWith('/api/extensions/mcp-fail/mcp-definition')) {
+          return new Response(JSON.stringify({ success: true, data: { extensionId: 'mcp-fail', version: '1.0.0', configTemplate: {}, connectionTest: { type: 'HTTP_HEALTH', target: `${healthUrl.replace('/health', '')}/fail` } } }), { status: 200 });
+        }
         if (url.endsWith('/api/extensions/plugin-contract/plugin-definition')) {
           return new Response(JSON.stringify({ success: true, data: { extensionId: 'plugin-contract', version: '1.0.0', installMode: 'MANUAL_DOWNLOAD', manifest: {}, manualInstallDoc: 'Read the managed installation guide.', externalDownload: 'https://plugins.example/download' } }), { status: 200 });
         }
@@ -82,12 +111,119 @@ describe('IPC router and preload API', () => {
       const mcp = await services.router.invoke(IPC_CHANNELS.mcpConnectionTest, { extensionID: 'mcp-contract' }, { requestID: 'req_mcp_contract' });
       expect(mcp).toMatchObject({ success: true, data: { status: 'reachable' } });
 
+      const mcpConfigPath = path.join(temp.root, 'mcp.json');
+      const mcpConfig = await services.router.invoke(IPC_CHANNELS.mcpConfigure, { extensionID: 'mcp-contract', targetConfigPath: mcpConfigPath, dryRun: false }, { requestID: 'req_mcp_config' });
+      expect(mcpConfig).toMatchObject({ success: true, data: { plan: { operation: 'MCP_CONFIG_WRITE' }, connectionTest: { status: 'reachable' }, result: { status: 'success' } } });
+      expect(await readFile(mcpConfigPath, 'utf8')).toContain('enterpriseAgentHubManaged');
+
+      const mcpFailConfigPath = path.join(temp.root, 'mcp-fail.json');
+      const mcpFailConfig = await services.router.invoke(IPC_CHANNELS.mcpConfigure, { extensionID: 'mcp-fail', targetConfigPath: mcpFailConfigPath, dryRun: false }, { requestID: 'req_mcp_config_fail' });
+      expect(mcpFailConfig).toMatchObject({ success: true, data: { connectionTest: { status: 'unreachable' }, rollbackPlan: { operation: 'MCP_CONFIG_UNINSTALL' }, rollbackResult: { status: 'success' } } });
+      expect(JSON.parse(await readFile(mcpFailConfigPath, 'utf8'))).toMatchObject({ enterpriseAgentHubManaged: {} });
+
       const plugin = await services.router.invoke(IPC_CHANNELS.pluginPrepare, { extensionID: 'plugin-contract', targetPath: path.join(temp.root, 'plugins'), dryRun: true }, { requestID: 'req_plugin_contract' });
-      expect(plugin).toMatchObject({ success: true, data: { plan: { operation: 'PLUGIN_MANUAL_DOWNLOAD' }, result: { status: 'dry_run' } } });
+      expect(plugin).toMatchObject({ success: true, data: { plan: { operation: 'PLUGIN_MANUAL_CONTROLLED_DOWNLOAD' }, result: { status: 'dry_run' } } });
       expect(JSON.stringify(plugin)).toContain('Read the managed installation guide.');
       await services.db.close();
     } finally {
       server.close();
+      await temp.cleanup();
+    }
+  });
+
+  it('uses download tickets, package bytes, hash verification, and Central Store before enabling Skills', async () => {
+    const temp = await tempRoot();
+    const packageBytes = new TextEncoder().encode('skill package bytes');
+    const sha256 = createHash('sha256').update(packageBytes).digest('hex');
+    const calls: string[] = [];
+    try {
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const url = String(input);
+        calls.push(`${init?.method ?? 'GET'} ${url}`);
+        if (url.endsWith('/api/extensions/skill-contract')) {
+          return new Response(JSON.stringify({ success: true, data: { extensionId: 'skill-contract', version: '1.0.0', name: 'Skill Contract', packageSha256: sha256 } }), { status: 200 });
+        }
+        if (url.endsWith('/api/download-tickets')) {
+          expect(JSON.parse(String(init?.body))).toMatchObject({ extensionID: 'skill-contract', extensionId: 'skill-contract', version: '1.0.0', purpose: 'INSTALL', objectType: 'SKILL' });
+          expect((init?.headers as Record<string, string>)['Idempotency-Key']).toBe('download:skill-contract:1.0.0:INSTALL');
+          return new Response(JSON.stringify({ success: true, data: { ticket: 'ticket-skill', fileName: 'skill-contract.pkg', sha256 } }), { status: 200 });
+        }
+        if (url.endsWith('/api/download-tickets/ticket-skill/download')) {
+          return new Response(packageBytes, { status: 200 });
+        }
+        return new Response(JSON.stringify({ success: true, data: {}, requestID: 'req' }), { status: 200 });
+      };
+      const services = await createDesktopServices({ rootOverride: temp.root, fetchImpl });
+      const targetPath = path.join(temp.root, 'targets');
+      const install = await services.router.invoke(
+        IPC_CHANNELS.extensionInstall,
+        { extensionID: 'skill-contract', version: '1.0.0', targetPath, dryRun: false },
+        { requestID: 'req_skill_full' }
+      );
+
+      expect(install).toMatchObject({
+        success: true,
+        data: {
+          installPlan: { operation: 'SKILL_INSTALL' },
+          installResult: { status: 'success' },
+          plan: { operation: 'SKILL_ENABLE' },
+          result: { status: 'success' }
+        }
+      });
+      expect(calls).toEqual(expect.arrayContaining([
+        'GET http://localhost:8080/api/extensions/skill-contract',
+        'POST http://localhost:8080/api/download-tickets',
+        'GET http://localhost:8080/api/download-tickets/ticket-skill/download'
+      ]));
+      expect(await readFile(path.join(temp.root, 'central-store', 'skills', 'skill-contract', '1.0.0', 'package'), 'utf8')).toBe('skill package bytes');
+      expect(services.eventQueue.listPending().map((event) => event.eventType)).toEqual(expect.arrayContaining(['SKILL_INSTALL', 'SKILL_ENABLE']));
+      await services.db.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('uses controlled downloads for manual Plugin packages without auto-installing them', async () => {
+    const temp = await tempRoot();
+    const packageBytes = new TextEncoder().encode('plugin package bytes');
+    const sha256 = createHash('sha256').update(packageBytes).digest('hex');
+    try {
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const url = String(input);
+        if (url.endsWith('/api/extensions/plugin-manual/plugin-definition')) {
+          return new Response(JSON.stringify({
+            success: true,
+            data: {
+              extensionId: 'plugin-manual',
+              version: '2.0.0',
+              installMode: 'MANUAL_DOWNLOAD',
+              packageSha256: sha256,
+              manualInstallDoc: 'Install from the tool marketplace after review.'
+            }
+          }), { status: 200 });
+        }
+        if (url.endsWith('/api/download-tickets')) {
+          expect(JSON.parse(String(init?.body))).toMatchObject({ extensionID: 'plugin-manual', purpose: 'MANUAL_DOWNLOAD', objectType: 'PLUGIN' });
+          return new Response(JSON.stringify({ success: true, data: { ticket: 'ticket-plugin', fileName: 'plugin.pkg', sha256 } }), { status: 200 });
+        }
+        if (url.endsWith('/api/download-tickets/ticket-plugin/download')) {
+          return new Response(packageBytes, { status: 200 });
+        }
+        return new Response(JSON.stringify({ success: true, data: {}, requestID: 'req' }), { status: 200 });
+      };
+      const services = await createDesktopServices({ rootOverride: temp.root, fetchImpl });
+      const targetPath = path.join(temp.root, 'plugins');
+      const plugin = await services.router.invoke(
+        IPC_CHANNELS.pluginPrepare,
+        { extensionID: 'plugin-manual', targetPath, installMode: 'MANUAL_DOWNLOAD', dryRun: false },
+        { requestID: 'req_plugin_download' }
+      );
+
+      expect(plugin).toMatchObject({ success: true, data: { plan: { operation: 'PLUGIN_MANUAL_CONTROLLED_DOWNLOAD' }, result: { status: 'success' } } });
+      expect(await readFile(path.join(targetPath, 'plugin-manual.manual.json'), 'utf8')).toContain('"controlledDownload":true');
+      expect(services.eventQueue.listPending().map((event) => event.eventType)).toContain('PLUGIN_MANUAL_CONTROLLED_DOWNLOAD');
+      await services.db.close();
+    } finally {
       await temp.cleanup();
     }
   });

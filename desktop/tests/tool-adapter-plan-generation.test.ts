@@ -53,7 +53,10 @@ describe('ToolAdapter and lifecycle plan generation', () => {
         definition: { extensionId: 'mcp-a', version: '1.0.0', configTemplate: {} },
         targetConfigPath: path.join(paths.tempDir, 'mcp.json')
       });
-      expect(mcpUninstall.steps[0]).toMatchObject({ action: 'remove-managed', managed: true });
+      expect(mcp.managedConfigId).toContain('eah_mcp_mcp-a');
+      expect(mcp.fullConfigRef).toContain('mcp.managed-config.');
+      expect(mcp.plan.steps[0]).toMatchObject({ action: 'json-upsert', managed: true });
+      expect(mcpUninstall.steps[0]).toMatchObject({ action: 'json-remove', managed: true });
       expect(() => new McpService(new MemorySecureStore()).validateConnectionTest({ type: 'LOCAL_COMMAND', command: 'rm -rf /' })).toThrow(/Local MCP connection tests/);
 
       const pluginService = new PluginService();
@@ -61,6 +64,7 @@ describe('ToolAdapter and lifecycle plan generation', () => {
       expect(managed.steps[0].action).toBe('copy-file');
       expect(() => pluginService.createPlan({ extensionId: 'plugin-a', version: '1.0.0', installMode: 'MANAGED_PACKAGE', targetPath: paths.tempDir, manifest: { actions: [{ action: 'shell-command' }] } })).toThrow(/Unsupported/);
       const manual = pluginService.createPlan({ extensionId: 'plugin-b', version: '1.0.0', installMode: 'MANUAL_DOWNLOAD', targetPath: paths.tempDir });
+      expect(manual.operation).toBe('PLUGIN_MANUAL_CONTROLLED_DOWNLOAD');
       expect(manual.steps.map((step) => step.stepId)).toEqual(['open-manual-instructions', 'record-manual-download']);
       const manualInstalled = pluginService.createPlan({ extensionId: 'plugin-b', version: '1.0.0', installMode: 'MANUAL_DOWNLOAD', operation: 'mark-installed', targetPath: paths.tempDir });
       expect(manualInstalled.steps[1].content).toContain('"installed":true');

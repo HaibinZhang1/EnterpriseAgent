@@ -112,7 +112,7 @@ describe('M7 closeout plugin manual-download behavior', () => {
       manualInstructions: 'Open the downloaded zip and install it from the tool marketplace.',
       manualInstructionsUrl: 'https://intranet.example/manual/plugin-manual'
     });
-    expect(plan.summary.warnings).toContain('manual-download does not auto-install');
+    expect(plan.summary.warnings).toContain('manual-download uses controlled download and does not auto-install');
     expect(plan.steps.map((step) => step.stepId)).toEqual(['open-manual-instructions', 'record-manual-download']);
     expect(plan.steps[0].content).toContain('Open the downloaded zip');
   });

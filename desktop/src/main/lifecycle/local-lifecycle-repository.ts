@@ -287,7 +287,7 @@ function safeParseJson(value: string): unknown {
 
 function mapHintState(state: string): { status: string; precedence: number } | undefined {
   const normalized = state.toUpperCase();
-  if (['SECURITY_DELISTED', 'SECURITY_BLOCK', 'SECURITY_BLOCKED', 'SECURITY_RISK'].includes(normalized)) {
+  if (['SECURITY_DELISTED', 'SECURITY_BLOCK', 'SECURITY_BLOCKED', 'SECURITY_RISK', 'FORCE_DISABLE_MANAGED_ITEMS', 'FORCE_DISABLE'].includes(normalized)) {
     return { status: 'security_blocked', precedence: 1 };
   }
   if (['AUTHORIZATION_SHRINK', 'AUTHORIZATION_REDUCED', 'SCOPE_REDUCED', 'SCOPE_SHRINK'].includes(normalized)) {

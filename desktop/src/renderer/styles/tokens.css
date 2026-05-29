@@ -1,79 +1,212 @@
+/* Glassmorphism 客户端设计标记系统 (Tokens)
+ * 遵从 docs/UIDesign/Design.md 规范与 SaaS-Glassmorphism-AgentHub-Demo.html 演示风格
+ */
+
 :root {
   color-scheme: dark;
-  --ea-bg: #08111f;
-  --ea-bg-soft: #101b2b;
-  --ea-bg-band: rgba(255, 255, 255, 0.045);
-  --ea-surface: rgba(255, 255, 255, 0.08);
-  --ea-surface-strong: rgba(255, 255, 255, 0.14);
-  --ea-line: rgba(255, 255, 255, 0.14);
-  --ea-line-strong: rgba(255, 255, 255, 0.22);
-  --ea-text: #f4f7fb;
-  --ea-muted: #aeb9c8;
-  --ea-dim: #758296;
-  --ea-accent: #65d6ad;
-  --ea-accent-strong: #36b68d;
-  --ea-blue: #79a8ff;
-  --ea-warn: #f4c467;
-  --ea-danger: #ff7d7d;
-  --ea-ok: #6fe3a7;
-  --ea-info: #74d2f6;
-  --ea-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+
+  /* ==================== 1. 公共排版、间距与圆角 (ATX-G栅格) ==================== */
+  --font-display: 40px;
+  --font-h1: 32px;
+  --font-h2: 24px;
+  --font-h3: 20px;
+  --font-body-lg: 16px;
+  --font-body: 14px;
+  --font-caption: 12px;
+  --font-mini: 11px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 24px;
+  --radius-2xl: 32px;
+  --radius-full: 999px;
+
+  --blur-main: blur(20px) saturate(160%);
+  --blur-card: blur(14px) saturate(145%);
+  --blur-float: blur(28px) saturate(165%);
+  --sidebar-width: 260px;
+  --topbar-height: 68px;
+
+  /* ==================== 2. 默认深色玻璃主题 (glass-dark) ==================== */
+  --bg-base: #080B16;
+  --bg-gradient-start: #07111F;
+  --bg-gradient-mid: #161124;
+  --bg-gradient-end: #081A1A;
+  --bg-orb-blue: rgba(61, 120, 255, 0.32);
+  --bg-orb-purple: rgba(145, 84, 255, 0.28);
+  --bg-orb-cyan: rgba(32, 214, 199, 0.22);
+
+  --glass-primary: rgba(18, 25, 43, 0.68);
+  --glass-secondary: rgba(18, 25, 43, 0.52);
+  --glass-subtle: rgba(18, 25, 43, 0.36);
+  --glass-solid: rgba(18, 25, 43, 0.86);
+  --glass-border: rgba(255, 255, 255, 0.18);
+  --glass-border-soft: rgba(255, 255, 255, 0.10);
+
+  --text-primary: #F8FAFC;
+  --text-secondary: #CBD5E1;
+  --text-tertiary: #94A3B8;
+  --text-placeholder: #64748B;
+  --text-inverse: #0F172A;
+
+  --color-primary: #6D8DFF;
+  --color-primary-hover: #8AA2FF;
+  --color-secondary: #A78BFA;
+  --color-accent: #2DD4BF;
+  --color-success: #22C55E;
+  --color-warning: #FBBF24;
+  --color-danger: #F87171;
+  --color-info: #38BDF8;
+
+  --shadow-xs: 0 4px 12px rgba(0, 0, 0, 0.18);
+  --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 16px 48px rgba(0, 0, 0, 0.30);
+  --shadow-lg: 0 24px 80px rgba(0, 0, 0, 0.42);
+  --shadow-glow: 0 0 36px rgba(109, 141, 255, 0.24);
+
+  /* ==================== 3. 向后兼容映射 (--ea- 变量) ==================== */
+  --ea-bg: var(--bg-base);
+  --ea-bg-soft: var(--glass-secondary);
+  --ea-bg-band: var(--glass-subtle);
+  --ea-surface: var(--glass-secondary);
+  --ea-surface-strong: var(--glass-solid);
+  --ea-line: var(--glass-border-soft);
+  --ea-line-strong: var(--glass-border);
+  --ea-text: var(--text-primary);
+  --ea-muted: var(--text-secondary);
+  --ea-dim: var(--text-tertiary);
+  --ea-accent: var(--color-primary);
+  --ea-accent-strong: var(--color-primary-hover);
+  --ea-blue: var(--color-info);
+  --ea-warn: var(--color-warning);
+  --ea-danger: var(--color-danger);
+  --ea-ok: var(--color-success);
+  --ea-info: var(--color-info);
+  --ea-shadow: var(--shadow-md);
+
   --ea-bg-gradient:
-    linear-gradient(135deg, rgba(101, 214, 173, 0.16), rgba(121, 168, 255, 0.08) 38%, transparent 68%),
-    radial-gradient(circle at 92% 0%, rgba(244, 196, 103, 0.11), transparent 34%);
-  --ea-topbar-bg: rgba(8, 17, 31, 0.72);
-  --ea-control-bg: rgba(255, 255, 255, 0.07);
-  --ea-control-bg-strong: rgba(255, 255, 255, 0.09);
-  --ea-state-bg: rgba(255, 255, 255, 0.04);
-  --ea-backdrop: rgba(3, 7, 13, 0.56);
-  --ea-primary-text: #061421;
-  --ea-danger-text: #ffdada;
-  --ea-offline-bg: rgba(244, 196, 103, 0.14);
-  --ea-offline-line: rgba(244, 196, 103, 0.34);
-  --ea-offline-text: #ffe5a8;
+    radial-gradient(circle at 18% 20%, var(--bg-orb-blue), transparent 32%),
+    radial-gradient(circle at 82% 18%, var(--bg-orb-purple), transparent 30%),
+    radial-gradient(circle at 60% 78%, var(--bg-orb-cyan), transparent 34%),
+    linear-gradient(135deg, var(--bg-gradient-start) 0%, var(--bg-gradient-mid) 48%, var(--bg-gradient-end) 100%);
+
+  --ea-topbar-bg: var(--glass-primary);
+  --ea-control-bg: var(--glass-subtle);
+  --ea-control-bg-strong: var(--glass-secondary);
+  --ea-state-bg: var(--glass-subtle);
+  --ea-backdrop: rgba(0, 0, 0, 0.34);
+  --ea-primary-text: var(--text-inverse);
+  --ea-danger-text: #ffd8d8;
+  --ea-offline-bg: rgba(245, 158, 11, 0.12);
+  --ea-offline-line: rgba(245, 158, 11, 0.20);
+  --ea-offline-text: var(--color-warning);
   --ea-success-text: #c8f7dd;
   --ea-error-text: #ffd8d8;
-  --ea-brand-mark-text: #071320;
-  --ea-radius: 8px;
-  --ea-radius-sm: 6px;
-  --ea-blur: blur(18px);
-  --ea-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ea-brand-mark-text: var(--text-inverse);
+  --ea-radius: var(--radius-lg);
+  --ea-radius-sm: var(--radius-md);
+  --ea-blur: var(--blur-main);
+  --ea-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
 }
 
-:root[data-theme="glass-light"] {
+/* ==================== 4. 显式深色主题 (与 :root 一致，确保 resolved 主题一致性) ==================== */
+html[data-theme="glass-dark"] {
+  color-scheme: dark;
+  --bg-base: #080B16;
+  --bg-gradient-start: #07111F;
+  --bg-gradient-mid: #161124;
+  --bg-gradient-end: #081A1A;
+  --bg-orb-blue: rgba(61, 120, 255, 0.32);
+  --bg-orb-purple: rgba(145, 84, 255, 0.28);
+  --bg-orb-cyan: rgba(32, 214, 199, 0.22);
+
+  --glass-primary: rgba(18, 25, 43, 0.68);
+  --glass-secondary: rgba(18, 25, 43, 0.52);
+  --glass-subtle: rgba(18, 25, 43, 0.36);
+  --glass-solid: rgba(18, 25, 43, 0.86);
+  --glass-border: rgba(255, 255, 255, 0.18);
+  --glass-border-soft: rgba(255, 255, 255, 0.10);
+
+  --text-primary: #F8FAFC;
+  --text-secondary: #CBD5E1;
+  --text-tertiary: #94A3B8;
+  --text-placeholder: #64748B;
+  --text-inverse: #0F172A;
+
+  --color-primary: #6D8DFF;
+  --color-primary-hover: #8AA2FF;
+  --color-secondary: #A78BFA;
+  --color-accent: #2DD4BF;
+  --color-success: #22C55E;
+  --color-warning: #FBBF24;
+  --color-danger: #F87171;
+  --color-info: #38BDF8;
+
+  --shadow-xs: 0 4px 12px rgba(0, 0, 0, 0.18);
+  --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 16px 48px rgba(0, 0, 0, 0.30);
+  --shadow-lg: 0 24px 80px rgba(0, 0, 0, 0.42);
+  --shadow-glow: 0 0 36px rgba(109, 141, 255, 0.24);
+
+  --ea-backdrop: rgba(0, 0, 0, 0.34);
+  --ea-danger-text: #ffd8d8;
+  --ea-success-text: #c8f7dd;
+  --ea-error-text: #ffd8d8;
+}
+
+/* ==================== 5. 亮色玻璃主题 (glass-light) ==================== */
+html[data-theme="glass-light"] {
   color-scheme: light;
-  --ea-bg: #f4f8fb;
-  --ea-bg-soft: #ffffff;
-  --ea-bg-band: rgba(40, 76, 105, 0.055);
-  --ea-surface: rgba(255, 255, 255, 0.74);
-  --ea-surface-strong: rgba(255, 255, 255, 0.9);
-  --ea-line: rgba(34, 52, 72, 0.16);
-  --ea-line-strong: rgba(34, 52, 72, 0.25);
-  --ea-text: #172234;
-  --ea-muted: #5d6a7b;
-  --ea-dim: #7b8798;
-  --ea-accent: #209b7c;
-  --ea-accent-strong: #147a61;
-  --ea-blue: #356fd6;
-  --ea-warn: #9b6c0a;
-  --ea-danger: #bf4050;
-  --ea-ok: #16875f;
-  --ea-info: #177c9f;
-  --ea-shadow: 0 18px 44px rgba(38, 62, 86, 0.14);
-  --ea-bg-gradient:
-    linear-gradient(135deg, rgba(55, 170, 136, 0.13), rgba(65, 112, 214, 0.09) 42%, transparent 70%),
-    radial-gradient(circle at 90% 0%, rgba(244, 196, 103, 0.18), transparent 34%);
-  --ea-topbar-bg: rgba(255, 255, 255, 0.74);
-  --ea-control-bg: rgba(255, 255, 255, 0.72);
-  --ea-control-bg-strong: rgba(255, 255, 255, 0.88);
-  --ea-state-bg: rgba(37, 66, 95, 0.045);
-  --ea-backdrop: rgba(22, 32, 46, 0.34);
-  --ea-primary-text: #061421;
+  --bg-base: #EEF3FF;
+  --bg-gradient-start: #EAF1FF;
+  --bg-gradient-mid: #F8ECFF;
+  --bg-gradient-end: #E8FFF7;
+  --bg-orb-blue: rgba(80, 140, 255, 0.35);
+  --bg-orb-purple: rgba(170, 105, 255, 0.28);
+  --bg-orb-cyan: rgba(70, 220, 210, 0.25);
+
+  --glass-primary: rgba(255, 255, 255, 0.58);
+  --glass-secondary: rgba(255, 255, 255, 0.42);
+  --glass-subtle: rgba(255, 255, 255, 0.28);
+  --glass-solid: rgba(255, 255, 255, 0.78);
+  --glass-border: rgba(255, 255, 255, 0.62);
+  --glass-border-soft: rgba(255, 255, 255, 0.36);
+
+  --text-primary: #101828;
+  --text-secondary: #344054;
+  --text-tertiary: #667085;
+  --text-placeholder: #98A2B3;
+  --text-inverse: #FFFFFF;
+
+  --color-primary: #4F7CFF;
+  --color-primary-hover: #3E68E8;
+  --color-secondary: #8B5CF6;
+  --color-accent: #20D6C7;
+  --color-success: #16A34A;
+  --color-warning: #F59E0B;
+  --color-danger: #EF4444;
+  --color-info: #0EA5E9;
+
+  --shadow-xs: 0 4px 12px rgba(15, 23, 42, 0.06);
+  --shadow-sm: 0 8px 24px rgba(15, 23, 42, 0.08);
+  --shadow-md: 0 16px 48px rgba(15, 23, 42, 0.12);
+  --shadow-lg: 0 24px 80px rgba(15, 23, 42, 0.18);
+  --shadow-glow: 0 0 32px rgba(79, 124, 255, 0.24);
+
+  --ea-backdrop: rgba(15, 23, 42, 0.20);
   --ea-danger-text: #9b2532;
-  --ea-offline-bg: rgba(244, 196, 103, 0.22);
-  --ea-offline-line: rgba(155, 108, 10, 0.26);
-  --ea-offline-text: #604305;
   --ea-success-text: #116943;
   --ea-error-text: #9b2532;
-  --ea-brand-mark-text: #071320;
 }

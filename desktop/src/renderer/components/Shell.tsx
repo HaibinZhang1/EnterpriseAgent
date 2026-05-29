@@ -11,6 +11,8 @@ export function Shell({
   onNotifications,
   onAccount,
   onSettings,
+  theme,
+  onToggleTheme,
   children
 }: {
   active: AppTab;
@@ -21,6 +23,8 @@ export function Shell({
   onNotifications: () => void;
   onAccount: () => void;
   onSettings: () => void;
+  theme: 'light' | 'dark';
+  onToggleTheme: () => void;
   children: ReactNode;
 }) {
   return (
@@ -34,6 +38,8 @@ export function Shell({
         onNotifications={onNotifications}
         onAccount={onAccount}
         onSettings={onSettings}
+        theme={theme}
+        onToggleTheme={onToggleTheme}
       />
       {offline?.online === false ? <div className="offline-banner">当前离线：新增服务端动作已暂停，本地清理和查看仍可用。</div> : <div />}
       {children}

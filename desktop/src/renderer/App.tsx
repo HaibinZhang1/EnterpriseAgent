@@ -88,7 +88,7 @@ export interface EnterpriseAgentActions {
   star: (item: ExtensionSummary) => void;
   openAction: (item: ExtensionSummary) => void;
   closeAction: () => void;
-  runAction: (payload: { targetPath: string; variables: Record<string, string>; installMode?: string; dryRun: boolean }) => void;
+  runAction: (payload: { targetPath: string; variables: Record<string, string>; installMode?: string; adapterId?: string; operation?: string; dryRun: boolean }) => void;
   openModal: (modal: ModalName) => void;
   closeModal: () => void;
   login: (username: string, password: string) => void;
@@ -246,10 +246,10 @@ export function App() {
       setView((current) => ({ ...current, actionBusy: true, actionError: undefined }));
       try {
         const result = item.type === 'skill'
-          ? await desktopApi.extension.install({ extensionID: item.id, version: item.version, targetPath: payload.targetPath, dryRun: payload.dryRun })
+          ? await desktopApi.extension.install({ extensionID: item.id, version: item.version, targetPath: payload.targetPath, adapterId: payload.adapterId, dryRun: payload.dryRun })
           : item.type === 'mcp'
-            ? await desktopApi.mcp.configure({ extensionID: item.id, targetConfigPath: payload.targetPath, variables: payload.variables, dryRun: payload.dryRun })
-            : await desktopApi.plugin.prepare({ extensionID: item.id, targetPath: payload.targetPath, installMode: payload.installMode, dryRun: payload.dryRun });
+            ? await desktopApi.mcp.configure({ extensionID: item.id, targetConfigPath: payload.targetPath, variables: payload.variables, adapterId: payload.adapterId, dryRun: payload.dryRun })
+            : await desktopApi.plugin.prepare({ extensionID: item.id, targetPath: payload.targetPath, installMode: payload.installMode, adapterId: payload.adapterId, operation: payload.operation, dryRun: payload.dryRun });
         setView((current) => ({ ...current, actionBusy: false, actionResult: normalizeActionResult(result) }));
         if (!payload.dryRun) void loadLocal();
       } catch (error) {
@@ -290,7 +290,7 @@ export function App() {
       setView((current) => ({ ...current, passwordBusy: true, passwordError: undefined }));
       try {
         await desktopApi.auth.changePassword({ oldPassword, newPassword });
-        setView((current) => ({ ...current, passwordBusy: false, modal: 'none' }));
+        setView((current) => ({ ...current, user: undefined, passwordBusy: false, modal: 'login', notifications: [], submissions: [] }));
       } catch (error) {
         setView((current) => ({ ...current, passwordBusy: false, passwordError: toUiError(error) }));
       }
@@ -390,6 +390,18 @@ export function App() {
 export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAgentViewModel; actions: EnterpriseAgentActions }) {
   const unreadCount = model.notifications.filter((item) => !item.read).length;
   const showLogin = model.modal === 'login';
+
+  const media = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-color-scheme: light)')
+    : undefined;
+  const isLight = model.settingsConfig.theme === 'glass-light' || (model.settingsConfig.theme !== 'glass-dark' && media?.matches);
+  const currentTheme = isLight ? 'light' : 'dark';
+
+  const handleToggleTheme = () => {
+    const nextTheme = currentTheme === 'light' ? 'glass-dark' : 'glass-light';
+    actions.saveSettings({ ...model.settingsConfig, theme: nextTheme });
+  };
+
   return (
     <Shell
       active={model.activeTab}
@@ -400,6 +412,8 @@ export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAg
       onNotifications={() => actions.openModal('notifications')}
       onAccount={() => actions.openModal('account')}
       onSettings={() => actions.openModal('settings')}
+      theme={currentTheme}
+      onToggleTheme={handleToggleTheme}
     >
       {model.bootState === 'loading' && !model.user ? <main className="page"><LoadingState label="正在初始化客户端" /></main> : null}
       {model.bootState === 'error' && !model.user ? <main className="page"><ErrorState error={model.bootError} title="客户端初始化失败" /></main> : null}
@@ -429,37 +443,31 @@ export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAg
         />
       ) : null}
       {model.activeTab === 'community' && model.showingSearch ? (
-        <SearchResultsPage
-          query={model.searchQuery}
-          state={model.searchState}
-          items={model.searchItems}
-          error={model.searchError}
-          onBack={actions.backToCommunity}
-          onOpen={actions.openDetail}
-          onStar={actions.star}
-        />
+        <main className="page" aria-label="搜索结果" style={{ padding: 0, height: '100%', overflow: 'hidden' }}>
+          <SearchResultsPage
+            query={model.searchQuery}
+            state={model.searchState}
+            items={model.searchItems}
+            error={model.searchError}
+            onBack={actions.backToCommunity}
+            onOpen={actions.openDetail}
+            onStar={actions.star}
+          />
+        </main>
       ) : null}
       {model.activeTab === 'local' ? (
-        <main className="page" aria-label="本地">
-          <header className="page-header">
-            <div className="page-title">
-              <h1>本地</h1>
-              <span className="muted">查看本地扩展、工具、项目和事件队列。</span>
-            </div>
-            <div className="local-header-actions">
-              <div className="segmented">
-                <LocalTabButton active={model.localTab === 'extensions'} onClick={() => actions.changeLocalTab('extensions')}>已安装</LocalTabButton>
-                <LocalTabButton active={model.localTab === 'tools'} onClick={() => actions.changeLocalTab('tools')}>工具</LocalTabButton>
-                <LocalTabButton active={model.localTab === 'projects'} onClick={() => actions.changeLocalTab('projects')}>项目</LocalTabButton>
-              </div>
-              <Button onClick={actions.refreshLocal} disabled={model.localScanState === 'loading'}>{model.localScanState === 'loading' ? '扫描中' : '重新扫描'}</Button>
-            </div>
-          </header>
-          {model.localScanError ? <ErrorState error={model.localScanError} title="本地扫描失败" /> : null}
-          {model.localScanSummary ? <p className="meta local-scan-meta">最近扫描发现 {model.localScanSummary.discovered?.total ?? 0} 项本地记录。</p> : null}
-          {model.localTab === 'extensions' ? <LocalExtensionsPage snapshot={model.lifecycle} pendingEvents={model.pendingEvents} offline={model.offline?.online === false} onCleanup={actions.requestCleanup} /> : null}
-          {model.localTab === 'tools' ? <LocalToolsPage snapshot={model.lifecycle} /> : null}
-          {model.localTab === 'projects' ? <LocalProjectsPage snapshot={model.lifecycle} /> : null}
+        <main className="page" aria-label="本地" style={{ padding: 0, height: '100%', overflow: 'hidden' }}>
+          <LocalExtensionsPage
+            snapshot={model.lifecycle}
+            pendingEvents={model.pendingEvents}
+            offline={model.offline?.online === false}
+            onCleanup={actions.requestCleanup}
+            onOpenDetail={actions.openDetail}
+            localScanState={model.localScanState}
+            localScanSummary={model.localScanSummary}
+            localScanError={model.localScanError}
+            onRefreshLocal={actions.refreshLocal}
+          />
         </main>
       ) : null}
 
@@ -472,7 +480,17 @@ export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAg
       {model.modal === 'update' ? <UpdateModal update={model.updateState} busy={model.updateBusy} onClose={actions.closeModal} onCheck={actions.checkUpdate} onDownload={actions.downloadUpdate} onCancel={actions.cancelUpdate} onInstall={actions.installUpdate} /> : null}
       {model.modal === 'publish' ? <PublishWizard busy={model.publishBusy} error={model.publishError} result={model.publishResult} onClose={actions.closeModal} onSubmit={actions.submitPublish} /> : null}
       {model.modal === 'submissions' ? <MySubmissionsDrawer state={model.submissionsState} items={model.submissions} error={model.submissionsError} onClose={actions.closeModal} onRefresh={actions.refreshSubmissions} onWithdraw={actions.withdrawSubmission} /> : null}
-      {model.modal === 'account' ? <AccountMenu user={model.user} onClose={actions.closeModal} onChangePassword={() => actions.openModal('password')} onLogout={actions.logout} /> : null}
+      {model.modal === 'account' ? (
+        <AccountMenu
+          user={model.user}
+          onClose={actions.closeModal}
+          onChangePassword={() => actions.openModal('password')}
+          onSettings={() => actions.openModal('settings')}
+          onLogout={actions.logout}
+          theme={currentTheme}
+          onToggleTheme={handleToggleTheme}
+        />
+      ) : null}
       {model.modal === 'cleanup' ? <DangerConfirmModal title="本地清理确认" message="该操作只处理本地记录或托管目标，不需要服务端授权状态为可用。" busy={model.cleanupBusy} error={model.cleanupError} result={model.cleanupResult} onClose={actions.closeModal} onConfirm={actions.confirmCleanup} /> : null}
     </Shell>
   );
@@ -482,13 +500,41 @@ function LocalTabButton({ active, onClick, children }: { active: boolean; onClic
   return <button type="button" className={`segment ${active ? 'active' : ''}`} onClick={onClick}>{children}</button>;
 }
 
-function AccountMenu({ user, onClose, onChangePassword, onLogout }: { user?: SessionUser; onClose: () => void; onChangePassword: () => void; onLogout: () => void }) {
+function AccountMenu({
+  user,
+  onClose,
+  onChangePassword,
+  onSettings,
+  onLogout,
+  theme,
+  onToggleTheme
+}: {
+  user?: SessionUser;
+  onClose: () => void;
+  onChangePassword: () => void;
+  onSettings: () => void;
+  onLogout: () => void;
+  theme: 'light' | 'dark';
+  onToggleTheme: () => void;
+}) {
   return (
-    <Modal title="账号" onClose={onClose} size="small">
-      <p>当前账号：{user?.displayName ?? user?.username ?? '未登录'}</p>
-      <div className="card-action-row">
-        <Button onClick={onChangePassword}>修改密码</Button>
-        <Button tone="danger" onClick={onLogout}>退出登录</Button>
+    <Modal title="账号与设置" onClose={onClose} size="small">
+      <p style={{ marginBottom: '16px', fontSize: '14px', color: 'var(--text-primary)' }}>
+        当前账号：<strong>{user?.displayName ?? user?.username ?? '未登录'}</strong>
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <Button onClick={onSettings} style={{ width: '100%', justifyContent: 'center' }}>
+          ⚙️ 客户端设置
+        </Button>
+        <Button onClick={onToggleTheme} style={{ width: '100%', justifyContent: 'center' }}>
+          {theme === 'dark' ? '☀️ 切换至浅色模式' : '🌙 切换至深色模式'}
+        </Button>
+        <Button onClick={onChangePassword} style={{ width: '100%', justifyContent: 'center' }}>
+          🔑 修改密码
+        </Button>
+        <Button tone="danger" onClick={onLogout} style={{ width: '100%', justifyContent: 'center' }}>
+          🚪 退出登录
+        </Button>
       </div>
     </Modal>
   );
@@ -568,23 +614,41 @@ function replaceExtension(model: EnterpriseAgentViewModel, id: string, patch: Pa
   };
 }
 
-function normalizeActionResult(value: unknown): ActionResultView {
+export function normalizeActionResult(value: unknown): ActionResultView {
   const record = isRecord(value) ? value : {};
   const plan = isRecord(record.plan) ? record.plan : isRecord(value) && 'operation' in value ? value : {};
   const result = isRecord(record.result) ? record.result : {};
   const summary = isRecord(plan.summary) ? plan.summary : {};
   const manual = extractManualInstructions(record, plan);
+  const connectionTest = isRecord(record.connectionTest) ? record.connectionTest : undefined;
+  const rollbackResult = isRecord(record.rollbackResult) ? record.rollbackResult : undefined;
+  const connectionStatus = str(connectionTest?.status);
+  const connectionFailed = Boolean(connectionStatus && connectionStatus !== 'reachable');
+  const warnings = Array.isArray(summary.warnings) ? summary.warnings.filter((item): item is string => typeof item === 'string') : [];
+  if (connectionFailed) {
+    warnings.push(`MCP connection test failed: ${str(connectionTest?.message ?? connectionTest?.errorCode ?? connectionTest?.statusCode ?? connectionStatus) ?? connectionStatus}`);
+  }
+  const steps: ActionResultView['steps'] = Array.isArray(result.steps)
+    ? result.steps.filter(isRecord).map((step) => ({ stepId: str(step.stepId), action: str(step.action), status: str(step.status), message: str(step.message) }))
+    : Array.isArray(plan.steps)
+      ? plan.steps.filter(isRecord).map((step) => ({ stepId: str(step.stepId), action: str(step.action), status: 'planned' }))
+      : [];
+  if (connectionTest) {
+    steps.push({ stepId: 'mcp-connection-test', action: 'connection-test', status: connectionStatus ?? 'unknown', message: str(connectionTest.message ?? connectionTest.errorCode ?? connectionTest.statusCode) });
+  }
+  if (rollbackResult) {
+    const rollbackSteps: ActionResultView['steps'] = Array.isArray(rollbackResult.steps)
+      ? rollbackResult.steps.filter(isRecord).map((step) => ({ stepId: str(step.stepId), action: str(step.action) ?? 'rollback', status: str(step.status), message: str(step.message) }))
+      : [{ stepId: 'mcp-config-rollback', action: 'rollback', status: str(rollbackResult.status), message: str(rollbackResult.message) }];
+    steps.push(...rollbackSteps);
+  }
   return {
-    status: typeof result.status === 'string' ? result.status : typeof plan.dryRun === 'boolean' && plan.dryRun ? 'dry_run' : undefined,
+    status: connectionFailed ? 'connection_test_failed' : typeof result.status === 'string' ? result.status : typeof plan.dryRun === 'boolean' && plan.dryRun ? 'dry_run' : undefined,
     planTitle: typeof summary.title === 'string' ? summary.title : typeof plan.operation === 'string' ? plan.operation : undefined,
-    warnings: Array.isArray(summary.warnings) ? summary.warnings.filter((item): item is string => typeof item === 'string') : [],
+    warnings,
     manualInstructions: manual.instructions,
     manualInstructionsUrl: manual.instructionsUrl,
-    steps: Array.isArray(result.steps)
-      ? result.steps.filter(isRecord).map((step) => ({ stepId: str(step.stepId), action: str(step.action), status: str(step.status), message: str(step.message) }))
-      : Array.isArray(plan.steps)
-        ? plan.steps.filter(isRecord).map((step) => ({ stepId: str(step.stepId), action: str(step.action), status: 'planned' }))
-        : []
+    steps
   };
 }
 

@@ -3,7 +3,7 @@ import { FileSystemGuard } from './file-system-guard';
 import { DesktopErrorException, makeDesktopError } from '../../shared/errors';
 
 const FORBIDDEN = new Set(['exec-script', 'shell-command', 'download-and-run', 'arbitrary-write']);
-const ALLOWED = new Set(['ensure-dir', 'write-file', 'copy-file', 'remove-managed', 'symlink', 'switch-pointer', 'record-state']);
+const ALLOWED = new Set(['ensure-dir', 'write-file', 'copy-file', 'remove-managed', 'symlink', 'json-upsert', 'json-remove', 'verify-hash', 'switch-pointer', 'record-state']);
 
 export interface PlanValidationOptions {
   allowedRoots: string[];
@@ -43,8 +43,8 @@ export class PlanValidator {
         allowMissing: true
       }, requestID);
     }
-    if (step.sourcePath && step.action !== 'copy-file' && step.action !== 'symlink') {
-      throw new DesktopErrorException(makeDesktopError('invalid_execution_plan', 'Only copy and symlink steps can declare a source path', requestID));
+    if (step.sourcePath && step.action !== 'copy-file' && step.action !== 'symlink' && step.action !== 'verify-hash') {
+      throw new DesktopErrorException(makeDesktopError('invalid_execution_plan', 'Only copy, symlink, and verify-hash steps can declare a source path', requestID));
     }
     if (step.sourcePath) {
       await this.guard.assertSafePath(step.sourcePath, { roots: options.allowedRoots, allowMissing: true }, requestID);

@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { DesktopErrorException, makeDesktopError } from '../../shared/errors';
 
-export type SecureStoreKey = 'session.token' | `mcp.variable.${string}` | `api.secret.${string}`;
+export type SecureStoreKey = 'session.token' | `mcp.variable.${string}` | `mcp.managed-config.${string}` | `api.secret.${string}`;
 
 export interface SecureStore {
   get(key: SecureStoreKey): Promise<string | undefined>;

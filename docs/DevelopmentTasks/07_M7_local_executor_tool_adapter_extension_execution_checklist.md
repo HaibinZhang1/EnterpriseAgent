@@ -244,3 +244,11 @@
 验证结果：desktop typecheck 通过；目标 Vitest 4 files / 20 tests 通过；全量 Vitest 20 files / 55 tests 通过；lint 通过；build 通过；Electron smoke 1 file / 3 tests 通过。
 未验证：未接真实工具目录执行破坏性 MCP/Plugin 写入；真实工具目录 E2E 留到外部环境验收。
 ```
+
+```text
+补充时间：2026-05-28 CST
+补充内容：按桌面端 P0/P1 缺口补强本地可验证闭环：Skill 执行流接入 DownloadTicket、受控下载、Hash 校验、Central Store 安装后再启用；ApiClient 下载凭证补充 purpose/objectType/idempotency 与 retryable 错误映射；ToolAdapter Registry 接入 Codex、Claude、Cursor、Windsurf、opencode、自定义目录目标选择；MCP 配置改为托管 JSON upsert/remove，写入后串联 HTTP_HEALTH 连接检测并记录 managedConfigId/fullConfigRef，检测失败时执行托管项卸载回滚；Plugin manual-download 改为受控下载并支持标记状态，managed/config manifest 扩展受控动作；设置页保存 baseURL 后即时更新运行中 ApiClient；安全下架 hint 增加强制禁用映射。
+验证命令：npm --prefix desktop run typecheck；npm --prefix desktop test -- --run tests/api-client.test.ts tests/package-lifecycle-repository.test.ts tests/tool-adapter-plan-generation.test.ts tests/ipc-router.test.ts tests/m7-closeout.test.ts tests/renderer-app.test.tsx；npm --prefix desktop test；npm --prefix desktop run lint；npm --prefix desktop run build；npm --prefix desktop run test:electron
+验证结果：desktop typecheck 通过；目标 Vitest 6 files / 32 tests 通过；全量 Vitest 22 files / 67 tests 通过；lint 通过；build 通过；Electron smoke 1 file / 3 tests 通过。
+未验证：未接真实企业服务端、真实 Codex/Claude/Cursor/Windsurf/opencode 用户目录做破坏性写入；真实 Windows installer/signing、内网服务、air-gapped 外部门禁保持未勾选。
+```

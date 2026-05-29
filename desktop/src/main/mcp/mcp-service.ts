@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { SecureStore } from '../security/secure-store';
 import type { ExecutionPlan } from '../executor/types';
 import type { LocalEventQueue } from '../events/local-event-queue';
@@ -35,6 +35,8 @@ export interface McpConfigPlanOutput {
   redactedPreview: unknown;
   secretRefs: Record<string, string>;
   variableChanges: McpVariableChanges;
+  managedConfigId: string;
+  fullConfigRef: string;
 }
 
 export type McpConnectionTestStatus = 'reachable' | 'unreachable' | 'unsupported-check' | 'blocked-by-policy' | 'needs-user-input';
@@ -61,6 +63,7 @@ export class McpService {
 
   async createConfigWritePlan(input: McpConfigPlanInput): Promise<McpConfigPlanOutput> {
     this.validateConnectionTest(input.definition.connectionTest, input.requestID);
+    const dryRun = input.dryRun ?? true;
     const secretRefs: Record<string, string> = {};
     const rendered = { ...input.definition.configTemplate };
     const variableChanges = analyzeVariableChanges(input.definition.variablesSchema, input.previousVariablesSchema);
@@ -79,7 +82,7 @@ export class McpService {
         rendered[variable.name] = { secretRef: existingSecretRef };
       } else if (variable.sensitive && value !== undefined) {
         const ref = `mcp.variable.${input.definition.extensionId}.${variable.name}` as const;
-        await this.secureStore.set(ref, value);
+        if (!dryRun) await this.secureStore.set(ref, value);
         secretRefs[variable.name] = ref;
         rendered[variable.name] = { secretRef: ref };
       } else if (value !== undefined) {
@@ -87,11 +90,24 @@ export class McpService {
       }
     }
     const now = new Date().toISOString();
-    const redactedPreview = redactForLog(rendered);
+    const managedConfigId = managedMcpConfigId(input.definition.extensionId, input.targetConfigPath);
+    const fullConfigRef: `mcp.managed-config.${string}` = `mcp.managed-config.${managedConfigId}`;
+    const managedEntry = {
+      managedConfigId,
+      managedBy: 'Enterprise Agent Hub',
+      extensionId: input.definition.extensionId,
+      version: input.definition.version,
+      fullConfigRef,
+      config: rendered
+    };
+    if (!dryRun) await this.secureStore.set(fullConfigRef, JSON.stringify(managedEntry));
+    const redactedPreview = redactForLog(managedEntry);
     return {
       redactedPreview,
       secretRefs,
       variableChanges,
+      managedConfigId,
+      fullConfigRef,
       plan: {
         planId: `mcp_plan_${randomUUID()}`,
         requestId: input.requestID,
@@ -99,11 +115,11 @@ export class McpService {
         extensionId: input.definition.extensionId,
         version: input.definition.version,
         createdAt: now,
-        dryRun: input.dryRun ?? true,
+        dryRun,
         riskLevel: 'MEDIUM',
         summary: { title: 'Write MCP config', description: `Write managed MCP config for ${input.definition.extensionId}`, targetCount: 1, warnings: variableWarnings(variableChanges) },
         preconditions: [],
-        steps: [{ stepId: 'write-mcp-config', action: 'write-file', description: 'Write managed MCP config entry', targetPath: input.targetConfigPath, content: JSON.stringify(redactedPreview, null, 2), rollbackable: true, managed: true }],
+        steps: [{ stepId: 'upsert-mcp-config', action: 'json-upsert', description: 'Upsert managed MCP config entry', targetPath: input.targetConfigPath, content: JSON.stringify(managedEntry, null, 2), rollbackable: true, managed: true, metadata: { managedConfigId } }],
         rollbackPolicy: { strategy: 'best-effort' },
         idempotencyKey: `mcp:${input.definition.extensionId}:${input.definition.version}:config:${input.targetConfigPath}`
       }
@@ -123,7 +139,7 @@ export class McpService {
       riskLevel: 'MEDIUM',
       summary: { title: 'Remove MCP config', description: `Remove managed MCP config for ${input.definition.extensionId}`, targetCount: 1, warnings: ['Only Enterprise Agent Hub managed config files are removed'] },
       preconditions: [],
-      steps: [{ stepId: 'remove-mcp-config', action: 'remove-managed', description: 'Remove managed MCP config entry', targetPath: input.targetConfigPath, rollbackable: true, managed: true }],
+      steps: [{ stepId: 'remove-mcp-config', action: 'json-remove', description: 'Remove only the Enterprise Agent Hub managed MCP config entry', targetPath: input.targetConfigPath, rollbackable: true, managed: true, metadata: { managedConfigId: managedMcpConfigId(input.definition.extensionId, input.targetConfigPath) } }],
       rollbackPolicy: { strategy: 'best-effort' },
       idempotencyKey: `mcp:${input.definition.extensionId}:${input.definition.version}:uninstall:${input.targetConfigPath}`
     };
@@ -218,4 +234,9 @@ function variableWarnings(changes: McpVariableChanges): string[] {
 
 function isSecretRef(value: unknown): value is { secretRef: string } {
   return Boolean(value && typeof value === 'object' && 'secretRef' in value && typeof value.secretRef === 'string');
+}
+
+function managedMcpConfigId(extensionId: string, targetConfigPath: string): string {
+  const suffix = createHash('sha256').update(`${extensionId}:${targetConfigPath}`).digest('hex').slice(0, 10);
+  return `eah_mcp_${extensionId.replace(/[^a-z0-9_-]+/gi, '_')}_${suffix}`;
 }

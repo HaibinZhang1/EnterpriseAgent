@@ -10,7 +10,7 @@ export function ChangePasswordModal({ force, error, busy, onClose, onSubmit }: {
   return (
     <Modal title={force ? '必须修改密码' : '修改密码'} onClose={force ? () => undefined : onClose} size="small">
       <form className="grid" onSubmit={(event) => { event.preventDefault(); onSubmit(oldPassword, newPassword); }}>
-        <p className="muted">{force ? '当前账号需要完成密码更新后才能继续使用桌面客户端。' : '修改后请使用新密码重新登录。'}</p>
+        <p className="muted">{force ? '当前账号需要先完成密码更新；修改成功后请使用新密码重新登录。' : '修改后请使用新密码重新登录。'}</p>
         <label className="field">
           <span>当前密码</span>
           <input className="input" type="password" value={oldPassword} onChange={(event) => setOldPassword(event.target.value)} autoComplete="current-password" />

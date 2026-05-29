@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { EnterpriseAgentAppView, initialView, resolveTheme, type EnterpriseAgentActions, type EnterpriseAgentViewModel } from '../src/renderer/App';
+import { EnterpriseAgentAppView, initialView, normalizeActionResult, resolveTheme, type EnterpriseAgentActions, type EnterpriseAgentViewModel } from '../src/renderer/App';
 import { ExtensionActionModal } from '../src/renderer/features/extension/ExtensionActionModal';
 import { ExtensionDetailDrawer } from '../src/renderer/features/extension/ExtensionDetailDrawer';
 import { PublishWizard } from '../src/renderer/features/publish/PublishWizard';
@@ -35,15 +35,18 @@ describe('renderer app view', () => {
       catalogState: 'ready',
       catalogHome: { skills: [item], mcps: [], plugins: [], hot: [], stars: [], downloads: [] }
     });
-    expect(home).toContain('Skill 区域');
-    expect(home).toContain('MCP 区域暂无数据');
-    expect(home).toContain('Plugin 区域');
+    expect(home).toContain('Skill 精选热榜');
+    expect(home).toContain('MCP Server 热榜');
+    expect(home).toContain('Plugin 工具热榜');
     expect(home).toContain('skill-one');
 
-    const search = renderView({ activeTab: 'community', showingSearch: true, searchQuery: 'agent', searchState: 'ready', searchItems: [extension('mcp-one', 'mcp'), extension('plugin-one', 'plugin')] });
-    expect(search).toContain('搜索结果');
-    expect(search).toContain('mcp-one');
-    expect(search).toContain('plugin-one');
+    const searchMcp = renderView({ activeTab: 'community', showingSearch: true, searchQuery: 'mcp', searchState: 'ready', searchItems: [extension('mcp-one', 'mcp'), extension('plugin-one', 'plugin')] });
+    expect(searchMcp).toContain('搜索结果');
+    expect(searchMcp).toContain('mcp-one');
+
+    const searchPlugin = renderView({ activeTab: 'community', showingSearch: true, searchQuery: 'plugin', searchState: 'ready', searchItems: [extension('mcp-one', 'mcp'), extension('plugin-one', 'plugin')] });
+    expect(searchPlugin).toContain('搜索结果');
+    expect(searchPlugin).toContain('plugin-one');
 
     const failed = renderView({ activeTab: 'community', showingSearch: true, searchState: 'error', searchError: { message: '服务异常', requestID: 'req-search-1' } });
     expect(failed).toContain('搜索失败');
@@ -109,6 +112,16 @@ describe('renderer app view', () => {
   });
 
   it('renders MCP variable warnings and manual-download instructions in action results', () => {
+    const failedMcp = normalizeActionResult({
+      plan: { operation: 'MCP_CONFIG_WRITE', summary: { title: 'Write MCP config' }, steps: [] },
+      result: { status: 'success', steps: [{ stepId: 'write-mcp-config', action: 'json-upsert', status: 'success' }] },
+      connectionTest: { status: 'unreachable', errorCode: 'http_health_unreachable' },
+      rollbackResult: { status: 'success', steps: [{ stepId: 'remove-mcp-config', action: 'json-remove', status: 'success' }] }
+    });
+    expect(failedMcp.status).toBe('connection_test_failed');
+    expect(failedMcp.warnings.join(' ')).toContain('MCP connection test failed');
+    expect(failedMcp.steps.map((step) => step.stepId)).toEqual(expect.arrayContaining(['mcp-connection-test', 'remove-mcp-config']));
+
     const mcp = renderToStaticMarkup(
       <ExtensionActionModal
         item={extension('mcp-diff', 'mcp')}
@@ -125,11 +138,12 @@ describe('renderer app view', () => {
       <ExtensionActionModal
         item={extension('plugin-manual', 'plugin')}
         busy={false}
-        result={{ status: 'dry_run', warnings: ['manual-download does not auto-install'], steps: [], manualInstructions: 'Open the zip from the internal share.', manualInstructionsUrl: 'http://intranet/plugins/manual' }}
+        result={{ status: 'dry_run', warnings: ['manual-download uses controlled download and does not auto-install'], steps: [], manualInstructions: 'Open the zip from the internal share.', manualInstructionsUrl: 'http://intranet/plugins/manual' }}
         onClose={() => undefined}
         onRun={() => undefined}
       />
     );
+    expect(plugin).toContain('目标工具');
     expect(plugin).toContain('Open the zip from the internal share.');
     expect(plugin).toContain('http://intranet/plugins/manual');
   });

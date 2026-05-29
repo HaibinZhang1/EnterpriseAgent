@@ -4,6 +4,9 @@ export type PlanStepAction =
   | 'copy-file'
   | 'remove-managed'
   | 'symlink'
+  | 'json-upsert'
+  | 'json-remove'
+  | 'verify-hash'
   | 'switch-pointer'
   | 'record-state';
 

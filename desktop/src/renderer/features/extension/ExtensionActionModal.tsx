@@ -28,11 +28,13 @@ export function ExtensionActionModal({
   error?: UiError;
   result?: ActionResultView;
   onClose: () => void;
-  onRun: (payload: { targetPath: string; variables: Record<string, string>; installMode?: string; dryRun: boolean }) => void;
+  onRun: (payload: { targetPath: string; variables: Record<string, string>; installMode?: string; adapterId?: string; operation?: string; dryRun: boolean }) => void;
 }) {
   const [targetPath, setTargetPath] = useState('');
   const [variablesText, setVariablesText] = useState('');
   const [installMode, setInstallMode] = useState('MANUAL_DOWNLOAD');
+  const [adapterId, setAdapterId] = useState('custom-directory');
+  const [operation, setOperation] = useState('');
   return (
     <Modal title={primaryActionLabel(item)} onClose={onClose}>
       <form className="grid" onSubmit={(event) => event.preventDefault()}>
@@ -41,6 +43,17 @@ export function ExtensionActionModal({
           <span>{item.type === 'mcp' ? 'MCP 配置文件路径' : '本地目标路径'}</span>
           <input className="input" value={targetPath} onChange={(event) => setTargetPath(event.target.value)} />
         </label>
+        <label className="field">
+          <span>目标工具</span>
+          <select className="select" value={adapterId} onChange={(event) => setAdapterId(event.target.value)}>
+            <option value="custom-directory">自定义目录</option>
+            <option value="codex">Codex</option>
+            <option value="claude">Claude</option>
+            <option value="cursor">Cursor</option>
+            <option value="windsurf">Windsurf</option>
+            <option value="opencode">opencode</option>
+          </select>
+        </label>
         {item.type === 'mcp' ? (
           <label className="field">
             <span>变量，每行 key=value。敏感值只交给 Main 层安全存储。</span>
@@ -48,24 +61,36 @@ export function ExtensionActionModal({
           </label>
         ) : null}
         {item.type === 'plugin' ? (
-          <label className="field">
-            <span>安装模式</span>
-            <select className="select" value={installMode} onChange={(event) => setInstallMode(event.target.value)}>
-              <option value="MANUAL_DOWNLOAD">手动下载记录</option>
-              <option value="CONFIG_PLUGIN">写入配置插件</option>
-              <option value="MANAGED_PACKAGE">托管包安装</option>
-            </select>
-          </label>
+          <>
+            <label className="field">
+              <span>安装模式</span>
+              <select className="select" value={installMode} onChange={(event) => setInstallMode(event.target.value)}>
+                <option value="MANUAL_DOWNLOAD">受控手动下载</option>
+                <option value="CONFIG_PLUGIN">写入配置插件</option>
+                <option value="MANAGED_PACKAGE">托管包安装</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Plugin 操作</span>
+              <select className="select" value={operation} onChange={(event) => setOperation(event.target.value)}>
+                <option value="">默认安装/下载</option>
+                <option value="update">更新</option>
+                <option value="uninstall">卸载</option>
+                <option value="mark-installed">标记已安装</option>
+                <option value="mark-uninstalled">标记未安装</option>
+              </select>
+            </label>
+          </>
         ) : null}
         {error ? <ErrorState error={error} title="操作失败" /> : null}
         {result ? <ActionResult result={result} /> : null}
         <div className="card-action-row">
-          <Button disabled={busy} onClick={() => onRun({ targetPath, variables: parseVariables(variablesText), installMode, dryRun: true })}>{busy ? '生成中' : 'Dry-run'}</Button>
+          <Button disabled={busy} onClick={() => onRun({ targetPath, variables: parseVariables(variablesText), installMode, adapterId, operation: operation || undefined, dryRun: true })}>{busy ? '生成中' : 'Dry-run'}</Button>
           <Button
             type="button"
             tone="primary"
             disabled={busy}
-            onClick={() => onRun({ targetPath, variables: parseVariables(variablesText), installMode, dryRun: false })}
+            onClick={() => onRun({ targetPath, variables: parseVariables(variablesText), installMode, adapterId, operation: operation || undefined, dryRun: false })}
           >
             执行
           </Button>

@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { requiredString, assertRecord, optionalString, optionalBoolean, optionalRecord, requiredRecord, type RecordPayload } from '../../shared/validation';
 import { DesktopErrorException, makeDesktopError } from '../../shared/errors';
@@ -11,13 +12,17 @@ import type { DeviceRegistrationService } from '../device/device-registration-se
 import type { LocalEventQueue } from '../events/local-event-queue';
 import type { LocalEventSyncService, NetworkRecoverySyncInput } from '../events/local-event-sync-service';
 import type { LocalExecutor } from '../executor/local-executor';
+import type { ExecutionPlan } from '../executor/types';
 import type { LocalLifecycleRepository } from '../lifecycle/local-lifecycle-repository';
 import type { LocalInventoryScanner } from '../lifecycle/local-inventory-scanner';
 import type { ClientLogger } from '../logging/client-logger';
 import type { McpDefinition, McpService } from '../mcp/mcp-service';
+import type { PackageDownloadService } from '../packages/package-download-service';
 import type { PluginInstallMode, PluginService } from '../plugin/plugin-service';
 import type { SecureStore } from '../security/secure-store';
 import type { SkillService } from '../skill/skill-service';
+import type { AdapterRegistry } from '../tool-adapters/registry';
+import type { AdapterCapability, ExtensionKind, ToolAdapter } from '../tool-adapters/types';
 import type { ClientUpdateService } from '../update/client-update-service';
 import { IPC_CHANNELS } from './channels';
 import { IpcRouter } from './ipc-router';
@@ -35,8 +40,10 @@ export interface DesktopIpcServices {
   lifecycleRepository: LocalLifecycleRepository;
   localInventoryScanner: LocalInventoryScanner;
   mcpService: McpService;
+  packageDownloadService: PackageDownloadService;
   pluginService: PluginService;
   skillService: SkillService;
+  adapterRegistry: AdapterRegistry;
   deviceRegistrationService: DeviceRegistrationService;
   clientUpdateService: ClientUpdateService;
   logger: ClientLogger;
@@ -76,12 +83,14 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
 
   router.register(IPC_CHANNELS.authGetSession, async () => ({ hasSession: Boolean(await services.secureStore.get('session.token')) }));
   router.register(IPC_CHANNELS.authMe, (_payload, context) => services.apiClient.me(context.requestID));
-  router.register(IPC_CHANNELS.authChangePassword, (payload, context) => {
+  router.register(IPC_CHANNELS.authChangePassword, async (payload, context) => {
     const record = assertRecord(payload, context.requestID);
-    return services.apiClient.changePassword({
+    const result = await services.apiClient.changePassword({
       oldPassword: requiredString(record, 'oldPassword', context.requestID),
       newPassword: requiredString(record, 'newPassword', context.requestID)
     }, context.requestID);
+    await services.secureStore.delete('session.token');
+    return result;
   });
   router.register(IPC_CHANNELS.authCompleteResetPassword, (payload, context) => {
     const record = assertRecord(payload, context.requestID);
@@ -181,14 +190,7 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
       : kind === 'plugin'
         ? services.pluginService.createPlan({ extensionId, version, installMode: 'MANAGED_PACKAGE', targetPath: target, operation: 'uninstall', dryRun, requestID: context.requestID })
         : services.skillService.createUninstallPlan({ extensionId, version, targetPath: target, dryRun, requestID: context.requestID });
-    const result = await services.localExecutor.execute(plan, {
-      allowedRoots: [services.paths.root],
-      managedPaths: [target],
-      backupRoot: services.paths.backupsDir,
-      db: services.db,
-      eventQueue: services.eventQueue,
-      deviceID: (await services.getDeviceInfo()).deviceID
-    });
+    const result = await executePlan(services, plan, [services.paths.root, target], [target]);
     if (!dryRun && result.status === 'success') {
       await services.lifecycleRepository.markCleaned({ extensionId, target, kind, metadata: { operation: plan.operation } });
     }
@@ -199,8 +201,11 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
     const record = assertRecord(payload, context.requestID);
     const current = JSON.parse(await readFile(services.paths.configFile, 'utf8')) as Record<string, unknown>;
     const next = sanitizeLocalConfig(record, context.requestID);
-    const saved = { ...current, ...next, updatedAt: new Date().toISOString() };
+    const saved: Record<string, unknown> = { ...current, ...next, updatedAt: new Date().toISOString() };
     await writeFile(services.paths.configFile, `${JSON.stringify(saved, null, 2)}\n`, 'utf8');
+    if (typeof saved.baseURL === 'string' && saved.baseURL) {
+      services.apiClient.setBaseURL(saved.baseURL);
+    }
     return saved;
   });
   router.register(IPC_CHANNELS.logsGetRecent, () => services.logger.recent());
@@ -218,23 +223,31 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
     const version = optionalString(record, 'version', context.requestID) ?? '1.0.0';
     const targetPath = requiredString(record, 'targetPath', context.requestID);
     const dryRun = optionalBoolean(record, 'dryRun', context.requestID) ?? true;
+    const adapter = selectAdapter(services, {
+      extensionKind: 'skill',
+      adapterId: optionalString(record, 'adapterId', context.requestID),
+      requiredCapabilities: ['controlled-install', 'symlink'],
+      requestID: context.requestID
+    });
     const decision = services.offlinePolicy.decide('extension.install', true, context.requestID);
     if (!decision.allowed) {
       throw new DesktopErrorException(decision.error ?? makeDesktopError('offline_server_authority_required', decision.reason, context.requestID));
     }
+    const detail = normalizeExtensionDetail(await services.apiClient.extensionDetail(extensionId, context.requestID), extensionId, version);
+    const packageInfo = dryRun
+      ? { packagePath: path.join(services.paths.tempDir, `${extensionId}-${version}.package`), expectedSha256: detail.packageSha256 }
+      : await downloadExtensionPackage(services, { extensionId, version, purpose: 'INSTALL', objectType: 'SKILL', expectedSha256: detail.packageSha256, requestID: context.requestID });
+    const installPlan = services.skillService.createInstallPlan({ extensionId, version, targetPath, packagePath: packageInfo.packagePath, expectedSha256: packageInfo.expectedSha256, dryRun, requestID: context.requestID });
+    const installResult = await executePlan(services, installPlan, [services.paths.root]);
     const plan = services.skillService.createEnablePlan({ extensionId, version, targetPath, dryRun, requestID: context.requestID });
-    const result = await services.localExecutor.execute(plan, {
-      allowedRoots: [services.paths.root],
-      managedPaths: [targetPath],
-      backupRoot: services.paths.backupsDir,
-      db: services.db,
-      eventQueue: services.eventQueue,
-      deviceID: (await services.getDeviceInfo()).deviceID
-    });
+    const result = installResult.status === 'success' || installResult.status === 'dry_run'
+      ? await executePlan(services, plan, [services.paths.root, targetPath], [targetPath])
+      : installResult;
     if (!dryRun && result.status === 'success') {
-      await services.lifecycleRepository.recordTarget({ extensionId, target: targetPath, status: 'enabled', metadata: { version } });
+      await services.lifecycleRepository.recordSkillInstalled({ extensionId, version, packageSha256: packageInfo.expectedSha256, name: detail.name, summary: detail.summary });
+      await services.lifecycleRepository.recordTarget({ extensionId, target: targetPath, status: 'enabled', metadata: { version, adapterId: adapter.manifest.adapterId } });
     }
-    return { plan, result };
+    return { adapter: adapter.manifest, installPlan, installResult, plan, result };
   });
 
   router.register(IPC_CHANNELS.mcpConfigure, async (payload, context) => {
@@ -243,6 +256,12 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
     const targetConfigPath = requiredString(record, 'targetConfigPath', context.requestID);
     const variables = stringMap(optionalRecord(record, 'variables', context.requestID) ?? {}, context.requestID);
     const dryRun = optionalBoolean(record, 'dryRun', context.requestID) ?? true;
+    const adapter = selectAdapter(services, {
+      extensionKind: 'mcp',
+      adapterId: optionalString(record, 'adapterId', context.requestID),
+      requiredCapabilities: ['config-write'],
+      requestID: context.requestID
+    });
     const decision = services.offlinePolicy.decide('mcp.config.write', true, context.requestID);
     if (!decision.allowed) {
       throw new DesktopErrorException(decision.error ?? makeDesktopError('offline_server_authority_required', decision.reason, context.requestID));
@@ -253,25 +272,33 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
     const output = existing
       ? await services.mcpService.createUpdatePlan({ definition, targetConfigPath, variables, previousVariablesSchema, dryRun, requestID: context.requestID })
       : await services.mcpService.createConfigWritePlan({ definition, targetConfigPath, variables, dryRun, requestID: context.requestID });
-    const result = await services.localExecutor.execute(output.plan, {
-      allowedRoots: [services.paths.root],
-      managedPaths: [targetConfigPath],
-      backupRoot: services.paths.backupsDir,
-      db: services.db,
-      eventQueue: services.eventQueue,
-      deviceID: (await services.getDeviceInfo()).deviceID
-    });
+    const result = await executePlan(services, output.plan, [services.paths.root, targetConfigPath], [targetConfigPath]);
+    const connectionTest = !dryRun && result.status === 'success' && definition.connectionTest
+      ? await services.mcpService.executeConnectionTest(definition.connectionTest, {
+        requestID: context.requestID,
+        extensionId,
+        version: definition.version,
+        deviceID: (await services.getDeviceInfo()).deviceID,
+        eventQueue: services.eventQueue
+      })
+      : undefined;
+    const rollbackPlan = !dryRun && result.status === 'success' && connectionTest && connectionTest.status !== 'reachable'
+      ? services.mcpService.createUninstallPlan({ definition, targetConfigPath, dryRun: false, requestID: context.requestID })
+      : undefined;
+    const rollbackResult = rollbackPlan
+      ? await executePlan(services, rollbackPlan, [services.paths.root, targetConfigPath], [targetConfigPath])
+      : undefined;
     if (!dryRun && result.status === 'success') {
       await services.lifecycleRepository.recordMcpInstallation({
         extensionId,
         target: targetConfigPath,
-        status: 'connected',
+        status: connectionTest && connectionTest.status !== 'reachable' ? 'connection_test_failed' : 'connected',
         configPath: targetConfigPath,
-        secureRef: Object.values(output.secretRefs)[0],
-        metadata: { version: definition.version, variableChanges: output.variableChanges, variablesSchema: definition.variablesSchema, operation: output.plan.operation }
+        secureRef: output.fullConfigRef,
+        metadata: { version: definition.version, adapterId: adapter.manifest.adapterId, managedConfigId: output.managedConfigId, secretRefs: output.secretRefs, variableChanges: output.variableChanges, variablesSchema: definition.variablesSchema, operation: output.plan.operation, connectionTest, rollbackResult }
       });
     }
-    return { definition, redactedPreview: output.redactedPreview, variableChanges: output.variableChanges, plan: output.plan, result };
+    return { adapter: adapter.manifest, definition, redactedPreview: output.redactedPreview, variableChanges: output.variableChanges, managedConfigId: output.managedConfigId, fullConfigRef: output.fullConfigRef, plan: output.plan, result, connectionTest, rollbackPlan, rollbackResult };
   });
 
   router.register(IPC_CHANNELS.mcpConnectionTest, async (payload, context) => {
@@ -294,42 +321,53 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
     const targetPath = requiredString(record, 'targetPath', context.requestID);
     const installMode = normalizePluginInstallMode(optionalString(record, 'installMode', context.requestID) ?? definition.installMode, context.requestID);
     const dryRun = optionalBoolean(record, 'dryRun', context.requestID) ?? true;
+    const operation = normalizePluginOperation(optionalString(record, 'operation', context.requestID), context.requestID);
+    const adapter = selectAdapter(services, {
+      extensionKind: 'plugin',
+      adapterId: optionalString(record, 'adapterId', context.requestID),
+      requiredCapabilities: installMode === 'CONFIG_PLUGIN' ? ['config-write'] : ['controlled-install'],
+      requestID: context.requestID
+    });
     const decision = services.offlinePolicy.decide('plugin.install', true, context.requestID);
     if (!decision.allowed) {
       throw new DesktopErrorException(decision.error ?? makeDesktopError('offline_server_authority_required', decision.reason, context.requestID));
     }
+    const shouldDownload = !dryRun && installMode !== 'CONFIG_PLUGIN' && operation !== 'uninstall' && operation !== 'mark-installed' && operation !== 'mark-uninstalled';
+    const downloaded = shouldDownload
+      ? await downloadExtensionPackage(services, {
+        extensionId,
+        version: definition.version,
+        purpose: installMode === 'MANUAL_DOWNLOAD' ? 'MANUAL_DOWNLOAD' : operation === 'update' ? 'UPDATE' : 'INSTALL',
+        objectType: 'PLUGIN',
+        expectedSha256: definition.expectedSha256,
+        requestID: context.requestID
+      })
+      : undefined;
     const plan = services.pluginService.createPlan({
       extensionId,
       version: definition.version,
       installMode,
       targetPath,
-      packagePath: optionalString(record, 'packagePath', context.requestID) ?? definition.packagePath,
-      expectedSha256: definition.expectedSha256,
-      operation: normalizePluginOperation(optionalString(record, 'operation', context.requestID), context.requestID),
+      packagePath: downloaded?.packagePath ?? optionalString(record, 'packagePath', context.requestID) ?? definition.packagePath,
+      expectedSha256: downloaded?.expectedSha256 ?? definition.expectedSha256,
+      operation,
       manifest: definition.manifest,
       manualInstructions: definition.manualInstructions,
       manualInstructionsUrl: definition.manualInstructionsUrl,
       dryRun,
       requestID: context.requestID
     });
-    const result = await services.localExecutor.execute(plan, {
-      allowedRoots: [services.paths.root],
-      managedPaths: [targetPath],
-      backupRoot: services.paths.backupsDir,
-      db: services.db,
-      eventQueue: services.eventQueue,
-      deviceID: (await services.getDeviceInfo()).deviceID
-    });
+    const result = await executePlan(services, plan, [services.paths.root, targetPath], [targetPath]);
     if (!dryRun && result.status === 'success') {
       await services.lifecycleRepository.recordPluginInstallation({
         extensionId,
         target: targetPath,
-        status: 'installed',
-        adapterId: installMode,
-        metadata: { version: definition.version, operation: plan.operation }
+        status: pluginLifecycleStatus(installMode, operation),
+        adapterId: adapter.manifest.adapterId,
+        metadata: { version: definition.version, installMode, operation: plan.operation, downloadedPackagePath: downloaded?.packagePath, expectedSha256: downloaded?.expectedSha256 }
       });
     }
-    return { definition, plan, result };
+    return { adapter: adapter.manifest, definition, download: downloaded, plan, result };
   });
 
   router.register(IPC_CHANNELS.publishUploadPackage, (payload, context) => {
@@ -430,13 +468,13 @@ function normalizePluginDefinition(value: unknown, fallbackExtensionId: string):
   packagePath?: string;
   expectedSha256?: string;
   operation?: string;
-  manifest?: { actions?: Array<{ action: string; source?: string; target?: string; content?: string }> };
+  manifest?: { actions?: Array<{ action: string; source?: string; target?: string; content?: string; expectedSha256?: string }> };
   manualInstructions?: string;
   manualInstructionsUrl?: string;
 } {
   const record = assertRecord(value, undefined);
   const manifest = record.manifest && typeof record.manifest === 'object' && !Array.isArray(record.manifest)
-    ? record.manifest as { actions?: Array<{ action: string; source?: string; target?: string; content?: string }> }
+    ? record.manifest as { actions?: Array<{ action: string; source?: string; target?: string; content?: string; expectedSha256?: string }> }
     : undefined;
   return {
     extensionId: stringValue(record.extensionId ?? record.extensionID, fallbackExtensionId),
@@ -525,4 +563,91 @@ function stringValue(value: unknown, fallback: string): string {
 
 function stringValueOrUndefined(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+async function executePlan(services: DesktopIpcServices, plan: ExecutionPlan, allowedRoots: string[], managedPaths: string[] = []) {
+  return services.localExecutor.execute(plan, {
+    allowedRoots: uniquePaths(allowedRoots),
+    managedPaths: uniquePaths(managedPaths),
+    backupRoot: services.paths.backupsDir,
+    db: services.db,
+    eventQueue: services.eventQueue,
+    deviceID: (await services.getDeviceInfo()).deviceID
+  });
+}
+
+async function downloadExtensionPackage(
+  services: DesktopIpcServices,
+  input: {
+    extensionId: string;
+    version: string;
+    purpose: 'INSTALL' | 'UPDATE' | 'MANUAL_DOWNLOAD';
+    objectType: 'SKILL' | 'PLUGIN';
+    expectedSha256?: string;
+    requestID?: string;
+  }
+): Promise<{ packagePath: string; expectedSha256?: string; fileName: string }> {
+  const idempotencyKey = `download:${input.extensionId}:${input.version}:${input.purpose}`;
+  const ticket = await services.apiClient.createDownloadTicket({
+    extensionID: input.extensionId,
+    version: input.version,
+    purpose: input.purpose,
+    objectType: input.objectType
+  }, input.requestID, idempotencyKey);
+  if (!ticket.ticket) {
+    throw new DesktopErrorException(makeDesktopError('download_ticket_required', 'Server did not return a download ticket', input.requestID));
+  }
+  const expectedSha256 = ticket.sha256 ?? ticket.packageSha256 ?? input.expectedSha256;
+  const fileName = ticket.fileName ?? `${input.extensionId}-${input.version}.pkg`;
+  const packagePath = await services.packageDownloadService.downloadAndVerify({
+    ticket: ticket.ticket,
+    fileName,
+    expectedSha256,
+    requestID: input.requestID
+  });
+  return { packagePath, expectedSha256, fileName };
+}
+
+function selectAdapter(
+  services: DesktopIpcServices,
+  input: { extensionKind: ExtensionKind; adapterId?: string; requiredCapabilities: AdapterCapability[]; requestID?: string }
+): ToolAdapter {
+  const matches = services.adapterRegistry.match({
+    extensionKind: input.extensionKind,
+    requiredCapabilities: input.requiredCapabilities,
+    platform: process.platform
+  });
+  const selected = input.adapterId ? matches.find((adapter) => adapter.manifest.adapterId === input.adapterId) : matches[0];
+  if (!selected) {
+    throw new DesktopErrorException(makeDesktopError('tool_not_detected', services.adapterRegistry.explainNoMatch({
+      extensionKind: input.extensionKind,
+      requiredCapabilities: input.requiredCapabilities,
+      platform: process.platform
+    }), input.requestID, { adapterId: input.adapterId }));
+  }
+  return selected;
+}
+
+function normalizeExtensionDetail(value: unknown, fallbackExtensionId: string, fallbackVersion: string): { name?: string; summary?: string; packageSha256?: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const record = value as Record<string, unknown>;
+  const packageSha256 = stringValueOrUndefined(record.packageSha256 ?? record.sha256 ?? record.hash);
+  return {
+    name: stringValueOrUndefined(record.name ?? record.displayName ?? record.extensionName) ?? fallbackExtensionId,
+    summary: stringValueOrUndefined(record.summary ?? record.description),
+    packageSha256: packageSha256 ?? stringValueOrUndefined(record[`${fallbackVersion}:sha256`])
+  };
+}
+
+function pluginLifecycleStatus(installMode: PluginInstallMode, operation: ReturnType<typeof normalizePluginOperation>): string {
+  if (operation === 'mark-installed') return 'installed';
+  if (operation === 'mark-uninstalled') return 'manual_uninstalled';
+  if (operation === 'uninstall') return 'uninstalled';
+  if (installMode === 'MANUAL_DOWNLOAD') return 'downloaded';
+  if (installMode === 'CONFIG_PLUGIN') return 'configured';
+  return 'installed';
+}
+
+function uniquePaths(paths: string[]): string[] {
+  return [...new Set(paths.filter(Boolean).map((item) => path.resolve(item)))];
 }
