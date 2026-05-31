@@ -144,7 +144,7 @@ describe('IPC router and preload API', () => {
           return new Response(JSON.stringify({ success: true, data: { extensionId: 'skill-contract', version: '1.0.0', name: 'Skill Contract', packageSha256: sha256 } }), { status: 200 });
         }
         if (url.endsWith('/api/download-tickets')) {
-          expect(JSON.parse(String(init?.body))).toMatchObject({ extensionID: 'skill-contract', extensionId: 'skill-contract', version: '1.0.0', purpose: 'INSTALL', objectType: 'SKILL' });
+          expect(JSON.parse(String(init?.body))).toMatchObject({ extensionID: 'skill-contract', extensionId: 'skill-contract', version: '1.0.0', purpose: 'INSTALL', objectType: 'EXTENSION_PACKAGE' });
           expect((init?.headers as Record<string, string>)['Idempotency-Key']).toBe('download:skill-contract:1.0.0:INSTALL');
           return new Response(JSON.stringify({ success: true, data: { ticket: 'ticket-skill', fileName: 'skill-contract.pkg', sha256 } }), { status: 200 });
         }
@@ -203,7 +203,7 @@ describe('IPC router and preload API', () => {
           }), { status: 200 });
         }
         if (url.endsWith('/api/download-tickets')) {
-          expect(JSON.parse(String(init?.body))).toMatchObject({ extensionID: 'plugin-manual', purpose: 'MANUAL_DOWNLOAD', objectType: 'PLUGIN' });
+          expect(JSON.parse(String(init?.body))).toMatchObject({ extensionID: 'plugin-manual', purpose: 'MANUAL_DOWNLOAD', objectType: 'EXTERNAL_PLUGIN_FILE' });
           return new Response(JSON.stringify({ success: true, data: { ticket: 'ticket-plugin', fileName: 'plugin.pkg', sha256 } }), { status: 200 });
         }
         if (url.endsWith('/api/download-tickets/ticket-plugin/download')) {

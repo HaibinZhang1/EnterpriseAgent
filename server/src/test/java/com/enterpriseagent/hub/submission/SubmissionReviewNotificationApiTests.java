@@ -262,6 +262,47 @@ class SubmissionReviewNotificationApiTests extends PostgresIntegrationTestBase {
                 .andExpect(jsonPath("$.error.code").value("permission_denied"));
     }
 
+    @Test
+    void crossDepartmentAuthorizationScopeRoutesToSystemReview() throws Exception {
+        Department ownerDepartment = departmentRepository.save(new Department("owner" + uniqueDigits(), ROOT_DEPARTMENT_ID));
+        Department otherDepartment = departmentRepository.save(new Department("other" + uniqueDigits(), ROOT_DEPARTMENT_ID));
+        User submitter = createUser("136" + uniqueDigits(), Role.NORMAL_USER, ownerDepartment.getId());
+        User ownerAdmin = createUser("136" + uniqueDigits(), Role.DEPARTMENT_ADMIN, ownerDepartment.getId());
+        String submitterToken = login(submitter.getPhone(), "Temp#123456", "DESKTOP");
+        String ownerAdminToken = login(ownerAdmin.getPhone(), "Temp#123456", "ADMIN_WEB");
+        String systemAdminToken = login("13800000000", "Admin#123456", "ADMIN_WEB");
+        String extensionId = "cross-scope-skill-" + uniqueDigits();
+        String scope = """
+                {"scopeType":"SELECTED_DEPARTMENTS","departments":[{"departmentId":"%s","includeChildren":false}]}
+                """.formatted(otherDepartment.getId());
+        String body = submissionBody(extensionId, "{}", uploadRefs(submitterToken, extensionId))
+                .replace("{\"scopeType\":\"ALL_EMPLOYEES\",\"departments\":[]}", scope);
+        String create = mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + submitterToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String submissionId = extract(create, "submissionId");
+
+        assertThat(jdbc.queryForObject("select review_owner_type from submissions where id = ?",
+                String.class, UUID.fromString(submissionId))).isEqualTo("SYSTEM_ADMIN");
+        mockMvc.perform(get("/api/reviews/tasks/" + submissionId).header("Authorization", "Bearer " + ownerAdminToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("permission_denied"));
+        String ownerTasks = mockMvc.perform(get("/api/reviews/tasks")
+                        .header("Authorization", "Bearer " + ownerAdminToken))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(ownerTasks).doesNotContain(submissionId);
+        String systemTasks = mockMvc.perform(get("/api/reviews/tasks")
+                        .header("Authorization", "Bearer " + systemAdminToken))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(systemTasks).contains(submissionId);
+    }
+
 
     @Test
     void checklistCompatibilityAliasesSupportMineResubmitAndSplitReviewDecisions() throws Exception {

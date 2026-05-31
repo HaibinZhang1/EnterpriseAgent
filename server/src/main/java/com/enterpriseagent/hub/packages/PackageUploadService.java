@@ -204,20 +204,34 @@ public class PackageUploadService {
         Path finalPath = storageService.moveTempToFinal(tempPath, UploadType.valueOf(String.valueOf(upload.get("upload_type"))),
                 extensionId, version, String.valueOf(upload.get("sha256")), String.valueOf(upload.get("original_filename")));
         jdbc.update("update temp_uploads set status = 'CONSUMED', consumed_at = now() where id = ?", tempUploadId);
+        String objectType = submissionObjectType(extensionType, upload);
         jdbc.update("""
                 update package_objects
-                   set object_type = 'EXTENSION_PACKAGE',
+                   set object_type = ?,
                        extension_business_id = ?,
                        version = ?,
                        storage_path = ?
                  where id = ? and object_type = 'TEMP_UPLOAD'
-                """, extensionId, version, finalPath.toString(), tempUploadId);
+                """, objectType, extensionId, version, finalPath.toString(), tempUploadId);
         try {
             Files.deleteIfExists(tempPath);
         } catch (IOException ignored) {
             // Temp DB state is authoritative; cleanup can be retried by maintenance.
         }
-        return packageSnapshot(tempUploadId, upload, extensionType, extensionId, version, finalPath.toString());
+        return packageSnapshot(tempUploadId, upload, extensionType, extensionId, version, finalPath.toString(), objectType);
+    }
+
+    private String submissionObjectType(ExtensionType extensionType, Map<String, Object> upload) {
+        if (extensionType != ExtensionType.PLUGIN) {
+            return "EXTENSION_PACKAGE";
+        }
+        Map<String, Object> precheck = json.readMap(String.valueOf(upload.get("precheck_result")));
+        Object definitionValue = precheck.get("definition");
+        if (definitionValue instanceof Map<?, ?> definition
+                && "MANUAL_DOWNLOAD".equals(String.valueOf(definition.get("installMode")))) {
+            return "EXTERNAL_PLUGIN_FILE";
+        }
+        return "EXTENSION_PACKAGE";
     }
 
     private Map<String, Object> packageSummary(UUID packageId) {
@@ -235,10 +249,11 @@ public class PackageUploadService {
     }
 
     private String packageSnapshot(UUID packageId, Map<String, Object> upload, ExtensionType extensionType,
-            String extensionId, String version, String finalPath) {
+            String extensionId, String version, String finalPath, String objectType) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("mode", "PACKAGE_OBJECT");
         data.put("packageStorageStatus", "CONSUMED");
+        data.put("objectType", objectType);
         data.put("packageId", packageId);
         data.put("extensionType", extensionType.name());
         data.put("extensionId", extensionId);

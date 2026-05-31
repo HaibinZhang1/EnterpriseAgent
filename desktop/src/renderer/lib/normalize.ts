@@ -14,9 +14,9 @@ export function normalizeSessionUser(value: unknown): SessionUser | undefined {
 
 export function normalizeCatalogHome(value: unknown): CatalogHome {
   const record = isRecord(value) ? value : {};
-  const skills = normalizeMany(firstArray(record.skills, record.skillRankings, record.skillList), 'skill');
-  const mcps = normalizeMany(firstArray(record.mcps, record.mcpServers, record.mcpRankings), 'mcp');
-  const plugins = normalizeMany(firstArray(record.plugins, record.pluginRankings, record.pluginList), 'plugin');
+  const skills = normalizeMany(firstArray(record.skills, record.skillRankings, record.skillList, bucketItems(record.skill)), 'skill');
+  const mcps = normalizeMany(firstArray(record.mcps, record.mcpServers, record.mcpRankings, bucketItems(record.mcpServer), bucketItems(record.mcp)), 'mcp');
+  const plugins = normalizeMany(firstArray(record.plugins, record.pluginRankings, record.pluginList, bucketItems(record.plugin)), 'plugin');
   return {
     skills,
     mcps,
@@ -163,6 +163,20 @@ function firstArray(...values: unknown[]): unknown[] {
     if (Array.isArray(value)) return value;
   }
   return [];
+}
+
+function bucketItems(value: unknown): unknown[] | undefined {
+  if (!isRecord(value)) return undefined;
+  const keys = ['hot', 'star', 'stars', 'download', 'downloads', 'usage', 'metric', 'items'];
+  for (const key of keys) {
+    const items = value[key];
+    if (Array.isArray(items) && items.length > 0) return items;
+  }
+  for (const key of keys) {
+    const items = value[key];
+    if (Array.isArray(items)) return items;
+  }
+  return undefined;
 }
 
 function arrayOfString(value: unknown): string[] {

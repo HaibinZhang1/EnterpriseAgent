@@ -2,6 +2,8 @@ package com.enterpriseagent.hub.submission;
 
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -13,6 +15,11 @@ import com.enterpriseagent.hub.extension.ScopeType;
 
 @Service
 public class RulePrecheckService {
+    private static final Pattern SEMVER_PATTERN = Pattern.compile(
+            "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)"
+                    + "(?:-([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?"
+                    + "(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$");
+
     private final JdbcTemplate jdbc;
 
     public RulePrecheckService(JdbcTemplate jdbc) {
@@ -34,7 +41,7 @@ public class RulePrecheckService {
         if (!request.extensionId().matches("^[a-z0-9][a-z0-9-]{1,126}[a-z0-9]$")) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "Extension ID 格式不合法");
         }
-        if (!StringUtils.hasText(request.version()) || !request.version().matches("^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$")) {
+        if (SemVer.parse(request.version()) == null) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "版本号必须为 SemVer");
         }
         validateExtensionState(request, currentSubmissionId);
@@ -101,17 +108,96 @@ public class RulePrecheckService {
     }
 
     private int compareSemVer(String left, String right) {
-        if (!StringUtils.hasText(right)) {
+        SemVer leftVersion = SemVer.parse(left);
+        SemVer rightVersion = SemVer.parse(right);
+        if (rightVersion == null) {
             return 1;
         }
-        String[] leftParts = left.split("-", 2)[0].split("\\.");
-        String[] rightParts = right.split("-", 2)[0].split("\\.");
-        for (int index = 0; index < 3; index++) {
-            int comparison = Integer.compare(Integer.parseInt(leftParts[index]), Integer.parseInt(rightParts[index]));
-            if (comparison != 0) {
-                return comparison;
-            }
+        if (leftVersion == null) {
+            return -1;
         }
-        return left.compareTo(right);
+        return leftVersion.compareTo(rightVersion);
+    }
+
+    private record SemVer(int major, int minor, int patch, String preRelease) implements Comparable<SemVer> {
+        static SemVer parse(String value) {
+            if (!StringUtils.hasText(value)) {
+                return null;
+            }
+            Matcher matcher = SEMVER_PATTERN.matcher(value.trim());
+            if (!matcher.matches()) {
+                return null;
+            }
+            String preRelease = matcher.group(4);
+            if (preRelease != null) {
+                for (String identifier : preRelease.split("\\.")) {
+                    if (isNumeric(identifier) && identifier.length() > 1 && identifier.startsWith("0")) {
+                        return null;
+                    }
+                }
+            }
+            return new SemVer(Integer.parseInt(matcher.group(1)), Integer.parseInt(matcher.group(2)),
+                    Integer.parseInt(matcher.group(3)), preRelease);
+        }
+
+        @Override
+        public int compareTo(SemVer other) {
+            int core = compareCore(other);
+            if (core != 0) {
+                return core;
+            }
+            if (preRelease == null && other.preRelease == null) {
+                return 0;
+            }
+            if (preRelease == null) {
+                return 1;
+            }
+            if (other.preRelease == null) {
+                return -1;
+            }
+            return comparePreRelease(preRelease, other.preRelease);
+        }
+
+        private int compareCore(SemVer other) {
+            int majorComparison = Integer.compare(major, other.major);
+            if (majorComparison != 0) {
+                return majorComparison;
+            }
+            int minorComparison = Integer.compare(minor, other.minor);
+            if (minorComparison != 0) {
+                return minorComparison;
+            }
+            return Integer.compare(patch, other.patch);
+        }
+
+        private static int comparePreRelease(String left, String right) {
+            String[] leftParts = left.split("\\.");
+            String[] rightParts = right.split("\\.");
+            int count = Math.min(leftParts.length, rightParts.length);
+            for (int index = 0; index < count; index++) {
+                String leftPart = leftParts[index];
+                String rightPart = rightParts[index];
+                boolean leftNumeric = isNumeric(leftPart);
+                boolean rightNumeric = isNumeric(rightPart);
+                if (leftNumeric && rightNumeric) {
+                    int comparison = Integer.compare(Integer.parseInt(leftPart), Integer.parseInt(rightPart));
+                    if (comparison != 0) {
+                        return comparison;
+                    }
+                } else if (leftNumeric != rightNumeric) {
+                    return leftNumeric ? -1 : 1;
+                } else {
+                    int comparison = leftPart.compareTo(rightPart);
+                    if (comparison != 0) {
+                        return comparison;
+                    }
+                }
+            }
+            return Integer.compare(leftParts.length, rightParts.length);
+        }
+
+        private static boolean isNumeric(String value) {
+            return value.chars().allMatch(Character::isDigit);
+        }
     }
 }

@@ -236,7 +236,7 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
     const detail = normalizeExtensionDetail(await services.apiClient.extensionDetail(extensionId, context.requestID), extensionId, version);
     const packageInfo = dryRun
       ? { packagePath: path.join(services.paths.tempDir, `${extensionId}-${version}.package`), expectedSha256: detail.packageSha256 }
-      : await downloadExtensionPackage(services, { extensionId, version, purpose: 'INSTALL', objectType: 'SKILL', expectedSha256: detail.packageSha256, requestID: context.requestID });
+      : await downloadExtensionPackage(services, { extensionId, version, purpose: 'INSTALL', expectedSha256: detail.packageSha256, requestID: context.requestID });
     const installPlan = services.skillService.createInstallPlan({ extensionId, version, targetPath, packagePath: packageInfo.packagePath, expectedSha256: packageInfo.expectedSha256, dryRun, requestID: context.requestID });
     const installResult = await executePlan(services, installPlan, [services.paths.root]);
     const plan = services.skillService.createEnablePlan({ extensionId, version, targetPath, dryRun, requestID: context.requestID });
@@ -338,7 +338,6 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
         extensionId,
         version: definition.version,
         purpose: installMode === 'MANUAL_DOWNLOAD' ? 'MANUAL_DOWNLOAD' : operation === 'update' ? 'UPDATE' : 'INSTALL',
-        objectType: 'PLUGIN',
         expectedSha256: definition.expectedSha256,
         requestID: context.requestID
       })
@@ -582,7 +581,6 @@ async function downloadExtensionPackage(
     extensionId: string;
     version: string;
     purpose: 'INSTALL' | 'UPDATE' | 'MANUAL_DOWNLOAD';
-    objectType: 'SKILL' | 'PLUGIN';
     expectedSha256?: string;
     requestID?: string;
   }
@@ -592,7 +590,7 @@ async function downloadExtensionPackage(
     extensionID: input.extensionId,
     version: input.version,
     purpose: input.purpose,
-    objectType: input.objectType
+    objectType: input.purpose === 'MANUAL_DOWNLOAD' ? 'EXTERNAL_PLUGIN_FILE' : 'EXTENSION_PACKAGE'
   }, input.requestID, idempotencyKey);
   if (!ticket.ticket) {
     throw new DesktopErrorException(makeDesktopError('download_ticket_required', 'Server did not return a download ticket', input.requestID));

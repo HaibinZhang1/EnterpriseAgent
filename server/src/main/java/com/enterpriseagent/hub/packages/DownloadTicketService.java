@@ -218,11 +218,17 @@ public class DownloadTicketService {
     }
 
     private Map<String, Object> resolvePackage(CurrentUser actor, DownloadTicketRequest request) {
-        if (request.objectType() != DownloadObjectType.EXTENSION_PACKAGE && request.objectType() != DownloadObjectType.REVIEW_PREVIEW) {
+        if (request.objectType() != DownloadObjectType.EXTENSION_PACKAGE
+                && request.objectType() != DownloadObjectType.EXTERNAL_PLUGIN_FILE
+                && request.objectType() != DownloadObjectType.REVIEW_PREVIEW) {
             throw new BusinessException(ErrorCode.DOWNLOAD_PURPOSE_INVALID, "M5 不支持该下载对象类型");
         }
         if (request.objectId() != null) {
             Map<String, Object> row = requirePackageObject(request.objectId());
+            if (request.objectType() != DownloadObjectType.REVIEW_PREVIEW
+                    && !request.objectType().name().equals(String.valueOf(row.get("object_type")))) {
+                throw new BusinessException(ErrorCode.DOWNLOAD_PURPOSE_INVALID, "下载对象类型与包类型不匹配");
+            }
             if (request.objectType() == DownloadObjectType.REVIEW_PREVIEW && !actor.isAdmin()) {
                 throw new BusinessException(ErrorCode.PERMISSION_DENIED, "仅审核/管理角色可申请预览下载");
             }
@@ -243,11 +249,13 @@ public class DownloadTicketService {
         Map<String, Object> extension = requireExtensionByBusinessId(request.extensionId());
         requireExtensionDownloadAllowed(actor, (UUID) extension.get("id"));
         String version = StringUtils.hasText(request.version()) ? request.version() : String.valueOf(extension.get("current_version"));
+        String packageObjectType = request.objectType() == DownloadObjectType.EXTERNAL_PLUGIN_FILE
+                ? "EXTERNAL_PLUGIN_FILE" : "EXTENSION_PACKAGE";
         var rows = jdbc.queryForList("""
                 select po.* from package_objects po
-                 where po.extension_pk = ? and po.version = ? and po.object_type = 'EXTENSION_PACKAGE'
+                 where po.extension_pk = ? and po.version = ? and po.object_type = ?
                  order by po.created_at desc limit 1
-                """, extension.get("id"), version);
+                """, extension.get("id"), version, packageObjectType);
         if (rows.isEmpty()) {
             throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "扩展版本包不存在");
         }
@@ -263,6 +271,13 @@ public class DownloadTicketService {
         }
         if (request.purpose() == DownloadPurpose.MANUAL_DOWNLOAD && request.objectType() != DownloadObjectType.EXTERNAL_PLUGIN_FILE) {
             throw new BusinessException(ErrorCode.DOWNLOAD_PURPOSE_INVALID, "手动下载目的与对象类型不匹配");
+        }
+        if ((request.purpose() == DownloadPurpose.INSTALL || request.purpose() == DownloadPurpose.UPDATE)
+                && request.objectType() != DownloadObjectType.EXTENSION_PACKAGE) {
+            throw new BusinessException(ErrorCode.DOWNLOAD_PURPOSE_INVALID, "安装或更新目的与对象类型不匹配");
+        }
+        if (request.purpose() == DownloadPurpose.REVIEW_PREVIEW && request.objectType() != DownloadObjectType.REVIEW_PREVIEW) {
+            throw new BusinessException(ErrorCode.DOWNLOAD_PURPOSE_INVALID, "审核预览目的与对象类型不匹配");
         }
     }
 

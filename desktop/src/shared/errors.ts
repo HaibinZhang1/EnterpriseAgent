@@ -17,6 +17,7 @@ export type DesktopErrorCode =
   | 'download_ticket_required'
   | 'download_ticket_expired'
   | 'download_ticket_used'
+  | 'download_purpose_invalid'
   | 'download_ticket_purpose_invalid'
   | 'download_failed'
   | 'local_hash_mismatch'

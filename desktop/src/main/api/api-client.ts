@@ -89,7 +89,7 @@ export interface DownloadTicketRequest {
   extensionID: string;
   version: string;
   purpose: DownloadTicketPurpose;
-  objectType?: 'SKILL' | 'MCP' | 'PLUGIN' | 'EXTENSION_PACKAGE';
+  objectType?: 'EXTENSION_PACKAGE' | 'EXTERNAL_PLUGIN_FILE';
 }
 
 export interface DownloadTicketResponse {
@@ -398,6 +398,7 @@ function toDesktopErrorCode(code: string): DesktopErrorCode {
     'download_ticket_required',
     'download_ticket_expired',
     'download_ticket_used',
+    'download_purpose_invalid',
     'download_ticket_purpose_invalid',
     'signature_invalid',
     'signature_verify_failed',

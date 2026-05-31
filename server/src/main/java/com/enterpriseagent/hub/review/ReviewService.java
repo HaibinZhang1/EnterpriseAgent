@@ -18,6 +18,7 @@ import com.enterpriseagent.hub.common.error.ErrorCode;
 import com.enterpriseagent.hub.common.pagination.PageResult;
 import com.enterpriseagent.hub.extension.ExtensionJson;
 import com.enterpriseagent.hub.organization.DepartmentTreeService;
+import com.enterpriseagent.hub.submission.AuthorizationScopeReviewPolicy;
 import com.enterpriseagent.hub.submission.SubmissionService;
 
 @Service
@@ -27,14 +28,17 @@ public class ReviewService {
     private final ExtensionJson json;
     private final AuditService auditService;
     private final DepartmentTreeService departmentTreeService;
+    private final AuthorizationScopeReviewPolicy scopeReviewPolicy;
 
     public ReviewService(JdbcTemplate jdbc, SubmissionService submissionService, ExtensionJson json,
-            AuditService auditService, DepartmentTreeService departmentTreeService) {
+            AuditService auditService, DepartmentTreeService departmentTreeService,
+            AuthorizationScopeReviewPolicy scopeReviewPolicy) {
         this.jdbc = jdbc;
         this.submissionService = submissionService;
         this.json = json;
         this.auditService = auditService;
         this.departmentTreeService = departmentTreeService;
+        this.scopeReviewPolicy = scopeReviewPolicy;
     }
 
     @Transactional(readOnly = true)
@@ -405,6 +409,9 @@ public class ReviewService {
     }
 
     private boolean canReview(CurrentUser actor, Map<String, Object> submission) {
+        if (actor.id().equals(submission.get("submitter_id"))) {
+            return false;
+        }
         if (actor.isSystemAdmin()) {
             return true;
         }
@@ -413,7 +420,22 @@ public class ReviewService {
         }
         Object ownerDepartment = submission.get("review_owner_department_id");
         return ownerDepartment instanceof UUID departmentId
-                && departmentTreeService.isSelfOrDescendant(actor.departmentId(), departmentId);
+                && departmentTreeService.isSelfOrDescendant(actor.departmentId(), departmentId)
+                && scopeReviewPolicy.canDepartmentReviewScope(actor.departmentId(), currentAuthorizationScope(submission),
+                        (UUID) submission.get("submitter_department_id"));
+    }
+
+    private Map<String, Object> currentAuthorizationScope(Map<String, Object> submission) {
+        var rows = jdbc.queryForList("""
+                select payload_snapshot::text as payload_snapshot
+                from submission_revisions where id = ?
+                """, submission.get("current_revision_id"));
+        if (rows.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> envelope = json.readMap((String) rows.get(0).get("payload_snapshot"));
+        Map<String, Object> payload = asStringKeyMap(envelope.get("data"));
+        return asStringKeyMap(payload.get("authorizationScope"));
     }
 
     private void requireAdmin(CurrentUser actor) {

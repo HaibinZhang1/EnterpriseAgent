@@ -148,11 +148,11 @@ describe('ApiClient', () => {
       extensionID: 'skill.one',
       version: '1.0.0',
       purpose: 'INSTALL',
-      objectType: 'SKILL'
+      objectType: 'EXTENSION_PACKAGE'
     }, 'req_ticket', 'idem-ticket')).resolves.toMatchObject({ ticket: 'ticket-install' });
     expect(calls[0].url).toBe('http://server.test/api/download-tickets');
     expect((calls[0].init.headers as Record<string, string>)['Idempotency-Key']).toBe('idem-ticket');
-    expect(JSON.parse(calls[0].init.body as string)).toMatchObject({ extensionID: 'skill.one', extensionId: 'skill.one', purpose: 'INSTALL', objectType: 'SKILL' });
+    expect(JSON.parse(calls[0].init.body as string)).toMatchObject({ extensionID: 'skill.one', extensionId: 'skill.one', purpose: 'INSTALL', objectType: 'EXTENSION_PACKAGE' });
 
     const retryableClient = new ApiClient({
       baseURL: 'http://server.test',

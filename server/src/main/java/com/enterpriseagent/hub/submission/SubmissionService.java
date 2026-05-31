@@ -17,7 +17,6 @@ import com.enterpriseagent.hub.common.error.BusinessException;
 import com.enterpriseagent.hub.common.error.ErrorCode;
 import com.enterpriseagent.hub.common.pagination.PageResult;
 import com.enterpriseagent.hub.extension.ExtensionJson;
-import com.enterpriseagent.hub.extension.ScopeType;
 import com.enterpriseagent.hub.organization.DepartmentTreeService;
 import com.enterpriseagent.hub.packages.PackageUploadService;
 
@@ -31,10 +30,12 @@ public class SubmissionService {
     private final AuditService auditService;
     private final DepartmentTreeService departmentTreeService;
     private final PackageUploadService packageUploadService;
+    private final AuthorizationScopeReviewPolicy scopeReviewPolicy;
 
     public SubmissionService(JdbcTemplate jdbc, SnapshotService snapshots, RulePrecheckService rulePrecheckService,
             AiPrecheckService aiPrecheckService, ExtensionJson json, AuditService auditService,
-            DepartmentTreeService departmentTreeService, PackageUploadService packageUploadService) {
+            DepartmentTreeService departmentTreeService, PackageUploadService packageUploadService,
+            AuthorizationScopeReviewPolicy scopeReviewPolicy) {
         this.jdbc = jdbc;
         this.snapshots = snapshots;
         this.rulePrecheckService = rulePrecheckService;
@@ -43,6 +44,7 @@ public class SubmissionService {
         this.auditService = auditService;
         this.departmentTreeService = departmentTreeService;
         this.packageUploadService = packageUploadService;
+        this.scopeReviewPolicy = scopeReviewPolicy;
     }
 
     @Transactional
@@ -54,8 +56,8 @@ public class SubmissionService {
                 request.version(), request.uploadRefs());
         UUID submissionId = UUID.randomUUID();
         UUID revisionId = UUID.randomUUID();
-        String ownerType = ownerType(request);
-        UUID ownerDepartmentId = "SYSTEM_ADMIN".equals(ownerType) ? null : actor.departmentId();
+        String ownerType = scopeReviewPolicy.reviewOwnerType(request.authorizationScope(), actor.departmentId());
+        UUID ownerDepartmentId = "DEPARTMENT_ADMIN".equals(ownerType) ? actor.departmentId() : null;
         jdbc.update("""
                 insert into submissions (id, type, extension_type, target_extension_id, submitter_id,
                   submitter_department_id, status, review_owner_type, review_owner_department_id, current_revision_id)
@@ -123,6 +125,10 @@ public class SubmissionService {
         AiPrecheckService.Result aiResult = aiPrecheckService.precheck(request);
         String packageSnapshot = packageUploadService.consumeForSubmission(actor, request.extensionType(), request.extensionId(),
                 request.version(), request.uploadRefs());
+        String ownerType = scopeReviewPolicy.reviewOwnerType(request.authorizationScope(),
+                (UUID) submission.get("submitter_department_id"));
+        UUID ownerDepartmentId = "DEPARTMENT_ADMIN".equals(ownerType)
+                ? (UUID) submission.get("submitter_department_id") : null;
         Integer nextRevision = jdbc.queryForObject("""
                 select coalesce(max(revision_no), 0) + 1 from submission_revisions where submission_id = ?
                 """, Integer.class, submissionId);
@@ -132,8 +138,15 @@ public class SubmissionService {
                 values (?, ?, ?, ?::jsonb, ?::jsonb, ?)
                 """, revisionId, submissionId, nextRevision, snapshots.envelope("submission", payload(request)),
                 packageSnapshot, actor.id());
-        jdbc.update("update submissions set status = 'PENDING_REVIEW', current_revision_id = ?, updated_at = now() where id = ?",
-                revisionId, submissionId);
+        jdbc.update("""
+                update submissions
+                   set status = 'PENDING_REVIEW',
+                       review_owner_type = ?,
+                       review_owner_department_id = ?,
+                       current_revision_id = ?,
+                       updated_at = now()
+                 where id = ?
+                """, ownerType, ownerDepartmentId, revisionId, submissionId);
         jdbc.update("""
                 insert into system_prechecks (id, submission_id, revision_id, rule_status, rule_result,
                   ai_status, ai_result_summary, ai_model, ai_prompt_version)
@@ -144,7 +157,7 @@ public class SubmissionService {
         audit(actor, "submission.revise", submissionId, String.valueOf(submission.get("target_extension_id")),
                 Map.of("revisionNo", nextRevision));
         insertReviewerNotificationOutbox(submissionId, String.valueOf(submission.get("target_extension_id")),
-                String.valueOf(submission.get("review_owner_type")), (UUID) submission.get("review_owner_department_id"));
+                ownerType, ownerDepartmentId);
         return Map.of("submissionId", submissionId, "revisionId", revisionId, "revisionNo", nextRevision,
                 "status", "PENDING_REVIEW", "displayStatus", "待审核");
     }
@@ -227,14 +240,6 @@ public class SubmissionService {
         return payload;
     }
 
-    private String ownerType(SubmissionRequest request) {
-        Object scope = request.authorizationScope() == null ? null : request.authorizationScope().get("scopeType");
-        if (ScopeType.ALL_EMPLOYEES.name().equals(String.valueOf(scope))) {
-            return "SYSTEM_ADMIN";
-        }
-        return "DEPARTMENT_ADMIN";
-    }
-
     private boolean canManageSubmission(CurrentUser actor, Map<String, Object> submission) {
         if (actor.isSystemAdmin()) {
             return true;
@@ -244,7 +249,31 @@ public class SubmissionService {
         }
         Object ownerDepartment = submission.get("review_owner_department_id");
         return ownerDepartment instanceof UUID departmentId
-                && departmentTreeService.isSelfOrDescendant(actor.departmentId(), departmentId);
+                && departmentTreeService.isSelfOrDescendant(actor.departmentId(), departmentId)
+                && scopeReviewPolicy.canDepartmentReviewScope(actor.departmentId(), currentAuthorizationScope(submission),
+                        (UUID) submission.get("submitter_department_id"));
+    }
+
+    private Map<String, Object> currentAuthorizationScope(Map<String, Object> submission) {
+        var rows = jdbc.queryForList("""
+                select payload_snapshot::text as payload_snapshot
+                from submission_revisions where id = ?
+                """, submission.get("current_revision_id"));
+        if (rows.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> envelope = json.readMap((String) rows.get(0).get("payload_snapshot"));
+        Map<String, Object> payload = asStringKeyMap(envelope.get("data"));
+        return asStringKeyMap(payload.get("authorizationScope"));
+    }
+
+    private Map<String, Object> asStringKeyMap(Object value) {
+        if (!(value instanceof Map<?, ?> map)) {
+            return Map.of();
+        }
+        Map<String, Object> output = new LinkedHashMap<>();
+        map.forEach((key, mapValue) -> output.put(String.valueOf(key), mapValue));
+        return output;
     }
 
 

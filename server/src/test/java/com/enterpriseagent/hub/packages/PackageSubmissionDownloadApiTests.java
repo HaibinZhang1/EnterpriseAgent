@@ -182,6 +182,63 @@ class PackageSubmissionDownloadApiTests extends PostgresIntegrationTestBase {
     }
 
     @Test
+    void manualPluginDownloadsUseExternalPluginFileTickets() throws Exception {
+        User user = createUser("136" + uniqueDigits(), Role.NORMAL_USER);
+        String userToken = login(user.getPhone(), "Temp#123456", "DESKTOP");
+        String adminToken = login("13800000000", "Admin#123456", "ADMIN_WEB");
+        byte[] zip = zip(entry("plugin.json", """
+                {"pluginName":"manual-plugin","version":"1.0.0","installMode":"manual-download","targetTools":["codex"],"manualInstallDoc":"Install manually"}
+                """), entry("manual-plugin.pkg", "plugin package bytes"));
+
+        String uploadResponse = mockMvc.perform(multipart("/api/uploads/package")
+                        .file(new MockMultipartFile("file", "manual-plugin.zip", "application/zip", zip))
+                        .param("uploadType", "PLUGIN_PACKAGE")
+                        .header("Authorization", "Bearer " + userToken))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String extensionId = "plugin-manual-download-" + uniqueDigits();
+        String createResponse = mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + userToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody(extensionId, "PLUGIN", extract(uploadResponse, "tempUploadId"),
+                                extract(uploadResponse, "sha256"))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        approve(adminToken, extract(createResponse, "submissionId"), extract(createResponse, "revisionId"));
+        assertThat(jdbc.queryForObject("""
+                select po.object_type from package_objects po
+                  join extensions e on e.id = po.extension_pk
+                 where e.extension_id = ?
+                """, String.class, extensionId)).isEqualTo("EXTERNAL_PLUGIN_FILE");
+
+        String ticketResponse = mockMvc.perform(post("/api/download-tickets")
+                        .header("Authorization", "Bearer " + userToken)
+                        .header("Idempotency-Key", "ticket-" + UUID.randomUUID())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"objectType\":\"EXTERNAL_PLUGIN_FILE\",\"extensionId\":\"" + extensionId +
+                                "\",\"purpose\":\"MANUAL_DOWNLOAD\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.ticket").isString())
+                .andReturn().getResponse().getContentAsString();
+        String ticket = extract(ticketResponse, "ticket");
+        byte[] downloaded = mockMvc.perform(get("/api/packages/download").param("ticket", ticket)
+                        .header("Authorization", "Bearer " + userToken))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsByteArray();
+        assertThat(downloaded).isEqualTo(zip);
+
+        mockMvc.perform(post("/api/download-tickets")
+                        .header("Authorization", "Bearer " + userToken)
+                        .header("Idempotency-Key", "ticket-" + UUID.randomUUID())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"objectType\":\"EXTENSION_PACKAGE\",\"extensionId\":\"" + extensionId +
+                                "\",\"purpose\":\"MANUAL_DOWNLOAD\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("download_purpose_invalid"));
+    }
+
+    @Test
     void mcpAndPluginManifestValidatorsReturnStableCodes() throws Exception {
         User user = createUser("136" + uniqueDigits(), Role.NORMAL_USER);
         String token = login(user.getPhone(), "Temp#123456", "DESKTOP");
