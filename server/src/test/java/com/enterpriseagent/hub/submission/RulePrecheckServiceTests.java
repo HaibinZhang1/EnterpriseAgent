@@ -8,8 +8,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import java.util.Map;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -51,6 +51,21 @@ class RulePrecheckServiceTests {
         assertThatThrownBy(() -> service.validate(request(SubmissionType.FIRST_PUBLISH, "skill-invalid", "1.0.0-01")))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("版本号必须为 SemVer");
+    }
+
+    @Test
+    void comparesLargeNumericIdentifiersWithoutOverflow() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), eq("skill-large-version"))).thenReturn(true);
+        when(jdbc.queryForObject(anyString(), eq(String.class), eq("skill-large-version")))
+                .thenReturn("1.0.0-999999999999999999999999");
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), eq("skill-large-version"),
+                eq("1.0.0-1000000000000000000000000"))).thenReturn(false);
+
+        RulePrecheckService service = new RulePrecheckService(jdbc);
+
+        assertThatNoException().isThrownBy(() -> service.validate(request(
+                SubmissionType.VERSION_UPDATE, "skill-large-version", "1.0.0-1000000000000000000000000")));
     }
 
     private SubmissionRequest request(SubmissionType type, String extensionId, String version) {

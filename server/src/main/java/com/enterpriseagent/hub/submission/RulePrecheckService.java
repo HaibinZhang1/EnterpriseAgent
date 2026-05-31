@@ -119,7 +119,7 @@ public class RulePrecheckService {
         return leftVersion.compareTo(rightVersion);
     }
 
-    private record SemVer(int major, int minor, int patch, String preRelease) implements Comparable<SemVer> {
+    private record SemVer(String major, String minor, String patch, String preRelease) implements Comparable<SemVer> {
         static SemVer parse(String value) {
             if (!StringUtils.hasText(value)) {
                 return null;
@@ -136,8 +136,7 @@ public class RulePrecheckService {
                     }
                 }
             }
-            return new SemVer(Integer.parseInt(matcher.group(1)), Integer.parseInt(matcher.group(2)),
-                    Integer.parseInt(matcher.group(3)), preRelease);
+            return new SemVer(matcher.group(1), matcher.group(2), matcher.group(3), preRelease);
         }
 
         @Override
@@ -159,15 +158,15 @@ public class RulePrecheckService {
         }
 
         private int compareCore(SemVer other) {
-            int majorComparison = Integer.compare(major, other.major);
+            int majorComparison = compareNumericIdentifier(major, other.major);
             if (majorComparison != 0) {
                 return majorComparison;
             }
-            int minorComparison = Integer.compare(minor, other.minor);
+            int minorComparison = compareNumericIdentifier(minor, other.minor);
             if (minorComparison != 0) {
                 return minorComparison;
             }
-            return Integer.compare(patch, other.patch);
+            return compareNumericIdentifier(patch, other.patch);
         }
 
         private static int comparePreRelease(String left, String right) {
@@ -180,7 +179,7 @@ public class RulePrecheckService {
                 boolean leftNumeric = isNumeric(leftPart);
                 boolean rightNumeric = isNumeric(rightPart);
                 if (leftNumeric && rightNumeric) {
-                    int comparison = Integer.compare(Integer.parseInt(leftPart), Integer.parseInt(rightPart));
+                    int comparison = compareNumericIdentifier(leftPart, rightPart);
                     if (comparison != 0) {
                         return comparison;
                     }
@@ -198,6 +197,14 @@ public class RulePrecheckService {
 
         private static boolean isNumeric(String value) {
             return value.chars().allMatch(Character::isDigit);
+        }
+
+        private static int compareNumericIdentifier(String left, String right) {
+            int lengthComparison = Integer.compare(left.length(), right.length());
+            if (lengthComparison != 0) {
+                return lengthComparison;
+            }
+            return left.compareTo(right);
         }
     }
 }
