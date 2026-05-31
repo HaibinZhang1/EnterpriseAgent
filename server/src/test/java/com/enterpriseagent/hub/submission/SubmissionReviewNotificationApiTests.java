@@ -2,17 +2,22 @@ package com.enterpriseagent.hub.submission;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.io.ByteArrayOutputStream;
 import java.util.UUID;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -48,16 +53,18 @@ class SubmissionReviewNotificationApiTests extends PostgresIntegrationTestBase {
     void submissionCreateUsesIdempotencyAndRejectsPackageStorageFields() throws Exception {
         User submitter = createUser("136" + uniqueDigits(), Role.NORMAL_USER);
         String token = login(submitter.getPhone(), "Temp#123456", "DESKTOP");
-        String body = submissionBody("first-skill-" + uniqueDigits(), "{}", "[]");
+        String extensionId = "first-skill-" + uniqueDigits();
+        String missingPackageBody = submissionBody(extensionId, "{}", "[]");
 
         mockMvc.perform(post("/api/submissions")
                         .header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(body))
+                        .content(missingPackageBody))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("validation_failed"));
 
         String adminToken = login("13800000000", "Admin#123456", "ADMIN_WEB");
+        String body = submissionBody(extensionId, "{}", uploadRefs(token, extensionId));
         String key = UUID.randomUUID().toString();
         String first = mockMvc.perform(post("/api/submissions")
                         .header("Authorization", "Bearer " + token)
@@ -71,7 +78,7 @@ class SubmissionReviewNotificationApiTests extends PostgresIntegrationTestBase {
         assertThat(jdbc.queryForObject("""
                 select package_snapshot #>> '{data,packageStorageStatus}'
                 from submission_revisions where submission_id = ?
-                """, String.class, UUID.fromString(submissionId))).isEqualTo("NOT_IMPLEMENTED_IN_M4");
+                """, String.class, UUID.fromString(submissionId))).isEqualTo("CONSUMED");
         assertThat(jdbc.queryForObject("""
                 select after_summary->>'schemaVersion' from audit_logs
                 where action = 'submission.create' and object_id = ?
@@ -152,7 +159,7 @@ class SubmissionReviewNotificationApiTests extends PostgresIntegrationTestBase {
                         .header("Authorization", "Bearer " + submitterToken)
                         .header("Idempotency-Key", UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(submissionBody(extensionId, "{}", "[]")))
+                        .content(submissionBody(extensionId, "{}", uploadRefs(submitterToken, extensionId))))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String submissionId = extract(create, "submissionId");
@@ -235,7 +242,8 @@ class SubmissionReviewNotificationApiTests extends PostgresIntegrationTestBase {
         String submitterToken = login(submitter.getPhone(), "Temp#123456", "DESKTOP");
         String ownerAdminToken = login(ownerAdmin.getPhone(), "Temp#123456", "ADMIN_WEB");
         String otherAdminToken = login(otherAdmin.getPhone(), "Temp#123456", "ADMIN_WEB");
-        String body = submissionBody("scope-skill-" + uniqueDigits(), "{}", "[]")
+        String scopeExtensionId = "scope-skill-" + uniqueDigits();
+        String body = submissionBody(scopeExtensionId, "{}", uploadRefs(submitterToken, scopeExtensionId))
                 .replace("\"scopeType\":\"ALL_EMPLOYEES\"", "\"scopeType\":\"DEPARTMENT\"");
         String create = mockMvc.perform(post("/api/submissions")
                         .header("Authorization", "Bearer " + submitterToken)
@@ -265,7 +273,7 @@ class SubmissionReviewNotificationApiTests extends PostgresIntegrationTestBase {
                         .header("Authorization", "Bearer " + submitterToken)
                         .header("Idempotency-Key", UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(submissionBody(extensionId, "{}", "[]")))
+                        .content(submissionBody(extensionId, "{}", uploadRefs(submitterToken, extensionId))))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String submissionId = extract(create, "submissionId");
@@ -286,7 +294,7 @@ class SubmissionReviewNotificationApiTests extends PostgresIntegrationTestBase {
                         .header("Authorization", "Bearer " + submitterToken)
                         .header("Idempotency-Key", UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(submissionBody(extensionId, "{}", "[]")))
+                        .content(submissionBody(extensionId, "{}", uploadRefs(submitterToken, extensionId + "-resubmit"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.revisionNo").value(2))
                 .andReturn().getResponse().getContentAsString();
@@ -343,6 +351,34 @@ class SubmissionReviewNotificationApiTests extends PostgresIntegrationTestBase {
                 """.formatted(extensionId, extensionId, typePayload, uploadRefs);
     }
 
+    private String uploadRefs(String token, String name) throws Exception {
+        byte[] zip = zip(entry("SKILL.md", "---\nname: " + name + "\n---\n# " + name));
+        String uploadResponse = mockMvc.perform(multipart("/api/uploads/package")
+                        .file(new MockMultipartFile("file", name + ".zip", "application/zip", zip))
+                        .param("uploadType", "SKILL_PACKAGE")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return "[{\"tempUploadId\":\"" + extract(uploadResponse, "tempUploadId")
+                + "\",\"sha256\":\"" + extract(uploadResponse, "sha256") + "\"}]";
+    }
+
+    private byte[] zip(ZipContent... contents) throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (ZipOutputStream out = new ZipOutputStream(bytes)) {
+            for (ZipContent content : contents) {
+                out.putNextEntry(new ZipEntry(content.name()));
+                out.write(content.content().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                out.closeEntry();
+            }
+        }
+        return bytes.toByteArray();
+    }
+
+    private ZipContent entry(String name, String content) {
+        return new ZipContent(name, content);
+    }
+
     private String login(String phone, String password, String clientType) throws Exception {
         String response = mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -368,4 +404,6 @@ class SubmissionReviewNotificationApiTests extends PostgresIntegrationTestBase {
     private String uniqueDigits() {
         return UUID.randomUUID().toString().replace("-", "").substring(0, 8);
     }
+
+    private record ZipContent(String name, String content) {}
 }

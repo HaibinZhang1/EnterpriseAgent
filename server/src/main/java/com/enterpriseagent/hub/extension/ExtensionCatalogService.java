@@ -205,6 +205,9 @@ public class ExtensionCatalogService {
         if (!visibilityPolicy.isVisible(actor, row)) {
             throw new BusinessException(ErrorCode.SCOPE_RESTRICTED, "授权范围不允许访问该扩展定义");
         }
+        if (!visibilityPolicy.isMainOperationAllowed(actor, row)) {
+            throw new BusinessException(ErrorCode.SCOPE_RESTRICTED, "授权范围不允许访问该扩展定义");
+        }
         return row;
     }
 
@@ -223,8 +226,9 @@ public class ExtensionCatalogService {
         card.put("currentVersion", row.get("current_version"));
         card.put("starCount", ((Number) row.get("star_count")).longValue());
         card.put("starred", isStarred(actor.id(), extensionPk));
-        card.put("authorized", visibilityPolicy.isVisible(actor, row));
-        card.put("mainOperationDeniedReason", visibilityPolicy.isVisible(actor, row) ? null : "scope_restricted");
+        boolean mainOperationAllowed = visibilityPolicy.isMainOperationAllowed(actor, row);
+        card.put("authorized", mainOperationAllowed);
+        card.put("mainOperationDeniedReason", mainOperationAllowed ? null : "scope_restricted");
         return card;
     }
 

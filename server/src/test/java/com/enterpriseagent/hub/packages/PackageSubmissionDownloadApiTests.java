@@ -26,6 +26,8 @@ import com.enterpriseagent.hub.auth.PasswordService;
 import com.enterpriseagent.hub.auth.Role;
 import com.enterpriseagent.hub.auth.User;
 import com.enterpriseagent.hub.auth.UserRepository;
+import com.enterpriseagent.hub.organization.Department;
+import com.enterpriseagent.hub.organization.DepartmentRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -40,6 +42,8 @@ class PackageSubmissionDownloadApiTests extends PostgresIntegrationTestBase {
     private UserRepository userRepository;
     @Autowired
     private JdbcTemplate jdbc;
+    @Autowired
+    private DepartmentRepository departmentRepository;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -122,6 +126,62 @@ class PackageSubmissionDownloadApiTests extends PostgresIntegrationTestBase {
     }
 
     @Test
+    void publicVisibleButUnauthorizedExtensionCannotIssueInstallDownloadTicket() throws Exception {
+        Department authorizedDepartment = departmentRepository.save(new Department("authorized" + uniqueDigits(), ROOT_DEPARTMENT_ID));
+        User publisher = createUser("136" + uniqueDigits(), Role.NORMAL_USER, authorizedDepartment.getId());
+        User outsideUser = createUser("136" + uniqueDigits(), Role.NORMAL_USER, ROOT_DEPARTMENT_ID);
+        String publisherToken = login(publisher.getPhone(), "Temp#123456", "DESKTOP");
+        String outsideToken = login(outsideUser.getPhone(), "Temp#123456", "DESKTOP");
+        String adminToken = login("13800000000", "Admin#123456", "ADMIN_WEB");
+        byte[] zip = zip(entry("SKILL.md", "---\nname: restricted-download\n---\n# Restricted Download"));
+
+        String uploadResponse = mockMvc.perform(multipart("/api/uploads/package")
+                        .file(new MockMultipartFile("file", "restricted-download.zip", "application/zip", zip))
+                        .param("uploadType", "SKILL_PACKAGE")
+                        .header("Authorization", "Bearer " + publisherToken))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String extensionId = "restricted-download-" + uniqueDigits();
+        String scope = """
+                {"scopeType":"SELECTED_DEPARTMENTS","departments":[{"departmentId":"%s","includeChildren":false}]}
+                """.formatted(authorizedDepartment.getId());
+        String createResponse = mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + publisherToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBodyWithScope(extensionId, extract(uploadResponse, "tempUploadId"),
+                                extract(uploadResponse, "sha256"), scope)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String submissionId = extract(createResponse, "submissionId");
+        String revisionId = extract(createResponse, "revisionId");
+
+        mockMvc.perform(post("/api/reviews/tasks/" + submissionId + "/approve")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"revisionId\":\"" + revisionId + "\",\"comment\":\"ok\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/download-tickets")
+                        .header("Authorization", "Bearer " + outsideToken)
+                        .header("Idempotency-Key", "ticket-" + UUID.randomUUID())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"objectType\":\"EXTENSION_PACKAGE\",\"extensionId\":\"" + extensionId +
+                                "\",\"purpose\":\"INSTALL\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("scope_restricted"));
+        mockMvc.perform(post("/api/download-tickets")
+                        .header("Authorization", "Bearer " + publisherToken)
+                        .header("Idempotency-Key", "ticket-" + UUID.randomUUID())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"objectType\":\"EXTENSION_PACKAGE\",\"extensionId\":\"" + extensionId +
+                                "\",\"purpose\":\"INSTALL\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.ticket").isString());
+    }
+
+    @Test
     void mcpAndPluginManifestValidatorsReturnStableCodes() throws Exception {
         User user = createUser("136" + uniqueDigits(), Role.NORMAL_USER);
         String token = login(user.getPhone(), "Temp#123456", "DESKTOP");
@@ -146,21 +206,90 @@ class PackageSubmissionDownloadApiTests extends PostgresIntegrationTestBase {
                 .andExpect(jsonPath("$.error.code").value("plugin_manifest_invalid"));
     }
 
+    @Test
+    void approvalMaterializesMcpAndPluginDefinitionsFromUploadedManifests() throws Exception {
+        User user = createUser("136" + uniqueDigits(), Role.NORMAL_USER);
+        String userToken = login(user.getPhone(), "Temp#123456", "DESKTOP");
+        String adminToken = login("13800000000", "Admin#123456", "ADMIN_WEB");
+        String mcpUpload = mockMvc.perform(multipart("/api/uploads/package")
+                        .file(new MockMultipartFile("file", "mcp.zip", "application/zip", zip(entry("mcp.json", """
+                                {"serverName":"finance","version":"1.0.0","accessType":"remote-http","transport":"http","endpoint":"https://example.invalid/mcp","variablesSchema":[{"name":"apiKey","sensitive":true}],"configTemplate":{"server":"finance"},"connectionTest":{"type":"HTTP_HEALTH","target":"https://example.invalid/health"}}
+                                """))))
+                        .param("uploadType", "MCP_MANIFEST")
+                        .header("Authorization", "Bearer " + userToken))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String mcpId = "mcp-materialized-" + uniqueDigits();
+        String mcpCreate = mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + userToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody(mcpId, "MCP_SERVER", extract(mcpUpload, "tempUploadId"), extract(mcpUpload, "sha256"))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        approve(adminToken, extract(mcpCreate, "submissionId"), extract(mcpCreate, "revisionId"));
+        mockMvc.perform(get("/api/extensions/" + mcpId + "/mcp-definition")
+                        .header("Authorization", "Bearer " + userToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.transport").value("streamable-http"))
+                .andExpect(jsonPath("$.data.endpointTemplate").value("https://example.invalid/mcp"))
+                .andExpect(jsonPath("$.data.variablesSchema[0].name").value("apiKey"));
+
+        String pluginUpload = mockMvc.perform(multipart("/api/uploads/package")
+                        .file(new MockMultipartFile("file", "plugin.zip", "application/zip", zip(entry("plugin.json", """
+                                {"pluginName":"demo-plugin","version":"1.0.0","installMode":"config-plugin","targetTools":["codex"],"manualInstallDoc":"Install manually","manualUninstallDoc":"Remove manually"}
+                                """))))
+                        .param("uploadType", "PLUGIN_MANIFEST")
+                        .header("Authorization", "Bearer " + userToken))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String pluginId = "plugin-materialized-" + uniqueDigits();
+        String pluginCreate = mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + userToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody(pluginId, "PLUGIN", extract(pluginUpload, "tempUploadId"),
+                                extract(pluginUpload, "sha256"))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        approve(adminToken, extract(pluginCreate, "submissionId"), extract(pluginCreate, "revisionId"));
+        mockMvc.perform(get("/api/extensions/" + pluginId + "/plugin-definition")
+                        .header("Authorization", "Bearer " + userToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.installMode").value("CONFIG_PLUGIN"))
+                .andExpect(jsonPath("$.data.targetTools[0]").value("codex"))
+                .andExpect(jsonPath("$.data.manualInstallDoc").value("Install manually"));
+    }
+
     private String submissionBody(String extensionId, String tempUploadId, String sha256) {
+        return submissionBody(extensionId, "SKILL", tempUploadId, sha256);
+    }
+
+    private String submissionBody(String extensionId, String extensionType, String tempUploadId, String sha256) {
+        return submissionBody(extensionId, extensionType, tempUploadId, sha256,
+                "{\"scopeType\":\"ALL_EMPLOYEES\",\"departments\":[]}");
+    }
+
+    private String submissionBodyWithScope(String extensionId, String tempUploadId, String sha256, String authorizationScope) {
+        return submissionBody(extensionId, "SKILL", tempUploadId, sha256, authorizationScope);
+    }
+
+    private String submissionBody(String extensionId, String extensionType, String tempUploadId, String sha256,
+            String authorizationScope) {
         return """
                 {
                   "type":"FIRST_PUBLISH",
-                  "extensionType":"SKILL",
+                  "extensionType":"%s",
                   "extensionId":"%s",
                   "version":"1.0.0",
                   "metadata":{"name":"%s","description":"desc","category":"dev","tags":["test"],"changeLog":"init"},
-                  "authorizationScope":{"scopeType":"ALL_EMPLOYEES","departments":[]},
+                  "authorizationScope":%s,
                   "visibilityMode":"PUBLIC_TO_ALL_LOGGED_IN",
                   "riskStatement":{"summary":"low"},
                   "typePayload":{},
                   "uploadRefs":[{"tempUploadId":"%s","sha256":"%s"}]
                 }
-                """.formatted(extensionId, extensionId, tempUploadId, sha256);
+                """.formatted(extensionType, extensionId, extensionId, authorizationScope, tempUploadId, sha256);
     }
 
     private byte[] zip(ZipContent... contents) throws Exception {
@@ -180,8 +309,12 @@ class PackageSubmissionDownloadApiTests extends PostgresIntegrationTestBase {
     }
 
     private User createUser(String phone, Role role) {
+        return createUser(phone, role, ROOT_DEPARTMENT_ID);
+    }
+
+    private User createUser(String phone, Role role, UUID departmentId) {
         User user = new User("测试用户" + phone.substring(phone.length() - 4), phone,
-                ENCODER.encode("Temp#123456"), PasswordService.ALGORITHM, ROOT_DEPARTMENT_ID, role);
+                ENCODER.encode("Temp#123456"), PasswordService.ALGORITHM, departmentId, role);
         user.setMustChangePassword(false);
         return userRepository.save(user);
     }
@@ -201,6 +334,15 @@ class PackageSubmissionDownloadApiTests extends PostgresIntegrationTestBase {
             return data.path(field).asText();
         }
         throw new IllegalArgumentException("Field not found: " + field);
+    }
+
+    private void approve(String adminToken, String submissionId, String revisionId) throws Exception {
+        mockMvc.perform(post("/api/reviews/tasks/" + submissionId + "/approve")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"revisionId\":\"" + revisionId + "\",\"comment\":\"ok\"}"))
+                .andExpect(status().isOk());
     }
 
     private String uniqueDigits() {

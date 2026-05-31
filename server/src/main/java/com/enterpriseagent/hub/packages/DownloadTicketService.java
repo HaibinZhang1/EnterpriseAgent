@@ -227,7 +227,11 @@ public class DownloadTicketService {
                 throw new BusinessException(ErrorCode.PERMISSION_DENIED, "仅审核/管理角色可申请预览下载");
             }
             if (row.get("extension_pk") != null) {
-                requireExtensionVisible(actor, (UUID) row.get("extension_pk"));
+                if (request.objectType() == DownloadObjectType.REVIEW_PREVIEW) {
+                    requireExtensionVisible(actor, (UUID) row.get("extension_pk"));
+                } else {
+                    requireExtensionDownloadAllowed(actor, (UUID) row.get("extension_pk"));
+                }
             } else if (!actor.id().equals(row.get("created_by")) && !actor.isAdmin()) {
                 throw new BusinessException(ErrorCode.PERMISSION_DENIED, "无权下载该包");
             }
@@ -237,10 +241,7 @@ public class DownloadTicketService {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "缺少 extensionId 或 objectId");
         }
         Map<String, Object> extension = requireExtensionByBusinessId(request.extensionId());
-        requireExtensionVisible(actor, (UUID) extension.get("id"));
-        if (!"PUBLISHED".equals(String.valueOf(extension.get("status")))) {
-            throw new BusinessException(ErrorCode.PERMISSION_DENIED, "扩展当前不可下载");
-        }
+        requireExtensionDownloadAllowed(actor, (UUID) extension.get("id"));
         String version = StringUtils.hasText(request.version()) ? request.version() : String.valueOf(extension.get("current_version"));
         var rows = jdbc.queryForList("""
                 select po.* from package_objects po
@@ -279,6 +280,16 @@ public class DownloadTicketService {
             throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "扩展不存在");
         }
         return rows.get(0);
+    }
+
+    private void requireExtensionDownloadAllowed(CurrentUser actor, UUID extensionPk) {
+        var rows = jdbc.queryForList("select * from extensions where id = ?", extensionPk);
+        if (rows.isEmpty() || !visibilityPolicy.isVisible(actor, rows.get(0))) {
+            throw new BusinessException(ErrorCode.PERMISSION_DENIED, "扩展不可见或无权下载");
+        }
+        if (!visibilityPolicy.isMainOperationAllowed(actor, rows.get(0))) {
+            throw new BusinessException(ErrorCode.SCOPE_RESTRICTED, "授权范围不允许下载该扩展");
+        }
     }
 
     private void requireExtensionVisible(CurrentUser actor, UUID extensionPk) {

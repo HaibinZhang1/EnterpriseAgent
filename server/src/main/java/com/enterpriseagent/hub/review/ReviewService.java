@@ -133,6 +133,7 @@ public class ReviewService {
         String version = String.valueOf(payload.get("version"));
         Map<String, Object> metadata = asStringKeyMap(payload.get("metadata"));
         Map<String, Object> authorizationScope = asStringKeyMap(payload.get("authorizationScope"));
+        Map<String, Object> typePayload = asStringKeyMap(payload.get("typePayload"));
         String visibilityMode = String.valueOf(payload.getOrDefault("visibilityMode", "PUBLIC_TO_ALL_LOGGED_IN"));
         UUID extensionPk = findExtensionPk(extensionId);
         if ("ARCHIVE".equals(submissionType)) {
@@ -180,19 +181,63 @@ public class ReviewService {
         attachPackageObject(extensionPk, extensionId, version, packageSnapshot);
         createScope(extensionPk, authorizationScope, (UUID) submission.get("submitter_department_id"));
         if ("MCP_SERVER".equals(extensionType)) {
-            jdbc.update("""
-                    insert into mcp_definitions (id, extension_pk, access_type, transport, config_schema)
-                    values (?, ?, 'remote-http', 'streamable-http', '{}'::jsonb)
-                    on conflict (extension_pk) do nothing
-                    """, UUID.randomUUID(), extensionPk);
+            materializeMcpDefinition(extensionPk, typePayload, packageSnapshot);
         }
         if ("PLUGIN".equals(extensionType)) {
-            jdbc.update("""
-                    insert into plugin_definitions (id, extension_pk, install_mode, target_tools, manifest)
-                    values (?, ?, 'CONFIG_PLUGIN', '[]'::jsonb, '{}'::jsonb)
-                    on conflict (extension_pk) do nothing
-                    """, UUID.randomUUID(), extensionPk);
+            materializePluginDefinition(extensionPk, typePayload, packageSnapshot);
         }
+    }
+
+    private void materializeMcpDefinition(UUID extensionPk, Map<String, Object> typePayload,
+            Map<String, Object> packageSnapshot) {
+        Map<String, Object> definition = definitionPayload(typePayload, packageSnapshot);
+        if (definition.isEmpty()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "MCP 定义缺少可落库的配置快照");
+        }
+        String accessType = stringValue(definition.get("accessType"), "remote-http");
+        String transport = normalizeMcpTransport(stringValue(definition.get("transport"), "streamable-http"));
+        Map<String, Object> configSchema = new LinkedHashMap<>(definition);
+        configSchema.remove("accessType");
+        configSchema.remove("transport");
+        jdbc.update("""
+                insert into mcp_definitions (id, extension_pk, access_type, transport, config_schema)
+                values (?, ?, ?, ?, ?::jsonb)
+                on conflict (extension_pk) do update set access_type = excluded.access_type,
+                  transport = excluded.transport, config_schema = excluded.config_schema
+                """, UUID.randomUUID(), extensionPk, accessType, transport, json.write(configSchema));
+    }
+
+    private void materializePluginDefinition(UUID extensionPk, Map<String, Object> typePayload,
+            Map<String, Object> packageSnapshot) {
+        Map<String, Object> definition = definitionPayload(typePayload, packageSnapshot);
+        if (definition.isEmpty()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "Plugin 定义缺少可落库的安装清单");
+        }
+        String installMode = normalizePluginInstallMode(stringValue(definition.get("installMode"), "CONFIG_PLUGIN"));
+        List<Object> targetTools = listValue(definition.containsKey("targetTools")
+                ? definition.get("targetTools") : definition.get("targetTool"));
+        Map<String, Object> manifest = new LinkedHashMap<>(asStringKeyMap(definition.get("manifest")));
+        if (manifest.isEmpty()) {
+            manifest.putAll(definition);
+            manifest.remove("installMode");
+            manifest.remove("targetTools");
+        }
+        putIfAbsent(manifest, "manualInstallDoc", definition.get("manualInstallDoc"));
+        putIfAbsent(manifest, "manualUninstallDoc", definition.get("manualUninstallDoc"));
+        putIfAbsent(manifest, "externalDownload", definition.get("externalDownload"));
+        jdbc.update("""
+                insert into plugin_definitions (id, extension_pk, install_mode, target_tools, manifest)
+                values (?, ?, ?, ?::jsonb, ?::jsonb)
+                on conflict (extension_pk) do update set install_mode = excluded.install_mode,
+                  target_tools = excluded.target_tools, manifest = excluded.manifest
+                """, UUID.randomUUID(), extensionPk, installMode, json.write(targetTools), json.write(manifest));
+    }
+
+    private Map<String, Object> definitionPayload(Map<String, Object> typePayload, Map<String, Object> packageSnapshot) {
+        Map<String, Object> precheck = asStringKeyMap(packageSnapshot.get("precheck"));
+        Map<String, Object> definition = new LinkedHashMap<>(asStringKeyMap(precheck.get("definition")));
+        definition.putAll(typePayload);
+        return definition;
     }
 
     private void attachPackageObject(UUID extensionPk, String extensionId, String version, Map<String, Object> packageSnapshot) {
@@ -267,6 +312,42 @@ public class ReviewService {
         Map<String, Object> output = new LinkedHashMap<>();
         map.forEach((key, mapValue) -> output.put(String.valueOf(key), mapValue));
         return output;
+    }
+
+    private List<Object> listValue(Object value) {
+        if (value instanceof Iterable<?> iterable) {
+            List<Object> output = new java.util.ArrayList<>();
+            iterable.forEach(output::add);
+            return output;
+        }
+        if (value instanceof String string && !string.isBlank()) {
+            return List.of(string);
+        }
+        return List.of();
+    }
+
+    private String stringValue(Object value, String fallback) {
+        if (value instanceof String string && !string.isBlank()) {
+            return string;
+        }
+        return value == null ? fallback : String.valueOf(value);
+    }
+
+    private String normalizeMcpTransport(String transport) {
+        return "http".equals(transport) ? "streamable-http" : transport;
+    }
+
+    private String normalizePluginInstallMode(String installMode) {
+        if (installMode == null || installMode.isBlank()) {
+            return "CONFIG_PLUGIN";
+        }
+        return installMode.trim().toUpperCase().replace('-', '_');
+    }
+
+    private void putIfAbsent(Map<String, Object> target, String key, Object value) {
+        if (!target.containsKey(key) && value != null) {
+            target.put(key, value);
+        }
     }
 
     private void insertNotificationOutbox(Map<String, Object> submission, String status, String comment) {

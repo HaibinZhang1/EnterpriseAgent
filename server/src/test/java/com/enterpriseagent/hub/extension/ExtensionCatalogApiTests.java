@@ -63,12 +63,35 @@ class ExtensionCatalogApiTests extends PostgresIntegrationTestBase {
                         .param("q", "Skill"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
-        assertThat(search).contains("Public Skill").doesNotContain("Restricted Skill");
+        assertThat(search).contains("Public Skill").doesNotContain(restrictedId);
 
         mockMvc.perform(get("/api/extensions/" + restrictedId)
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("permission_denied"));
+    }
+
+    @Test
+    void publicVisibleRestrictedExtensionsAreVisibleButNotAuthorizedForMainOperations() throws Exception {
+        User user = createUser("137" + uniqueDigits(), ROOT_DEPARTMENT_ID, Role.NORMAL_USER);
+        Department authorizedDepartment = departmentRepository.save(new Department("authorized" + uniqueDigits(), ROOT_DEPARTMENT_ID));
+        String token = login(user.getPhone(), "Temp#123456", "DESKTOP");
+        String extensionId = "public-restricted-" + uniqueDigits();
+        createPublished(extensionId, ExtensionType.SKILL, "Public Restricted Skill",
+                VisibilityMode.PUBLIC_TO_ALL_LOGGED_IN, authorizedDepartment.getId(), adminId(), ScopeType.SELECTED_DEPARTMENTS);
+
+        mockMvc.perform(get("/api/extensions/search")
+                        .header("Authorization", "Bearer " + token)
+                        .param("q", extensionId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].extensionId").value(extensionId))
+                .andExpect(jsonPath("$.data.items[0].authorized").value(false))
+                .andExpect(jsonPath("$.data.items[0].mainOperationDeniedReason").value("scope_restricted"));
+        mockMvc.perform(get("/api/extensions/" + extensionId)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.authorized").value(false))
+                .andExpect(jsonPath("$.data.mainOperationDeniedReason").value("scope_restricted"));
     }
 
     @Test

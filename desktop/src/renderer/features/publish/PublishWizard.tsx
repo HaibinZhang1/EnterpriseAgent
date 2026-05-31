@@ -82,7 +82,7 @@ function TypeStep({ draft, update }: { draft: PublishDraft; update: (patch: Part
         <span>上传包 / manifest</span>
         <input className="input" type="file" onChange={(event) => update({ file: event.target.files?.[0] })} />
       </label>
-      <p className="muted">Skill / MCP / Plugin 都会创建真实 submission；未选择文件时按服务端契约提交元数据和空上传引用。</p>
+      <p className="muted">请选择待提交的 Skill 包、MCP manifest 或 Plugin 包 / 清单；服务端会执行最终校验。</p>
     </section>
   );
 }

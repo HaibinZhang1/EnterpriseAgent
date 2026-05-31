@@ -32,4 +32,12 @@ public class VisibilityPolicy {
         }
         return scopeEvaluator.isAuthorized(actor, (UUID) extension.get("id"));
     }
+
+    public boolean isMainOperationAllowed(CurrentUser actor, Map<String, Object> extension) {
+        if (!"PUBLISHED".equals(String.valueOf(extension.get("status")))) {
+            return false;
+        }
+        Object extensionPk = extension.get("id");
+        return extensionPk instanceof UUID id && scopeEvaluator.isAuthorized(actor, id);
+    }
 }

@@ -346,7 +346,15 @@ export function App() {
     submitPublish: async (draft) => {
       setView((current) => ({ ...current, publishBusy: true, publishError: undefined, publishResult: undefined }));
       try {
-        const uploadRefs = draft.file ? [await uploadDraftFile(draft)] : [];
+        if (!draft.file) {
+          setView((current) => ({
+            ...current,
+            publishBusy: false,
+            publishError: { code: 'validation_failed', message: '请选择要提交的包或 manifest 文件' }
+          }));
+          return;
+        }
+        const uploadRefs = [await uploadDraftFile(draft)];
         const result = normalizePublishResult(await desktopApi.publish.createSubmission({
           idempotencyKey: `renderer:${draft.extensionId}:${draft.version}:${Date.now()}`,
           request: {

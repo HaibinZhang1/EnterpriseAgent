@@ -60,7 +60,7 @@ public class PackageUploadService {
         }
         if (result.rejected()) {
             persistRejectedTemp(actor, uploadType, stored, result);
-            throw new BusinessException(errorCode(result.rejectCode()), rejectMessage(result.rejectCode()), precheckEnvelope(result));
+            throw new BusinessException(errorCode(result.rejectCode()), rejectMessage(result.rejectCode()), precheckEnvelope(result, uploadType));
         }
         persistAvailableTemp(actor, tempUploadId, uploadType, stored, result, file.getContentType());
         auditService.record(AuditRecord.builder()
@@ -84,12 +84,12 @@ public class PackageUploadService {
                   file_count, precheck_status, precheck_result, created_by, expires_at, status)
                 values (?, ?, ?, ?, ?, ?, ?, ?, 'FAILED', ?::jsonb, ?, ?, 'REJECTED')
                 """, id, uploadType.name(), stored.originalFilename(), null, stored.path().toString(), stored.sha256(),
-                stored.size(), 0, json.write(precheckEnvelope(result)), actor.id(), OffsetDateTime.now().plus(properties.getTempTtl()));
+                stored.size(), 0, json.write(precheckEnvelope(result, uploadType)), actor.id(), OffsetDateTime.now().plus(properties.getTempTtl()));
     }
 
     private void persistAvailableTemp(CurrentUser actor, UUID tempUploadId, UploadType uploadType,
             PackageStorageService.StoredTempFile stored, SafeZipExtractResult result, String contentType) {
-        String precheck = json.write(precheckEnvelope(result));
+        String precheck = json.write(precheckEnvelope(result, uploadType));
         OffsetDateTime expiresAt = OffsetDateTime.now().plus(properties.getTempTtl());
         jdbc.update("""
                 insert into temp_uploads (id, upload_type, original_filename, content_type, temp_path, sha256, size_bytes,
@@ -160,7 +160,7 @@ public class PackageUploadService {
     public String consumeForSubmission(CurrentUser actor, ExtensionType extensionType, String extensionId, String version,
             List<Map<String, Object>> uploadRefs) {
         if (uploadRefs == null || uploadRefs.isEmpty()) {
-            return packagePlaceholder();
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "发布申请必须引用已通过校验的包或配置清单");
         }
         if (uploadRefs.size() != 1) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "一次提交只能引用一个临时上传");
@@ -234,17 +234,6 @@ public class PackageUploadService {
         return row;
     }
 
-    private String packagePlaceholder() {
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("mode", "PLACEHOLDER");
-        data.put("packageStorageStatus", "NOT_IMPLEMENTED_IN_M4");
-        data.put("uploadRefs", List.of());
-        data.put("manifest", null);
-        data.put("sha256", null);
-        data.put("size", null);
-        return json.write(json.envelopeMap("submission", data));
-    }
-
     private String packageSnapshot(UUID packageId, Map<String, Object> upload, ExtensionType extensionType,
             String extensionId, String version, String finalPath) {
         Map<String, Object> data = new LinkedHashMap<>();
@@ -310,7 +299,7 @@ public class PackageUploadService {
 
     private Map<String, Object> response(UUID tempUploadId, UploadType uploadType, PackageStorageService.StoredTempFile stored,
             SafeZipExtractResult result) {
-        Map<String, Object> precheck = precheckEnvelope(result);
+        Map<String, Object> precheck = precheckEnvelope(result, uploadType);
         return Map.of(
                 "tempUploadId", tempUploadId,
                 "packageId", tempUploadId,
@@ -322,7 +311,7 @@ public class PackageUploadService {
                 "precheck", precheck);
     }
 
-    private Map<String, Object> precheckEnvelope(SafeZipExtractResult result) {
+    private Map<String, Object> precheckEnvelope(SafeZipExtractResult result, UploadType uploadType) {
         Map<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("schemaVersion", 1);
         envelope.put("status", result.status().name());
@@ -336,7 +325,78 @@ public class PackageUploadService {
                 "riskFileCount", result.files().stream().filter(item -> !item.riskFlags().isEmpty()).count()));
         envelope.put("riskSummary", Map.of("riskLevel", result.riskLevel(),
                 "riskFlags", result.findings().stream().map(RiskFinding::code).distinct().toList()));
+        Map<String, Object> definition = definitionSnapshot(uploadType, result);
+        if (!definition.isEmpty()) {
+            envelope.put("definition", definition);
+        }
         return envelope;
+    }
+
+    private Map<String, Object> definitionSnapshot(UploadType uploadType, SafeZipExtractResult result) {
+        if (uploadType == UploadType.MCP_MANIFEST) {
+            PreviewCandidate manifest = firstPreview(result, "mcp.json", "mcp.yaml", "mcp.yml", "manifest.json");
+            return manifest == null ? Map.of() : mcpDefinitionSnapshot(parseLooseManifest(manifest.content()));
+        }
+        if (uploadType == UploadType.PLUGIN_PACKAGE || uploadType == UploadType.PLUGIN_MANIFEST) {
+            PreviewCandidate manifest = firstPreview(result, "plugin.json", "plugin.yaml", "plugin.yml", "manifest.json");
+            return manifest == null ? Map.of() : pluginDefinitionSnapshot(parseLooseManifest(manifest.content()));
+        }
+        return Map.of();
+    }
+
+    private Map<String, Object> mcpDefinitionSnapshot(Map<String, Object> manifest) {
+        Map<String, Object> definition = new LinkedHashMap<>();
+        String accessType = stringValue(manifest.get("accessType"));
+        String transport = normalizeMcpTransport(stringValue(manifest.get("transport")));
+        definition.put("accessType", accessType);
+        definition.put("transport", transport);
+        String endpoint = stringValue(manifest.get("endpoint"));
+        if (!endpoint.isBlank()) {
+            definition.put("endpointTemplate", endpoint);
+        }
+        String command = stringValue(manifest.get("command"));
+        if (!command.isBlank()) {
+            definition.put("command", command);
+        }
+        putIfPresent(definition, "args", manifest.get("args"));
+        putIfPresent(definition, "workingDirectory", manifest.get("workingDirectory"));
+        putIfPresent(definition, "envSummary", manifest.get("envSummary"));
+        putIfPresent(definition, "variablesSchema", manifest.get("variablesSchema"));
+        putIfPresent(definition, "configTemplate", manifest.get("configTemplate"));
+        putIfPresent(definition, "connectionTest", manifest.get("connectionTest"));
+        putIfPresent(definition, "permissions", manifest.get("permissions"));
+        putIfPresent(definition, "dataAccess", manifest.get("dataAccess"));
+        putIfPresent(definition, "riskStatement", manifest.get("riskStatement"));
+        return definition;
+    }
+
+    private Map<String, Object> pluginDefinitionSnapshot(Map<String, Object> manifest) {
+        Map<String, Object> definition = new LinkedHashMap<>();
+        definition.put("installMode", normalizePluginInstallMode(stringValue(manifest.get("installMode"))));
+        putIfPresent(definition, "targetTools",
+                manifest.containsKey("targetTools") ? manifest.get("targetTools") : manifest.get("targetTool"));
+        putIfPresent(definition, "manualInstallDoc", manifest.get("manualInstallDoc"));
+        putIfPresent(definition, "manualUninstallDoc", manifest.get("manualUninstallDoc"));
+        putIfPresent(definition, "externalDownload", manifest.get("externalDownload"));
+        definition.put("manifest", manifest);
+        return definition;
+    }
+
+    private void putIfPresent(Map<String, Object> target, String key, Object value) {
+        if (value != null && !(value instanceof String string && string.isBlank())) {
+            target.put(key, value);
+        }
+    }
+
+    private String normalizeMcpTransport(String transport) {
+        return "http".equals(transport) ? "streamable-http" : transport;
+    }
+
+    private String normalizePluginInstallMode(String installMode) {
+        if (installMode == null || installMode.isBlank()) {
+            return "CONFIG_PLUGIN";
+        }
+        return installMode.trim().toUpperCase().replace('-', '_');
     }
 
     private SafeZipExtractResult validateMcpManifest(PackageStorageService.StoredTempFile stored, SafeZipExtractResult result) {
@@ -376,7 +436,11 @@ public class PackageUploadService {
             return rejectedResult(stored, result, "plugin_manifest_invalid");
         }
         String installMode = stringValue(manifestMap.get("installMode"));
-        if ("manual-download".equals(installMode) && stringValue(manifestMap.get("expiresAt")).contains("2000-")) {
+        String normalizedInstallMode = normalizePluginInstallMode(installMode);
+        if (!List.of("MANAGED_PACKAGE", "CONFIG_PLUGIN", "MANUAL_DOWNLOAD").contains(normalizedInstallMode)) {
+            return rejectedResult(stored, result, "plugin_manifest_invalid");
+        }
+        if ("MANUAL_DOWNLOAD".equals(normalizedInstallMode) && stringValue(manifestMap.get("expiresAt")).contains("2000-")) {
             return rejectedResult(stored, result, "plugin_download_source_expired");
         }
         return result;
