@@ -177,10 +177,20 @@ export function App() {
         if (!active) return;
         const hasSession = Boolean((session as { hasSession?: boolean }).hasSession);
         let user: SessionUser | undefined;
-        if (hasSession) user = normalizeSessionUser(await desktopApi.auth.me());
+        let bootError: UiError | undefined;
+        if (hasSession) {
+          try {
+            user = normalizeSessionUser(await desktopApi.auth.me());
+          } catch (error) {
+            const uiError = toUiError(error);
+            if (!isRecoverableBootError(uiError)) throw error;
+            bootError = uiError;
+          }
+        }
         setView((current) => ({
           ...current,
           bootState: 'ready',
+          bootError,
           modal: hasSession ? current.modal : 'login',
           user,
           device: device as DeviceSummary,
@@ -188,10 +198,12 @@ export function App() {
           settingsConfig: isRecord(config) ? config : {},
           updateState: pendingUpdate ? normalizeUpdateState(pendingUpdate) : current.updateState
         }));
-        if (hasSession) {
+        if (hasSession && user) {
           await desktopApi.local.syncPending({ online: Boolean((offline as OfflineState).online), previousOnline: false, reason: 'startup' }).catch(() => undefined);
           await Promise.allSettled([loadCommunity(), loadLocal(), loadNotifications()]);
           if (user?.mustChangePassword) setView((current) => ({ ...current, modal: 'password' }));
+        } else if (hasSession) {
+          await loadLocal();
         }
       } catch (error) {
         setView((current) => ({ ...current, bootState: 'error', bootError: toUiError(error), modal: 'login' }));
@@ -270,7 +282,7 @@ export function App() {
         setView((current) => ({ ...current, user, modal: user?.mustChangePassword ? 'password' : 'none', bootState: 'ready' }));
         await Promise.allSettled([loadCommunity(), loadLocal(), loadNotifications()]);
       } catch (error) {
-        setView((current) => ({ ...current, bootState: 'error', bootError: toUiError(error), modal: 'login' }));
+        setView((current) => ({ ...current, bootState: 'ready', bootError: toUiError(error), modal: 'login' }));
       }
     },
     logout: async () => {
@@ -390,6 +402,7 @@ export function App() {
 export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAgentViewModel; actions: EnterpriseAgentActions }) {
   const unreadCount = model.notifications.filter((item) => !item.read).length;
   const showLogin = model.modal === 'login';
+  const showFatalBootError = model.bootState === 'error' && !model.user && !isRecoverableBootError(model.bootError);
 
   const media = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
     ? window.matchMedia('(prefers-color-scheme: light)')
@@ -416,7 +429,7 @@ export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAg
       onToggleTheme={handleToggleTheme}
     >
       {model.bootState === 'loading' && !model.user ? <main className="page"><LoadingState label="正在初始化客户端" /></main> : null}
-      {model.bootState === 'error' && !model.user ? <main className="page"><ErrorState error={model.bootError} title="客户端初始化失败" /></main> : null}
+      {showFatalBootError ? <main className="page"><ErrorState error={model.bootError} title="客户端初始化失败" /></main> : null}
       {model.activeTab === 'agent' ? (
         <AgentHomePage
           user={model.user}
@@ -713,4 +726,8 @@ function str(value: unknown): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function isRecoverableBootError(error?: UiError): boolean {
+  return error?.code === 'server_unavailable';
 }

@@ -28,6 +28,20 @@ describe('renderer app view', () => {
     expect(dismissed).toContain('请登录后使用企业扩展能力');
   });
 
+  it('keeps offline startup server failures out of the top-level initialization error', () => {
+    const offline = renderView({
+      user: undefined,
+      modal: 'none',
+      bootState: 'error',
+      bootError: { code: 'server_unavailable', message: '无法连接服务端，请检查网络或服务状态。', requestID: 'req-offline-boot' },
+      offline: { online: false }
+    });
+    expect(offline).toContain('当前离线：新增服务端动作已暂停');
+    expect(offline).toContain('Agent 工作台');
+    expect(offline).not.toContain('客户端初始化失败');
+    expect(offline).not.toContain('req-offline-boot');
+  });
+
   it('renders community areas, empty rankings, search cards, and search requestId errors', () => {
     const item = extension('skill-one', 'skill');
     const home = renderView({

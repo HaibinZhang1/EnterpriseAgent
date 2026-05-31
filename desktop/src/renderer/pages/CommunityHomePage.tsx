@@ -89,18 +89,16 @@ export function CommunityHomePage({
         onSubmit={(event) => { event.preventDefault(); onSearch(query); }}
         style={{ marginBottom: 'var(--space-6)' }}
       >
-        <div className="search-strip" style={{ display: 'grid', gridTemplateColumns: '1fr auto', width: '100%', gap: '12px', padding: '0', background: 'transparent', border: 'none', boxShadow: 'none' }}>
-          <div className="search-input-wrap">
-            <span className="muted">⌕</span>
-            <input
-              aria-label="搜索 Skill、MCP Server、Plugin、作者、部门或标签"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              autoComplete="off"
-            />
-          </div>
-          <Button type="submit" tone="primary" style={{ minHeight: '46px', padding: '0 24px' }}>搜索</Button>
+        <div className="search-input-wrap">
+          <span className="search-icon">🔍</span>
+          <input
+            aria-label="搜索 Skill、MCP Server、Plugin、作者、部门或标签"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            autoComplete="off"
+          />
         </div>
+        <Button type="submit" tone="primary" style={{ minHeight: '42px', padding: '0 24px' }}>搜索</Button>
       </form>
 
       {state === 'loading' ? <LoadingState label="正在加载社区精选榜单..." /> : null}
