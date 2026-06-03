@@ -520,6 +520,102 @@ tbody tr:hover {
   margin: 0;
 }
 
+.detail-section {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid rgba(120, 136, 166, 0.18);
+  padding-top: 12px;
+}
+
+.detail-section:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.detail-section h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.field-grid {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.field-grid div {
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr);
+  gap: 10px;
+  border-bottom: 1px solid rgba(120, 136, 166, 0.12);
+  padding-bottom: 7px;
+}
+
+.field-grid dt,
+.section-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.field-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.section-empty {
+  margin: 0;
+}
+
+.precheck-result,
+.precheck-unavailable,
+.precheck-callout,
+.typed-content {
+  display: grid;
+  gap: 10px;
+}
+
+.precheck-result {
+  border-left: 3px solid rgba(91, 100, 117, 0.28);
+  padding-left: 12px;
+}
+
+.precheck-result.success {
+  border-left-color: var(--success);
+}
+
+.precheck-result.warning {
+  border-left-color: var(--warning);
+}
+
+.precheck-result.danger,
+.precheck-callout.danger {
+  border-left-color: var(--danger);
+}
+
+.precheck-callout,
+.precheck-unavailable {
+  border-left: 3px solid var(--warning);
+  background: rgba(255, 250, 235, 0.72);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.precheck-callout.danger {
+  background: rgba(255, 245, 245, 0.82);
+}
+
+.precheck-unavailable strong,
+.precheck-callout strong {
+  font-size: 13px;
+}
+
+.precheck-unavailable p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .key-value div {
   display: grid;
   grid-template-columns: 150px minmax(0, 1fr);

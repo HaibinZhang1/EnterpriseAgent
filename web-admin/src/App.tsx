@@ -33,6 +33,9 @@ type Resource<T> =
   | { status: "success"; data: T }
   | { status: "error"; error: ViewError };
 
+type ReviewAction = "approve" | "request-changes" | "reject";
+type GovernanceAction = "delist" | "security-delist" | "relist" | "scope/reduce" | "visibility/reduce" | "archive";
+
 const emptyPage: PageResult<ApiRecord> = { items: [], page: 1, pageSize: 20, total: 0, hasNext: false };
 
 const pageDefinitions: Array<{ key: PageKey; label: string; systemOnly?: boolean }> = [
@@ -337,15 +340,20 @@ function ReviewDetailPanel({ selected, onChanged }: { selected: ApiRecord | null
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<ViewError | null>(null);
 
-  async function decide(action: "approve" | "request-changes" | "reject", detail: ApiRecord) {
+  async function decide(action: ReviewAction, detail: ApiRecord) {
+    const normalizedComment = comment.trim();
+    if (reviewActionRequiresReason(action) && !normalizedComment) {
+      setError({ message: "退回修改和拒绝必须填写审核原因。" });
+      return;
+    }
     setBusyAction(action);
     setError(null);
     try {
       const revisionId = safeString(read(detail, "revisionId", "currentRevisionId", "revision.id"));
       await adminApi.reviews.decision(submissionId, action, {
         revisionId: revisionId || undefined,
-        comment,
-        reasonCodes: comment ? ["MANUAL_REVIEW"] : []
+        comment: normalizedComment,
+        reasonCodes: normalizedComment ? ["MANUAL_REVIEW"] : []
       });
       setComment("");
       onChanged();
@@ -369,29 +377,147 @@ function ReviewDetailPanel({ selected, onChanged }: { selected: ApiRecord | null
           }
           return (
             <div className="detail-stack">
-              <KeyValue record={detail} keys={["submissionId", "extensionId", "extensionName", "extensionType", "status", "submittedAt"]} />
-              <JsonPreview value={read(detail, "aiPrecheck", "precheck", "latestRevision")} />
+              <ReviewDetailSections detail={detail} />
               <label>
                 审核意见
                 <textarea value={comment} onChange={(event) => setComment(event.target.value)} />
               </label>
               {error ? <InlineError error={error} /> : null}
-              <div className="button-row">
-                <button className="primary-button" type="button" disabled={!!busyAction} onClick={() => decide("approve", detail)}>
-                  {busyAction === "approve" ? "处理中" : "通过"}
-                </button>
-                <button className="secondary-button" type="button" disabled={!!busyAction} onClick={() => decide("request-changes", detail)}>
-                  要求修改
-                </button>
-                <button className="danger-button" type="button" disabled={!!busyAction} onClick={() => decide("reject", detail)}>
-                  驳回
-                </button>
-              </div>
+              <ReviewDecisionButtons busyAction={busyAction} comment={comment} onDecide={(action) => decide(action, detail)} />
             </div>
           );
         }}
       </ResourceState>
     </Panel>
+  );
+}
+
+export function ReviewDetailSections({ detail }: { detail: ApiRecord }) {
+  const latestRevision = currentReviewRevision(detail);
+  const revisionPayload = unwrapEnvelope(read(latestRevision, "payloadSnapshot"));
+  const packageSnapshot = unwrapEnvelope(read(latestRevision, "packageSnapshot"));
+  const revisionData = mergeRecords(revisionPayload, packageSnapshot, latestRevision);
+  const precheck = currentReviewPrecheck(detail, latestRevision);
+  const systemCheck = withPrecheckStatus(
+    read(detail, "systemCheck", "systemChecks", "rulePrecheck", "policyPrecheck", "validationResults") ?? read(precheck, "ruleResult"),
+    precheck,
+    ["ruleStatus", "rule_status"]
+  );
+  const aiPrecheck = withPrecheckStatus(
+    read(detail, "aiPrecheck", "precheck", "aiReview") ?? read(precheck, "aiResultSummary"),
+    precheck,
+    ["aiStatus", "ai_status"]
+  );
+  const extensionType = safeString(read(detail, "extensionType", "type", "latestRevision.type", "latestRevision.extensionType") ?? read(revisionData, "extensionType", "type"));
+  const typedPreview = mergeRecords(
+    read(revisionData, "typePayload", "definition", "manifest", "packageMetadata"),
+    revisionData,
+    read(detail, "typedPreview", "definition", "manifest", "latestRevision.definition")
+  ) ?? read(detail, "typedPreview", "definition", "manifest", "latestRevision.definition") ?? revisionData ?? latestRevision;
+
+  return (
+    <>
+      <DetailSection title="顶部摘要">
+        <FieldGrid
+          fields={[
+            field("申请 ID", read(detail, "submissionId", "id")),
+            field("扩展名称", read(detail, "extensionName", "name", "latestRevision.name") ?? read(revisionData, "metadata.name", "name")),
+            field("扩展类型", extensionType),
+            field("审核状态", read(detail, "status")),
+            field("提交人", read(detail, "submitterName", "submittedByName", "applicantName", "submitter.name")),
+            field("提交部门", read(detail, "departmentName", "ownerDepartmentName", "submitter.departmentName")),
+            field("目标版本", read(detail, "targetVersion", "version", "latestRevision.version") ?? read(revisionData, "version")),
+            field("提交时间", formatDate(read(detail, "submittedAt", "createdAt"))),
+            field("风险等级", read(detail, "riskLevel", "aiPrecheck.riskLevel", "precheck.riskLevel") ?? read(aiPrecheck, "riskLevel")),
+            field("AI 预审状态", read(detail, "aiPrecheckStatus", "aiStatus", "precheck.status") ?? read(aiPrecheck, "status"))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title="本次申请内容">
+        <FieldGrid
+          fields={[
+            field("申请类型", read(detail, "applicationType", "submissionType", "changeType")),
+            field("扩展 ID", read(detail, "extensionId", "latestRevision.extensionId") ?? read(revisionData, "extensionId")),
+            field("当前版本", read(detail, "currentVersion", "previousVersion")),
+            field("目标版本", read(detail, "targetVersion", "latestRevision.version") ?? read(revisionData, "version")),
+            field("变更摘要", read(detail, "changeSummary", "summary", "description", "latestRevision.description") ?? read(revisionData, "metadata.description", "description")),
+            field("申请原因", read(detail, "reason", "submitReason", "businessReason") ?? read(revisionData, "riskStatement.reason", "riskStatement.summary"))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title="系统校验结果">
+        <SystemCheckResult value={systemCheck} />
+      </DetailSection>
+
+      <DetailSection title="AI 系统预审结果">
+        <AiPrecheckResult value={aiPrecheck} />
+      </DetailSection>
+
+      <DetailSection title={`${reviewTypeLabel(extensionType)}内容预览`}>
+        <TypedContentPreview detail={detail} extensionType={extensionType} value={typedPreview} />
+      </DetailSection>
+
+      <DetailSection title="授权、可见选项与影响范围">
+        <FieldGrid
+          fields={[
+            field("当前可见性", read(detail, "visibilityMode", "currentVisibilityMode", "latestRevision.visibilityMode")),
+            field("目标可见性", read(detail, "targetVisibilityMode") ?? read(revisionData, "visibilityMode")),
+            field("当前授权范围", read(detail, "scope", "currentScope", "latestRevision.scope")),
+            field("目标授权范围", read(detail, "targetScope")),
+            field("影响部门", read(detail, "impactDepartments", "impactDepartmentNames", "targetDepartments")),
+            field("影响用户数", read(detail, "impactUserCount", "affectedUserCount")),
+            field("授权变更", read(detail, "authorizationImpact", "permissionImpact", "scopeChangeSummary") ?? read(revisionData, "authorizationScope"))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title="风险声明">
+        <FieldGrid
+          fields={[
+            field("风险等级", read(detail, "riskLevel", "aiPrecheck.riskLevel", "precheck.riskLevel") ?? read(aiPrecheck, "riskLevel")),
+            field("风险摘要", read(detail, "riskSummary", "riskStatement", "aiPrecheck.summary", "precheck.summary") ?? read(revisionData, "riskStatement.summary", "riskStatement")),
+            field("敏感能力", read(detail, "sensitiveCapabilities", "permissions", "latestRevision.permissions") ?? read(typedPreview, "permissions")),
+            field("安全说明", read(detail, "securityNotes", "sensitiveInfoWarning", "privacyStatement"))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title="历史记录与审核意见">
+        <JsonOrEmpty value={read(detail, "reviewHistory", "history", "events", "comments", "decisionHistory")} />
+      </DetailSection>
+    </>
+  );
+}
+
+export function ReviewDecisionButtons({
+  busyAction,
+  comment,
+  onDecide
+}: {
+  busyAction: string | null;
+  comment: string;
+  onDecide: (action: ReviewAction) => void;
+}) {
+  const hasReason = comment.trim().length > 0;
+  return (
+    <div className="button-row">
+      <button className="primary-button" type="button" disabled={!!busyAction} onClick={() => onDecide("approve")}>
+        {busyAction === "approve" ? "处理中" : "通过"}
+      </button>
+      <button
+        className="secondary-button"
+        type="button"
+        disabled={!!busyAction || !hasReason}
+        onClick={() => onDecide("request-changes")}
+      >
+        要求修改
+      </button>
+      <button className="danger-button" type="button" disabled={!!busyAction || !hasReason} onClick={() => onDecide("reject")}>
+        驳回
+      </button>
+    </div>
   );
 }
 
@@ -458,18 +584,26 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
   const [error, setError] = useState<ViewError | null>(null);
   const [success, setSuccess] = useState("");
 
-  async function govern(action: string) {
+  async function govern(action: GovernanceAction) {
     if (!extensionId) {
+      return;
+    }
+    const normalizedReason = reason.trim();
+    if (governanceActionRequiresReason(action) && !normalizedReason) {
+      setError({ message: "治理动作必须填写原因；安全下架请包含安全原因、影响范围和处置建议。" });
+      return;
+    }
+    if (action === "archive" && typeof window !== "undefined" && !window.confirm("归档为终态，确认归档该扩展？")) {
       return;
     }
     setError(null);
     setSuccess("");
     try {
       await adminApi.extensions.govern(extensionId, action, {
-        reason,
+        reason: normalizedReason,
         reasonType: action,
-        reasonDetail: reason,
-        securityReason: action === "security-delist" ? reason : undefined,
+        reasonDetail: normalizedReason,
+        securityReason: action === "security-delist" ? normalizedReason : undefined,
         targetVisibilityMode: action === "visibility/reduce" ? targetVisibilityMode : undefined,
         targetScope: action === "scope/reduce" ? JSON.parse(targetScope) : undefined
       });
@@ -493,10 +627,16 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
           }
           return (
             <div className="detail-stack">
-              <KeyValue record={detail} keys={["extensionId", "id", "name", "type", "status", "visibilityMode", "ownerDepartmentName"]} />
-              <JsonPreview value={read(detail, "scope", "definition", "manifest")} />
+              <ExtensionDetailSections
+                detail={detail}
+                versions={versionsResource.status === "success" ? versionsResource.data : undefined}
+              />
               <ResourceState resource={versionsResource} compact>
-                {(versions) => <JsonPreview title="版本记录" value={versions} />}
+                {(versions) => (
+                  <DetailSection title="版本历史">
+                    <JsonOrEmpty value={versions} />
+                  </DetailSection>
+                )}
               </ResourceState>
               <label>
                 原因
@@ -515,19 +655,109 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
               </label>
               {error ? <InlineError error={error} /> : null}
               {success ? <p className="success-text">{success}</p> : null}
-              <div className="button-row wrap">
-                <button type="button" className="secondary-button" onClick={() => govern("delist")}>下架</button>
-                <button type="button" className="danger-button" onClick={() => govern("security-delist")}>安全下架</button>
-                <button type="button" className="secondary-button" onClick={() => govern("relist")}>恢复上架</button>
-                <button type="button" className="secondary-button" onClick={() => govern("scope/reduce")}>收缩授权</button>
-                <button type="button" className="secondary-button" onClick={() => govern("visibility/reduce")}>收缩可见性</button>
-                <button type="button" className="ghost-button" onClick={() => govern("archive")}>归档</button>
-              </div>
+              <ExtensionGovernanceButtons reason={reason} onGovern={govern} />
             </div>
           );
         }}
       </ResourceState>
     </Panel>
+  );
+}
+
+export function ExtensionDetailSections({ detail, versions }: { detail: ApiRecord; versions?: unknown }) {
+  const latestVersion = firstRecord(versions) ?? asRecord(read(detail, "latestVersion", "currentVersionDetail"));
+  const versionPayload = unwrapEnvelope(read(latestVersion, "payloadSnapshot"));
+  const packageSnapshot = unwrapEnvelope(read(latestVersion, "packageSnapshot"));
+  const versionData = mergeRecords(versionPayload, packageSnapshot, latestVersion);
+  const extensionType = safeString(read(detail, "type", "extensionType", "latestVersion.type") ?? read(versionData, "extensionType", "type"));
+  const typedPreview = mergeRecords(
+    read(versionData, "typePayload", "definition", "manifest", "packageMetadata"),
+    versionData,
+    read(detail, "definition", "manifest", "packageMetadata", "latestVersion.definition", "latestVersion.manifest")
+  ) ?? read(detail, "definition", "manifest", "packageMetadata", "latestVersion.definition", "latestVersion.manifest") ?? versionData;
+
+  return (
+    <>
+      <DetailSection title="基础信息">
+        <FieldGrid
+          fields={[
+            field("扩展 ID", read(detail, "extensionId", "id")),
+            field("名称", read(detail, "name", "extensionName")),
+            field("类型", extensionType),
+            field("状态", read(detail, "status")),
+            field("当前版本", read(detail, "version", "currentVersion", "latestVersion.version") ?? read(latestVersion, "version")),
+            field("作者", read(detail, "authorName", "author", "publisherName")),
+            field("所属部门", read(detail, "ownerDepartmentName", "departmentName", "publisherDepartmentName")),
+            field("更新时间", formatDate(read(detail, "updatedAt", "publishedAt", "createdAt")))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title="授权与可见范围">
+        <FieldGrid
+          fields={[
+            field("可见性", read(detail, "visibilityMode")),
+            field("授权范围", read(detail, "scope", "authorizedScope")),
+            field("可见部门", read(detail, "visibleDepartments", "departmentScope")),
+            field("可用用户数", read(detail, "authorizedUserCount", "visibleUserCount")),
+            field("收缩建议", read(detail, "scopeReductionSuggestion", "visibilitySuggestion"))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title="发布与审核状态">
+        <FieldGrid
+          fields={[
+            field("审核状态", read(detail, "reviewStatus", "latestReviewStatus")),
+            field("AI 预审状态", read(detail, "aiPrecheckStatus", "aiStatus", "precheck.status")),
+            field("最近申请", read(detail, "latestSubmissionId", "submissionId")),
+            field("发布时间", formatDate(read(detail, "publishedAt"))),
+            field("下架原因", read(detail, "delistReason", "securityReason", "archiveReason"))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title="使用统计与风险">
+        <FieldGrid
+          fields={[
+            field("安装量", read(detail, "installCount", "installationCount")),
+            field("调用次数", read(detail, "usageCount", "invocationCount")),
+            field("活跃用户", read(detail, "activeUserCount")),
+            field("异常事件", read(detail, "abnormalEventCount", "exceptionCount")),
+            field("风险等级", read(detail, "riskLevel", "aiPrecheck.riskLevel", "precheck.riskLevel")),
+            field("风险摘要", read(detail, "riskSummary", "aiPrecheck.summary", "precheck.summary"))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title={`${reviewTypeLabel(extensionType)}内容详情`}>
+        <TypedContentPreview detail={detail} extensionType={extensionType} value={typedPreview} />
+      </DetailSection>
+
+      <DetailSection title="本地事件与异常">
+        <JsonOrEmpty value={read(detail, "localEvents", "deviceExceptions", "exceptionEvents", "recentEvents")} />
+      </DetailSection>
+    </>
+  );
+}
+
+export function ExtensionGovernanceButtons({
+  reason,
+  onGovern
+}: {
+  reason: string;
+  onGovern: (action: GovernanceAction) => void;
+}) {
+  const reasonMissing = reason.trim().length === 0;
+  return (
+    <div className="button-row wrap">
+      <button type="button" className="secondary-button" disabled={reasonMissing} onClick={() => onGovern("delist")}>下架</button>
+      <button type="button" className="danger-button" disabled={reasonMissing} onClick={() => onGovern("security-delist")}>安全下架</button>
+      <button type="button" className="secondary-button" disabled={reasonMissing} onClick={() => onGovern("relist")}>恢复上架</button>
+      <button type="button" className="secondary-button" disabled={reasonMissing} onClick={() => onGovern("scope/reduce")}>收缩授权</button>
+      <button type="button" className="secondary-button" disabled={reasonMissing} onClick={() => onGovern("visibility/reduce")}>收缩可见性</button>
+      <button type="button" className="ghost-button" disabled={reasonMissing} onClick={() => onGovern("archive")}>归档</button>
+    </div>
   );
 }
 
@@ -1335,6 +1565,284 @@ function TreeList({ items, onAction }: { items: ApiRecord[]; onAction: (id: stri
   );
 }
 
+function currentReviewRevision(detail: ApiRecord): ApiRecord | undefined {
+  const revisions = asRecordArray(read(detail, "revisions"));
+  const currentRevisionId = safeString(read(detail, "currentRevisionId", "effectiveRevisionId", "revisionId", "latestRevision.id", "revision.id"));
+  const matchedRevision = currentRevisionId
+    ? revisions.find((item) => safeString(read(item, "id", "revisionId")) === currentRevisionId)
+    : undefined;
+  return matchedRevision ?? asRecord(read(detail, "latestRevision", "revision", "currentRevision")) ?? revisions[0];
+}
+
+function currentReviewPrecheck(detail: ApiRecord, revision: ApiRecord | undefined): ApiRecord | undefined {
+  const prechecks = asRecordArray(read(detail, "prechecks"));
+  const revisionId = safeString(read(revision, "id", "revisionId"));
+  const matchedPrecheck = revisionId
+    ? prechecks.find((item) => safeString(read(item, "revisionId", "revision_id")) === revisionId)
+    : undefined;
+  return matchedPrecheck ?? asRecord(read(detail, "systemPrecheck", "latestPrecheck")) ?? prechecks[0];
+}
+
+function withPrecheckStatus(value: unknown, row: unknown, statusKeys: string[]): unknown {
+  const unwrapped = unwrapEnvelope(value);
+  const valueRecord = asRecord(unwrapped);
+  const rowRecord = asRecord(row);
+  const status = read(valueRecord, "status", "result", "overallStatus", "precheckStatus", "riskLevel") ?? read(rowRecord, ...statusKeys);
+  const checkedAt = read(valueRecord, "checkedAt", "createdAt", "updatedAt") ?? read(rowRecord, "createdAt", "created_at");
+  const modelVersion = read(valueRecord, "modelVersion", "ruleVersion", "version") ?? read(rowRecord, "aiModel", "ai_model", "aiPromptVersion", "ai_prompt_version");
+
+  if (!valueRecord && !rowRecord && !hasDisplayValue(unwrapped)) {
+    return undefined;
+  }
+  const normalized: ApiRecord = valueRecord ? { ...valueRecord } : {};
+  if (status !== undefined) {
+    normalized.status = status;
+  }
+  if (checkedAt !== undefined) {
+    normalized.checkedAt = checkedAt;
+  }
+  if (modelVersion !== undefined) {
+    normalized.modelVersion = modelVersion;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : unwrapped;
+}
+
+function firstRecord(value: unknown): ApiRecord | undefined {
+  return asRecordArray(value)[0];
+}
+
+function asRecordArray(value: unknown): ApiRecord[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => asRecord(item)).filter((item): item is ApiRecord => !!item);
+  }
+  const items = read(unwrapEnvelope(value), "items", "data.items");
+  if (Array.isArray(items)) {
+    return items.map((item) => asRecord(item)).filter((item): item is ApiRecord => !!item);
+  }
+  return [];
+}
+
+function asRecord(value: unknown): ApiRecord | undefined {
+  const unwrapped = unwrapEnvelope(value);
+  return unwrapped && typeof unwrapped === "object" && !Array.isArray(unwrapped) ? unwrapped as ApiRecord : undefined;
+}
+
+function unwrapEnvelope(value: unknown): unknown {
+  let current = value;
+  for (let index = 0; index < 3; index += 1) {
+    const record = current && typeof current === "object" && !Array.isArray(current) ? current as ApiRecord : undefined;
+    if (!record || !("data" in record) || (!("type" in record) && !("schemaVersion" in record) && Object.keys(record).length > 2)) {
+      return current;
+    }
+    current = record.data;
+  }
+  return current;
+}
+
+function mergeRecords(...values: unknown[]): ApiRecord | undefined {
+  const merged: ApiRecord = {};
+  for (const value of values) {
+    const record = asRecord(value);
+    if (record && hasDisplayValue(record)) {
+      Object.assign(merged, record);
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+type DetailField = { label: string; value: unknown };
+
+function DetailSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="detail-section">
+      <h4>{title}</h4>
+      {children}
+    </section>
+  );
+}
+
+function FieldGrid({ fields }: { fields: DetailField[] }) {
+  const visibleFields = fields.filter((item) => hasDisplayValue(item.value));
+  if (visibleFields.length === 0) {
+    return <p className="section-empty">暂无数据</p>;
+  }
+  return (
+    <dl className="field-grid">
+      {visibleFields.map((item) => (
+        <div key={item.label}>
+          <dt>{item.label}</dt>
+          <dd>{safeString(item.value)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function JsonOrEmpty({ value }: { value: unknown }) {
+  return hasDisplayValue(value) ? <JsonPreview value={value} /> : <p className="section-empty">暂无数据</p>;
+}
+
+function SystemCheckResult({ value }: { value: unknown }) {
+  if (!hasDisplayValue(value)) {
+    return (
+      <PrecheckUnavailable title="系统校验结果缺失" description="系统校验结果未随详情返回，审核前需要本地或服务端继续确认。" />
+    );
+  }
+  return (
+    <PrecheckResult
+      value={value}
+      fields={[
+        field("状态", read(value, "status", "result", "overallStatus")),
+        field("包安全校验", read(value, "packageSecurity", "packageSecurityStatus", "securityStatus")),
+        field("类型特定校验", read(value, "typedValidation", "typeSpecificCheck", "typeSpecificStatus")),
+        field("内容外显风险", read(value, "contentExposureRisk", "exposureRisk", "visibilityRisk")),
+        field("校验时间", formatDate(read(value, "checkedAt", "createdAt", "updatedAt")))
+      ]}
+      failureValue={read(value, "failures", "failedItems", "errors", "blockingIssues")}
+      warningValue={read(value, "warnings", "warningItems", "riskWarnings")}
+    />
+  );
+}
+
+function AiPrecheckResult({ value }: { value: unknown }) {
+  if (!hasDisplayValue(value)) {
+    return <PrecheckUnavailable title="AI 预审不可用" description="申请仍进入人工审核；管理员决定必须独立记录，不得只保存 AI 建议。" />;
+  }
+  if (isUnavailablePrecheck(value)) {
+    return (
+      <div className="precheck-result warning">
+        <PrecheckUnavailable title="AI 预审不可用" description="申请仍进入人工审核；管理员决定必须独立记录，不得只保存 AI 建议。" />
+        <JsonPreview title="完整结果" value={value} />
+      </div>
+    );
+  }
+  return (
+    <PrecheckResult
+      value={value}
+      fields={[
+        field("预审状态", read(value, "status", "result", "precheckStatus")),
+        field("模型或规则版本", read(value, "modelVersion", "ruleVersion", "version")),
+        field("风险摘要", read(value, "summary", "riskSummary")),
+        field("疑似敏感信息摘要", read(value, "sensitiveInfoSummary", "sensitiveDataSummary")),
+        field("建议重点检查", read(value, "suggestedChecks", "recommendations", "checkpoints")),
+        field("预审时间", formatDate(read(value, "checkedAt", "createdAt", "updatedAt")))
+      ]}
+      failureValue={read(value, "failures", "failedItems", "errors", "blockingIssues")}
+      warningValue={read(value, "warnings", "warningItems", "riskWarnings")}
+    />
+  );
+}
+
+function PrecheckResult({
+  value,
+  fields,
+  failureValue,
+  warningValue
+}: {
+  value: unknown;
+  fields: DetailField[];
+  failureValue: unknown;
+  warningValue: unknown;
+}) {
+  return (
+    <div className={`precheck-result ${precheckTone(value, failureValue, warningValue)}`}>
+      <FieldGrid fields={fields} />
+      {hasDisplayValue(failureValue) ? <PrecheckCallout tone="danger" title="失败项" value={failureValue} /> : null}
+      {hasDisplayValue(warningValue) ? <PrecheckCallout tone="warning" title="警告项" value={warningValue} /> : null}
+      <JsonPreview title="完整结果" value={value} />
+    </div>
+  );
+}
+
+function PrecheckUnavailable({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="precheck-unavailable">
+      <strong>{title}</strong>
+      <p>{description}</p>
+    </div>
+  );
+}
+
+function PrecheckCallout({ tone, title, value }: { tone: "danger" | "warning"; title: string; value: unknown }) {
+  return (
+    <div className={`precheck-callout ${tone}`}>
+      <strong>{title}</strong>
+      <JsonPreview value={value} />
+    </div>
+  );
+}
+
+function TypedContentPreview({ detail, extensionType, value }: { detail: ApiRecord; extensionType: string; value: unknown }) {
+  const source = mergeRecords(read(value, "typePayload", "definition", "manifest", "packageMetadata"), value) ?? value;
+  if (extensionType === "MCP_SERVER") {
+    return (
+      <TypedContentBlock
+        value={source}
+        fields={[
+          field("MCP 定义清单", read(source, "definitionList", "definitions", "mcpDefinition", "servers")),
+          field("接入方式", read(source, "accessMode", "accessMethod", "connectionMode")),
+          field("transport", read(source, "transport")),
+          field("accessType", read(source, "accessType")),
+          field("command 或 endpoint", read(source, "command", "endpoint", "url", "serverUrl")),
+          field("配置模板", read(source, "configTemplate", "configurationTemplate")),
+          field("变量 schema", read(source, "variableSchema", "variablesSchema", "schema")),
+          field("敏感变量", read(source, "sensitiveVariables", "secretVariables")),
+          field("支持工具", read(source, "tools", "supportedTools")),
+          field("连接检测", read(source, "connectionCheck", "healthCheck")),
+          field("权限声明", read(source, "permissions", "permissionDeclaration")),
+          field("数据访问说明", read(source, "dataAccess", "dataAccessDescription")),
+          field("端点/命令风险", read(detail, "endpointRiskSummary", "commandRiskSummary", "aiPrecheck.endpointRisks", "precheck.commandRisks")),
+          field("local-command 风险", read(source, "localCommandRisk", "commandRisk", "executionRisk"))
+        ]}
+      />
+    );
+  }
+  if (extensionType === "PLUGIN") {
+    return (
+      <TypedContentBlock
+        value={source}
+        fields={[
+          field("插件包文件清单", read(source, "fileList", "packageFiles", "files")),
+          field("安装模式", read(source, "installMode", "installationMode")),
+          field("安装清单", read(source, "installManifest", "manifest")),
+          field("安装、更新、卸载步骤", read(source, "lifecycleSteps", "installSteps", "updateSteps", "uninstallSteps")),
+          field("支持回滚", read(source, "rollbackSupported", "supportsRollback")),
+          field("目标工具", read(source, "targetTool", "targetTools")),
+          field("兼容版本", read(source, "compatibleVersions", "compatibility")),
+          field("权限声明", read(source, "permissions", "permissionDeclaration")),
+          field("风险说明", read(source, "riskNotes", "riskStatement")),
+          field("受控文件摘要", read(source, "downloadSummary", "controlledFileSummary")),
+          field("安装路径/脚本风险", read(detail, "installPathRiskSummary", "scriptRiskSummary", "aiPrecheck.installationRisks", "precheck.installationRisks"))
+        ]}
+      />
+    );
+  }
+  if (extensionType === "SKILL") {
+    return (
+      <TypedContentBlock
+        value={source}
+        fields={[
+          field("文件清单", read(source, "fileList", "files")),
+          field("SKILL.md 预览", read(source, "skillMarkdownPreview", "skillMdPreview", "skillMd")),
+          field("README.md 预览", read(source, "readmePreview", "readme")),
+          field("包 Hash", read(source, "packageHash", "sha256")),
+          field("风险文件摘要", read(source, "riskFileSummary", "riskyFiles"))
+        ]}
+      />
+    );
+  }
+  return <JsonOrEmpty value={source} />;
+}
+
+function TypedContentBlock({ fields, value }: { fields: DetailField[]; value: unknown }) {
+  return (
+    <div className="typed-content">
+      <FieldGrid fields={fields} />
+      <JsonOrEmpty value={value} />
+    </div>
+  );
+}
+
 function KeyValue({ record, keys }: { record: ApiRecord; keys: string[] }) {
   return (
     <dl className="key-value">
@@ -1352,6 +1860,63 @@ function KeyValue({ record, keys }: { record: ApiRecord; keys: string[] }) {
       })}
     </dl>
   );
+}
+
+function field(label: string, value: unknown): DetailField {
+  return { label, value };
+}
+
+function hasDisplayValue(value: unknown): boolean {
+  if (value === undefined || value === null || value === "") {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (typeof value === "object") {
+    return Object.keys(value).length > 0;
+  }
+  return true;
+}
+
+function reviewActionRequiresReason(action: ReviewAction): boolean {
+  return action === "request-changes" || action === "reject";
+}
+
+function governanceActionRequiresReason(action: GovernanceAction): boolean {
+  return action === "delist" || action === "security-delist" || action === "relist" || action === "scope/reduce" || action === "visibility/reduce" || action === "archive";
+}
+
+function precheckTone(value: unknown, failureValue: unknown, warningValue: unknown): "danger" | "warning" | "success" | "neutral" {
+  const status = safeString(read(value, "status", "result", "overallStatus", "precheckStatus", "riskLevel")).toLowerCase();
+  if (hasDisplayValue(failureValue) || status.includes("fail") || status.includes("error") || status.includes("失败") || status.includes("high")) {
+    return "danger";
+  }
+  if (hasDisplayValue(warningValue) || status.includes("warn") || status.includes("警告") || status.includes("medium")) {
+    return "warning";
+  }
+  if (status.includes("pass") || status.includes("success") || status.includes("通过") || status.includes("low")) {
+    return "success";
+  }
+  return "neutral";
+}
+
+function isUnavailablePrecheck(value: unknown): boolean {
+  const status = safeString(read(value, "status", "result", "precheckStatus")).toLowerCase();
+  return status.includes("unavailable") || status.includes("不可用");
+}
+
+function reviewTypeLabel(value: string): string {
+  if (value === "MCP_SERVER") {
+    return "MCP 服务";
+  }
+  if (value === "PLUGIN") {
+    return "Plugin";
+  }
+  if (value === "SKILL") {
+    return "Skill";
+  }
+  return "扩展";
 }
 
 function JsonPreview({ value, title }: { value: unknown; title?: string }) {

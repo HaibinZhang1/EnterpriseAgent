@@ -233,7 +233,11 @@ export const adminApi = {
     detail: (extensionId: string) => request<ApiRecord>(`/admin/extensions/${extensionId}`),
     versions: (extensionId: string) => request<unknown>(`/admin/extensions/${extensionId}/versions`),
     govern: (extensionId: string, action: string, body: ApiRecord = {}) =>
-      request<ApiRecord>(`/admin/extensions/${extensionId}/${action}`, { method: "POST", body })
+      request<ApiRecord>(`/admin/extensions/${extensionId}/${action}`, {
+        method: "POST",
+        body,
+        idempotencyKey: requestId()
+      })
   },
   departments: {
     tree: (query: Record<string, unknown> = {}) => request<ApiRecord[]>("/admin/departments/tree", { query }),
