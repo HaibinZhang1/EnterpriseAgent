@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import App, { LoginScreen, PageRouter } from "./App";
+import App, { ExtensionDetailSections, LoginScreen, PageRouter, ReviewDetailSections } from "./App";
 import { Role, UserSummary } from "./api";
 
 const baseUser: UserSummary = {
@@ -70,6 +70,88 @@ describe("Web Admin renderer", () => {
     );
     expect(html).toContain("无权访问");
     expect(html).toContain("仅系统管理员可见");
+  });
+
+  it("renders review detail sections required by the admin review flow", () => {
+    const html = renderToStaticMarkup(
+      <ReviewDetailSections
+        detail={{
+          submissionId: "sub-1",
+          extensionId: "ext-1",
+          extensionName: "知识库同步",
+          extensionType: "MCP_SERVER",
+          status: "PENDING",
+          submitterName: "Alice",
+          departmentName: "研发部",
+          targetVersion: "1.2.0",
+          submittedAt: "2026-06-03T08:00:00Z",
+          applicationType: "UPDATE",
+          changeSummary: "新增只读同步工具",
+          systemChecks: { packageValid: true, signature: "VALID" },
+          aiPrecheck: { riskLevel: "MEDIUM", summary: "需要人工确认外部 API 范围" },
+          definition: { tools: ["syncDocuments"] },
+          targetVisibilityMode: "AUTHORIZED_ONLY",
+          impactUserCount: 42,
+          riskStatement: "涉及内部文档索引",
+          reviewHistory: [{ action: "SUBMITTED", actor: "Alice" }]
+        }}
+      />
+    );
+
+    for (const label of [
+      "顶部摘要",
+      "本次申请内容",
+      "系统校验结果",
+      "AI 系统预审结果",
+      "MCP 服务内容预览",
+      "授权、可见选项与影响范围",
+      "风险声明",
+      "历史记录与审核意见"
+    ]) {
+      expect(html).toContain(label);
+    }
+    expect(html).toContain("知识库同步");
+    expect(html).toContain("syncDocuments");
+    expect(html).toContain("42");
+  });
+
+  it("renders extension governance sections required by the admin extension flow", () => {
+    const html = renderToStaticMarkup(
+      <ExtensionDetailSections
+        detail={{
+          extensionId: "ext-1",
+          name: "GitHub 同步插件",
+          type: "PLUGIN",
+          status: "PUBLISHED",
+          version: "2.0.1",
+          authorName: "Platform Team",
+          ownerDepartmentName: "平台部",
+          visibilityMode: "AUTHORIZED_ONLY",
+          scope: { departmentIds: ["dept-1"] },
+          reviewStatus: "APPROVED",
+          aiPrecheckStatus: "PASS",
+          installCount: 10,
+          usageCount: 328,
+          riskLevel: "LOW",
+          manifest: { commands: ["sync"] },
+          localEvents: [{ type: "DEVICE_EXCEPTION", count: 1 }]
+        }}
+      />
+    );
+
+    for (const label of [
+      "基础信息",
+      "授权与可见范围",
+      "发布与审核状态",
+      "使用统计与风险",
+      "Plugin内容详情",
+      "本地事件与异常"
+    ]) {
+      expect(html).toContain(label);
+    }
+    expect(html).toContain("GitHub 同步插件");
+    expect(html).toContain("Platform Team");
+    expect(html).toContain("DEVICE_EXCEPTION");
   });
 });
 

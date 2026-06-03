@@ -520,6 +520,53 @@ tbody tr:hover {
   margin: 0;
 }
 
+.detail-section {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid rgba(120, 136, 166, 0.18);
+  padding-top: 12px;
+}
+
+.detail-section:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.detail-section h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.field-grid {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.field-grid div {
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr);
+  gap: 10px;
+  border-bottom: 1px solid rgba(120, 136, 166, 0.12);
+  padding-bottom: 7px;
+}
+
+.field-grid dt,
+.section-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.field-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.section-empty {
+  margin: 0;
+}
+
 .key-value div {
   display: grid;
   grid-template-columns: 150px minmax(0, 1fr);

@@ -369,8 +369,7 @@ function ReviewDetailPanel({ selected, onChanged }: { selected: ApiRecord | null
           }
           return (
             <div className="detail-stack">
-              <KeyValue record={detail} keys={["submissionId", "extensionId", "extensionName", "extensionType", "status", "submittedAt"]} />
-              <JsonPreview value={read(detail, "aiPrecheck", "precheck", "latestRevision")} />
+              <ReviewDetailSections detail={detail} />
               <label>
                 审核意见
                 <textarea value={comment} onChange={(event) => setComment(event.target.value)} />
@@ -392,6 +391,86 @@ function ReviewDetailPanel({ selected, onChanged }: { selected: ApiRecord | null
         }}
       </ResourceState>
     </Panel>
+  );
+}
+
+export function ReviewDetailSections({ detail }: { detail: ApiRecord }) {
+  const latestRevision = read(detail, "latestRevision", "revision", "currentRevision");
+  const extensionType = safeString(read(detail, "extensionType", "type", "latestRevision.type", "latestRevision.extensionType"));
+
+  return (
+    <>
+      <DetailSection title="顶部摘要">
+        <FieldGrid
+          fields={[
+            field("申请 ID", read(detail, "submissionId", "id")),
+            field("扩展名称", read(detail, "extensionName", "name", "latestRevision.name")),
+            field("扩展类型", extensionType),
+            field("审核状态", read(detail, "status")),
+            field("提交人", read(detail, "submitterName", "submittedByName", "applicantName", "submitter.name")),
+            field("提交部门", read(detail, "departmentName", "ownerDepartmentName", "submitter.departmentName")),
+            field("目标版本", read(detail, "targetVersion", "version", "latestRevision.version")),
+            field("提交时间", formatDate(read(detail, "submittedAt", "createdAt"))),
+            field("风险等级", read(detail, "riskLevel", "aiPrecheck.riskLevel", "precheck.riskLevel")),
+            field("AI 预审状态", read(detail, "aiPrecheckStatus", "aiStatus", "precheck.status"))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title="本次申请内容">
+        <FieldGrid
+          fields={[
+            field("申请类型", read(detail, "applicationType", "submissionType", "changeType")),
+            field("扩展 ID", read(detail, "extensionId", "latestRevision.extensionId")),
+            field("当前版本", read(detail, "currentVersion", "previousVersion")),
+            field("目标版本", read(detail, "targetVersion", "latestRevision.version")),
+            field("变更摘要", read(detail, "changeSummary", "summary", "description", "latestRevision.description")),
+            field("申请原因", read(detail, "reason", "submitReason", "businessReason"))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title="系统校验结果">
+        <JsonOrEmpty value={read(detail, "systemCheck", "systemChecks", "rulePrecheck", "policyPrecheck", "validationResults")} />
+      </DetailSection>
+
+      <DetailSection title="AI 系统预审结果">
+        <JsonOrEmpty value={read(detail, "aiPrecheck", "precheck", "aiReview")} />
+      </DetailSection>
+
+      <DetailSection title={`${reviewTypeLabel(extensionType)}内容预览`}>
+        <JsonOrEmpty value={read(detail, "typedPreview", "definition", "manifest", "latestRevision.definition") ?? latestRevision} />
+      </DetailSection>
+
+      <DetailSection title="授权、可见选项与影响范围">
+        <FieldGrid
+          fields={[
+            field("当前可见性", read(detail, "visibilityMode", "currentVisibilityMode", "latestRevision.visibilityMode")),
+            field("目标可见性", read(detail, "targetVisibilityMode")),
+            field("当前授权范围", read(detail, "scope", "currentScope", "latestRevision.scope")),
+            field("目标授权范围", read(detail, "targetScope")),
+            field("影响部门", read(detail, "impactDepartments", "impactDepartmentNames", "targetDepartments")),
+            field("影响用户数", read(detail, "impactUserCount", "affectedUserCount")),
+            field("授权变更", read(detail, "authorizationImpact", "permissionImpact", "scopeChangeSummary"))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title="风险声明">
+        <FieldGrid
+          fields={[
+            field("风险等级", read(detail, "riskLevel", "aiPrecheck.riskLevel", "precheck.riskLevel")),
+            field("风险摘要", read(detail, "riskSummary", "riskStatement", "aiPrecheck.summary", "precheck.summary")),
+            field("敏感能力", read(detail, "sensitiveCapabilities", "permissions", "latestRevision.permissions")),
+            field("安全说明", read(detail, "securityNotes", "sensitiveInfoWarning", "privacyStatement"))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title="历史记录与审核意见">
+        <JsonOrEmpty value={read(detail, "reviewHistory", "history", "events", "comments", "decisionHistory")} />
+      </DetailSection>
+    </>
   );
 }
 
@@ -493,10 +572,13 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
           }
           return (
             <div className="detail-stack">
-              <KeyValue record={detail} keys={["extensionId", "id", "name", "type", "status", "visibilityMode", "ownerDepartmentName"]} />
-              <JsonPreview value={read(detail, "scope", "definition", "manifest")} />
+              <ExtensionDetailSections detail={detail} />
               <ResourceState resource={versionsResource} compact>
-                {(versions) => <JsonPreview title="版本记录" value={versions} />}
+                {(versions) => (
+                  <DetailSection title="版本历史">
+                    <JsonOrEmpty value={versions} />
+                  </DetailSection>
+                )}
               </ResourceState>
               <label>
                 原因
@@ -528,6 +610,74 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
         }}
       </ResourceState>
     </Panel>
+  );
+}
+
+export function ExtensionDetailSections({ detail }: { detail: ApiRecord }) {
+  const extensionType = safeString(read(detail, "type", "extensionType", "latestVersion.type"));
+
+  return (
+    <>
+      <DetailSection title="基础信息">
+        <FieldGrid
+          fields={[
+            field("扩展 ID", read(detail, "extensionId", "id")),
+            field("名称", read(detail, "name", "extensionName")),
+            field("类型", extensionType),
+            field("状态", read(detail, "status")),
+            field("当前版本", read(detail, "version", "currentVersion", "latestVersion.version")),
+            field("作者", read(detail, "authorName", "author", "publisherName")),
+            field("所属部门", read(detail, "ownerDepartmentName", "departmentName", "publisherDepartmentName")),
+            field("更新时间", formatDate(read(detail, "updatedAt", "publishedAt", "createdAt")))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title="授权与可见范围">
+        <FieldGrid
+          fields={[
+            field("可见性", read(detail, "visibilityMode")),
+            field("授权范围", read(detail, "scope", "authorizedScope")),
+            field("可见部门", read(detail, "visibleDepartments", "departmentScope")),
+            field("可用用户数", read(detail, "authorizedUserCount", "visibleUserCount")),
+            field("收缩建议", read(detail, "scopeReductionSuggestion", "visibilitySuggestion"))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title="发布与审核状态">
+        <FieldGrid
+          fields={[
+            field("审核状态", read(detail, "reviewStatus", "latestReviewStatus")),
+            field("AI 预审状态", read(detail, "aiPrecheckStatus", "aiStatus", "precheck.status")),
+            field("最近申请", read(detail, "latestSubmissionId", "submissionId")),
+            field("发布时间", formatDate(read(detail, "publishedAt"))),
+            field("下架原因", read(detail, "delistReason", "securityReason", "archiveReason"))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title="使用统计与风险">
+        <FieldGrid
+          fields={[
+            field("安装量", read(detail, "installCount", "installationCount")),
+            field("调用次数", read(detail, "usageCount", "invocationCount")),
+            field("活跃用户", read(detail, "activeUserCount")),
+            field("异常事件", read(detail, "abnormalEventCount", "exceptionCount")),
+            field("风险等级", read(detail, "riskLevel", "aiPrecheck.riskLevel", "precheck.riskLevel")),
+            field("风险摘要", read(detail, "riskSummary", "aiPrecheck.summary", "precheck.summary"))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title={`${reviewTypeLabel(extensionType)}内容详情`}>
+        <JsonOrEmpty value={read(detail, "definition", "manifest", "packageMetadata", "latestVersion.definition", "latestVersion.manifest")} />
+      </DetailSection>
+
+      <DetailSection title="本地事件与异常">
+        <JsonOrEmpty value={read(detail, "localEvents", "deviceExceptions", "exceptionEvents", "recentEvents")} />
+      </DetailSection>
+    </>
   );
 }
 
@@ -1335,6 +1485,38 @@ function TreeList({ items, onAction }: { items: ApiRecord[]; onAction: (id: stri
   );
 }
 
+type DetailField = { label: string; value: unknown };
+
+function DetailSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="detail-section">
+      <h4>{title}</h4>
+      {children}
+    </section>
+  );
+}
+
+function FieldGrid({ fields }: { fields: DetailField[] }) {
+  const visibleFields = fields.filter((item) => hasDisplayValue(item.value));
+  if (visibleFields.length === 0) {
+    return <p className="section-empty">暂无数据</p>;
+  }
+  return (
+    <dl className="field-grid">
+      {visibleFields.map((item) => (
+        <div key={item.label}>
+          <dt>{item.label}</dt>
+          <dd>{safeString(item.value)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function JsonOrEmpty({ value }: { value: unknown }) {
+  return hasDisplayValue(value) ? <JsonPreview value={value} /> : <p className="section-empty">暂无数据</p>;
+}
+
 function KeyValue({ record, keys }: { record: ApiRecord; keys: string[] }) {
   return (
     <dl className="key-value">
@@ -1352,6 +1534,36 @@ function KeyValue({ record, keys }: { record: ApiRecord; keys: string[] }) {
       })}
     </dl>
   );
+}
+
+function field(label: string, value: unknown): DetailField {
+  return { label, value };
+}
+
+function hasDisplayValue(value: unknown): boolean {
+  if (value === undefined || value === null || value === "") {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (typeof value === "object") {
+    return Object.keys(value).length > 0;
+  }
+  return true;
+}
+
+function reviewTypeLabel(value: string): string {
+  if (value === "MCP_SERVER") {
+    return "MCP 服务";
+  }
+  if (value === "PLUGIN") {
+    return "Plugin";
+  }
+  if (value === "SKILL") {
+    return "Skill";
+  }
+  return "扩展";
 }
 
 function JsonPreview({ value, title }: { value: unknown; title?: string }) {
