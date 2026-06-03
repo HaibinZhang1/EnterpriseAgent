@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   AdminApiError,
   ApiRecord,
@@ -34,9 +34,18 @@ type Resource<T> =
   | { status: "error"; error: ViewError };
 
 type ReviewAction = "approve" | "request-changes" | "reject";
-type GovernanceAction = "delist" | "security-delist" | "relist" | "scope/reduce" | "visibility/reduce" | "archive";
+export type GovernanceAction = "delist" | "security-delist" | "relist" | "scope/reduce" | "visibility/reduce" | "archive";
 
 const emptyPage: PageResult<ApiRecord> = { items: [], page: 1, pageSize: 20, total: 0, hasNext: false };
+export const defaultGovernanceTargetScopeJson = JSON.stringify({
+  scopeType: "DEPARTMENT",
+  departments: [
+    {
+      departmentId: "",
+      includeChildren: false
+    }
+  ]
+}, null, 2);
 
 const pageDefinitions: Array<{ key: PageKey; label: string; systemOnly?: boolean }> = [
   { key: "overview", label: "概览" },
@@ -410,6 +419,8 @@ export function ReviewDetailSections({ detail }: { detail: ApiRecord }) {
   );
   const extensionType = safeString(read(detail, "extensionType", "type", "latestRevision.type", "latestRevision.extensionType") ?? read(revisionData, "extensionType", "type"));
   const typedPreview = mergeRecords(
+    read(packageSnapshot, "precheck.definition"),
+    read(revisionData, "precheck.definition"),
     read(revisionData, "typePayload", "definition", "manifest", "packageMetadata"),
     revisionData,
     read(detail, "typedPreview", "definition", "manifest", "latestRevision.definition")
@@ -437,7 +448,7 @@ export function ReviewDetailSections({ detail }: { detail: ApiRecord }) {
       <DetailSection title="本次申请内容">
         <FieldGrid
           fields={[
-            field("申请类型", read(detail, "applicationType", "submissionType", "changeType")),
+            field("申请类型", read(detail, "applicationType", "submissionType", "changeType", "type") ?? read(revisionData, "type")),
             field("扩展 ID", read(detail, "extensionId", "latestRevision.extensionId") ?? read(revisionData, "extensionId")),
             field("当前版本", read(detail, "currentVersion", "previousVersion")),
             field("目标版本", read(detail, "targetVersion", "latestRevision.version") ?? read(revisionData, "version")),
@@ -485,7 +496,7 @@ export function ReviewDetailSections({ detail }: { detail: ApiRecord }) {
       </DetailSection>
 
       <DetailSection title="历史记录与审核意见">
-        <JsonOrEmpty value={read(detail, "reviewHistory", "history", "events", "comments", "decisionHistory")} />
+        <JsonOrEmpty value={read(detail, "reviewHistory", "history", "events", "comments", "decisionHistory", "revisions", "prechecks")} />
       </DetailSection>
     </>
   );
@@ -580,12 +591,17 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
   );
   const [reason, setReason] = useState("");
   const [targetVisibilityMode, setTargetVisibilityMode] = useState("AUTHORIZED_ONLY");
-  const [targetScope, setTargetScope] = useState("{\n  \"scopeType\": \"DEPARTMENT\",\n  \"departmentIds\": []\n}");
+  const [targetScope, setTargetScope] = useState(defaultGovernanceTargetScopeJson);
+  const [securityReason, setSecurityReason] = useState("");
+  const [impactSummary, setImpactSummary] = useState("");
+  const [handlingAdvice, setHandlingAdvice] = useState("");
+  const [busyAction, setBusyAction] = useState<GovernanceAction | null>(null);
+  const inFlightGovernanceAction = useRef<GovernanceAction | null>(null);
   const [error, setError] = useState<ViewError | null>(null);
   const [success, setSuccess] = useState("");
 
   async function govern(action: GovernanceAction) {
-    if (!extensionId) {
+    if (!extensionId || inFlightGovernanceAction.current) {
       return;
     }
     const normalizedReason = reason.trim();
@@ -598,19 +614,24 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
     }
     setError(null);
     setSuccess("");
+    inFlightGovernanceAction.current = action;
+    setBusyAction(action);
     try {
-      await adminApi.extensions.govern(extensionId, action, {
-        reason: normalizedReason,
-        reasonType: action,
-        reasonDetail: normalizedReason,
-        securityReason: action === "security-delist" ? normalizedReason : undefined,
-        targetVisibilityMode: action === "visibility/reduce" ? targetVisibilityMode : undefined,
-        targetScope: action === "scope/reduce" ? JSON.parse(targetScope) : undefined
-      });
+      await adminApi.extensions.govern(extensionId, action, buildExtensionGovernancePayload(action, {
+        reason,
+        targetVisibilityMode,
+        targetScopeJson: targetScope,
+        securityReason,
+        impactSummary,
+        handlingAdvice
+      }));
       setSuccess("治理动作已提交");
       onChanged();
     } catch (err) {
       setError(normalizeError(err));
+    } finally {
+      inFlightGovernanceAction.current = null;
+      setBusyAction(null);
     }
   }
 
@@ -653,9 +674,28 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
                 目标授权范围 JSON
                 <textarea value={targetScope} onChange={(event) => setTargetScope(event.target.value)} />
               </label>
+              <DetailSection title="安全下架信息">
+                <label>
+                  安全原因
+                  <textarea value={securityReason} onChange={(event) => setSecurityReason(event.target.value)} />
+                </label>
+                <label>
+                  影响范围
+                  <textarea value={impactSummary} onChange={(event) => setImpactSummary(event.target.value)} />
+                </label>
+                <label>
+                  处置建议
+                  <textarea value={handlingAdvice} onChange={(event) => setHandlingAdvice(event.target.value)} />
+                </label>
+              </DetailSection>
               {error ? <InlineError error={error} /> : null}
               {success ? <p className="success-text">{success}</p> : null}
-              <ExtensionGovernanceButtons reason={reason} onGovern={govern} />
+              <ExtensionGovernanceButtons
+                reason={reason}
+                securityDelistReady={[securityReason, impactSummary, handlingAdvice].every((value) => value.trim().length > 0)}
+                busyAction={busyAction}
+                onGovern={govern}
+              />
             </div>
           );
         }}
@@ -671,6 +711,8 @@ export function ExtensionDetailSections({ detail, versions }: { detail: ApiRecor
   const versionData = mergeRecords(versionPayload, packageSnapshot, latestVersion);
   const extensionType = safeString(read(detail, "type", "extensionType", "latestVersion.type") ?? read(versionData, "extensionType", "type"));
   const typedPreview = mergeRecords(
+    read(packageSnapshot, "precheck.definition"),
+    read(versionData, "precheck.definition"),
     read(versionData, "typePayload", "definition", "manifest", "packageMetadata"),
     versionData,
     read(detail, "definition", "manifest", "packageMetadata", "latestVersion.definition", "latestVersion.manifest")
@@ -743,20 +785,25 @@ export function ExtensionDetailSections({ detail, versions }: { detail: ApiRecor
 
 export function ExtensionGovernanceButtons({
   reason,
+  securityDelistReady = true,
+  busyAction = null,
   onGovern
 }: {
   reason: string;
+  securityDelistReady?: boolean;
+  busyAction?: GovernanceAction | null;
   onGovern: (action: GovernanceAction) => void;
 }) {
   const reasonMissing = reason.trim().length === 0;
+  const busy = busyAction !== null;
   return (
     <div className="button-row wrap">
-      <button type="button" className="secondary-button" disabled={reasonMissing} onClick={() => onGovern("delist")}>下架</button>
-      <button type="button" className="danger-button" disabled={reasonMissing} onClick={() => onGovern("security-delist")}>安全下架</button>
-      <button type="button" className="secondary-button" disabled={reasonMissing} onClick={() => onGovern("relist")}>恢复上架</button>
-      <button type="button" className="secondary-button" disabled={reasonMissing} onClick={() => onGovern("scope/reduce")}>收缩授权</button>
-      <button type="button" className="secondary-button" disabled={reasonMissing} onClick={() => onGovern("visibility/reduce")}>收缩可见性</button>
-      <button type="button" className="ghost-button" disabled={reasonMissing} onClick={() => onGovern("archive")}>归档</button>
+      <button type="button" className="secondary-button" disabled={busy || reasonMissing} onClick={() => onGovern("delist")}>下架</button>
+      <button type="button" className="danger-button" disabled={busy || reasonMissing || !securityDelistReady} onClick={() => onGovern("security-delist")}>安全下架</button>
+      <button type="button" className="secondary-button" disabled={busy || reasonMissing} onClick={() => onGovern("relist")}>恢复上架</button>
+      <button type="button" className="secondary-button" disabled={busy || reasonMissing} onClick={() => onGovern("scope/reduce")}>收缩授权</button>
+      <button type="button" className="secondary-button" disabled={busy || reasonMissing} onClick={() => onGovern("visibility/reduce")}>收缩可见性</button>
+      <button type="button" className="ghost-button" disabled={busy || reasonMissing} onClick={() => onGovern("archive")}>归档</button>
     </div>
   );
 }
@@ -1773,7 +1820,11 @@ function PrecheckCallout({ tone, title, value }: { tone: "danger" | "warning"; t
 }
 
 function TypedContentPreview({ detail, extensionType, value }: { detail: ApiRecord; extensionType: string; value: unknown }) {
-  const source = mergeRecords(read(value, "typePayload", "definition", "manifest", "packageMetadata"), value) ?? value;
+  const source = mergeRecords(
+    read(value, "precheck.definition"),
+    read(value, "typePayload", "definition", "manifest", "packageMetadata"),
+    value
+  ) ?? value;
   if (extensionType === "MCP_SERVER") {
     return (
       <TypedContentBlock
@@ -1783,12 +1834,12 @@ function TypedContentPreview({ detail, extensionType, value }: { detail: ApiReco
           field("接入方式", read(source, "accessMode", "accessMethod", "connectionMode")),
           field("transport", read(source, "transport")),
           field("accessType", read(source, "accessType")),
-          field("command 或 endpoint", read(source, "command", "endpoint", "url", "serverUrl")),
+          field("command 或 endpoint", read(source, "command", "endpoint", "endpointTemplate", "url", "serverUrl")),
           field("配置模板", read(source, "configTemplate", "configurationTemplate")),
           field("变量 schema", read(source, "variableSchema", "variablesSchema", "schema")),
           field("敏感变量", read(source, "sensitiveVariables", "secretVariables")),
           field("支持工具", read(source, "tools", "supportedTools")),
-          field("连接检测", read(source, "connectionCheck", "healthCheck")),
+          field("连接检测", read(source, "connectionCheck", "connectionTest", "healthCheck")),
           field("权限声明", read(source, "permissions", "permissionDeclaration")),
           field("数据访问说明", read(source, "dataAccess", "dataAccessDescription")),
           field("端点/命令风险", read(detail, "endpointRiskSummary", "commandRiskSummary", "aiPrecheck.endpointRisks", "precheck.commandRisks")),
@@ -1805,7 +1856,10 @@ function TypedContentPreview({ detail, extensionType, value }: { detail: ApiReco
           field("插件包文件清单", read(source, "fileList", "packageFiles", "files")),
           field("安装模式", read(source, "installMode", "installationMode")),
           field("安装清单", read(source, "installManifest", "manifest")),
-          field("安装、更新、卸载步骤", read(source, "lifecycleSteps", "installSteps", "updateSteps", "uninstallSteps")),
+          field("安装、更新、卸载步骤", read(source, "lifecycleSteps", "installSteps", "updateSteps", "uninstallSteps", "manualInstallDoc", "manualUninstallDoc")),
+          field("安装说明", read(source, "manualInstallDoc")),
+          field("卸载说明", read(source, "manualUninstallDoc")),
+          field("外部下载", read(source, "externalDownload")),
           field("支持回滚", read(source, "rollbackSupported", "supportsRollback")),
           field("目标工具", read(source, "targetTool", "targetTools")),
           field("兼容版本", read(source, "compatibleVersions", "compatibility")),
@@ -1885,6 +1939,93 @@ function reviewActionRequiresReason(action: ReviewAction): boolean {
 
 function governanceActionRequiresReason(action: GovernanceAction): boolean {
   return action === "delist" || action === "security-delist" || action === "relist" || action === "scope/reduce" || action === "visibility/reduce" || action === "archive";
+}
+
+export function buildExtensionGovernancePayload(
+  action: GovernanceAction,
+  input: {
+    reason: string;
+    targetVisibilityMode: string;
+    targetScopeJson: string;
+    securityReason: string;
+    impactSummary: string;
+    handlingAdvice: string;
+  }
+): ApiRecord {
+  const normalizedReason = input.reason.trim();
+  const payload: ApiRecord = {
+    reason: normalizedReason,
+    reasonType: action,
+    reasonDetail: normalizedReason
+  };
+  if (action === "security-delist") {
+    const securityReason = input.securityReason.trim();
+    const impactSummary = input.impactSummary.trim();
+    const handlingAdvice = input.handlingAdvice.trim();
+    if (!securityReason || !impactSummary || !handlingAdvice) {
+      throw new Error("安全下架必须填写安全原因、影响范围和处置建议。");
+    }
+    payload.securityReason = securityReason;
+    payload.impactSummary = impactSummary;
+    payload.handlingAdvice = handlingAdvice;
+  }
+  if (action === "visibility/reduce") {
+    payload.targetVisibilityMode = input.targetVisibilityMode;
+  }
+  if (action === "scope/reduce") {
+    payload.targetScope = normalizeGovernanceTargetScope(JSON.parse(input.targetScopeJson));
+  }
+  return payload;
+}
+
+export function normalizeGovernanceTargetScope(value: unknown): ApiRecord {
+  const scope = asRecord(value);
+  if (!scope) {
+    throw new Error("目标授权范围 JSON 必须是对象。");
+  }
+  const scopeType = safeString(read(scope, "scopeType")).trim();
+  if (!scopeType) {
+    throw new Error("目标授权范围必须包含 scopeType。");
+  }
+  const rawDepartments = Array.isArray(scope.departments) ? scope.departments : scope.departmentIds;
+  if (!Array.isArray(rawDepartments)) {
+    throw new Error("目标授权范围必须包含 departments。");
+  }
+  const departments = rawDepartments
+    .map((item) => normalizeGovernanceDepartment(item))
+    .filter((department): department is ApiRecord => !!department);
+  if (departments.length === 0) {
+    throw new Error("目标授权范围必须至少包含一个部门。");
+  }
+  const normalizedScope: ApiRecord = {
+    ...scope,
+    scopeType,
+    departments
+  };
+  delete normalizedScope.departmentIds;
+  return normalizedScope;
+}
+
+function normalizeGovernanceDepartment(value: unknown): ApiRecord | null {
+  if (typeof value === "string") {
+    const departmentId = value.trim();
+    return departmentId ? { departmentId, includeChildren: false } : null;
+  }
+  const department = asRecord(value);
+  if (!department) {
+    return null;
+  }
+  const departmentId = safeString(read(department, "departmentId", "id")).trim();
+  if (!departmentId) {
+    return null;
+  }
+  return {
+    ...department,
+    departmentId,
+    includeChildren:
+      read(department, "includeChildren") === true ||
+      safeString(read(department, "includeChildren")).toLowerCase() === "true"
+  };
 }
 
 function precheckTone(value: unknown, failureValue: unknown, warningValue: unknown): "danger" | "warning" | "success" | "neutral" {

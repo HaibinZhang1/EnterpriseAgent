@@ -6,7 +6,8 @@ import App, {
   LoginScreen,
   PageRouter,
   ReviewDecisionButtons,
-  ReviewDetailSections
+  ReviewDetailSections,
+  buildExtensionGovernancePayload
 } from "./App";
 import { Role, UserSummary } from "./api";
 
@@ -262,6 +263,97 @@ describe("Web Admin renderer", () => {
     expect(html).toContain("需要固定工作目录");
   });
 
+  it("renders package precheck definitions from service-shaped snapshots", () => {
+    const mcpHtml = renderToStaticMarkup(
+      <ReviewDetailSections
+        detail={{
+          submissionId: "sub-package-mcp",
+          extensionType: "MCP_SERVER",
+          currentRevisionId: "rev-package",
+          revisions: [
+            {
+              id: "rev-package",
+              payloadSnapshot: {
+                type: "submission",
+                data: {
+                  type: "UPDATE",
+                  extensionType: "MCP_SERVER",
+                  metadata: { name: "包预审 MCP" }
+                }
+              },
+              packageSnapshot: {
+                type: "submission",
+                data: {
+                  extensionType: "MCP_SERVER",
+                  precheck: {
+                    status: "PASSED",
+                    definition: {
+                      accessType: "TEAM",
+                      transport: "http",
+                      endpointTemplate: "https://mcp.example/api/{tenant}",
+                      variablesSchema: { token: "secret" },
+                      connectionTest: { method: "GET", path: "/health" },
+                      permissions: ["documents:read"],
+                      riskStatement: "外部端点需要人工确认"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }}
+      />
+    );
+
+    expect(mcpHtml).toContain("包预审 MCP");
+    expect(mcpHtml).toContain("https://mcp.example/api/{tenant}");
+    expect(mcpHtml).toContain("/health");
+    expect(mcpHtml).toContain("documents:read");
+    expect(mcpHtml).toContain("外部端点需要人工确认");
+
+    const pluginHtml = renderToStaticMarkup(
+      <ExtensionDetailSections
+        detail={{
+          extensionId: "ext-package-plugin",
+          name: "包预审插件",
+          type: "PLUGIN",
+          status: "PUBLISHED"
+        }}
+        versions={[
+          {
+            version: "4.0.0",
+            packageSnapshot: {
+              type: "submission",
+              data: {
+                extensionType: "PLUGIN",
+                sha256: "sha256:def",
+                precheck: {
+                  status: "PASSED",
+                  definition: {
+                    installMode: "managed",
+                    targetTools: ["JetBrains"],
+                    manualInstallDoc: "按管理员策略安装",
+                    manualUninstallDoc: "使用控制台卸载",
+                    externalDownload: "https://downloads.example/plugin.zip",
+                    manifest: { files: ["plugin.jar"] }
+                  }
+                }
+              }
+            }
+          }
+        ]}
+      />
+    );
+
+    expect(pluginHtml).toContain("包预审插件");
+    expect(pluginHtml).toContain("managed");
+    expect(pluginHtml).toContain("JetBrains");
+    expect(pluginHtml).toContain("按管理员策略安装");
+    expect(pluginHtml).toContain("使用控制台卸载");
+    expect(pluginHtml).toContain("https://downloads.example/plugin.zip");
+    expect(pluginHtml).toContain("plugin.jar");
+  });
+
   it("renders extension governance sections required by the admin extension flow", () => {
     const html = renderToStaticMarkup(
       <ExtensionDetailSections
@@ -367,6 +459,70 @@ describe("Web Admin renderer", () => {
       <ExtensionGovernanceButtons reason="维护下架" onGovern={() => undefined} />
     );
     expect(disabledCount(governanceWithReason)).toBe(0);
+
+    const securityMissing = renderToStaticMarkup(
+      <ExtensionGovernanceButtons reason="安全处置" securityDelistReady={false} onGovern={() => undefined} />
+    );
+    expect(disabledCount(securityMissing)).toBe(1);
+
+    const governanceBusy = renderToStaticMarkup(
+      <ExtensionGovernanceButtons reason="维护下架" busyAction="scope/reduce" onGovern={() => undefined} />
+    );
+    expect(disabledCount(governanceBusy)).toBe(6);
+  });
+
+  it("builds server-shaped governance request payloads", () => {
+    const scopePayload = buildExtensionGovernancePayload("scope/reduce", {
+      reason: "department only",
+      targetVisibilityMode: "AUTHORIZED_ONLY",
+      targetScopeJson: JSON.stringify({
+        scopeType: "DEPARTMENT",
+        departmentIds: ["dept-1"]
+      }),
+      securityReason: "",
+      impactSummary: "",
+      handlingAdvice: ""
+    });
+
+    expect(scopePayload).toMatchObject({
+      reason: "department only",
+      reasonType: "scope/reduce",
+      targetScope: {
+        scopeType: "DEPARTMENT",
+        departments: [
+          {
+            departmentId: "dept-1",
+            includeChildren: false
+          }
+        ]
+      }
+    });
+    expect((scopePayload.targetScope as Record<string, unknown>).departmentIds).toBeUndefined();
+
+    const securityPayload = buildExtensionGovernancePayload("security-delist", {
+      reason: "紧急处置",
+      targetVisibilityMode: "AUTHORIZED_ONLY",
+      targetScopeJson: "{}",
+      securityReason: "疑似泄露敏感配置",
+      impactSummary: "12 个用户已接入",
+      handlingAdvice: "建议卸载或等待修复版本"
+    });
+
+    expect(securityPayload).toMatchObject({
+      reason: "紧急处置",
+      securityReason: "疑似泄露敏感配置",
+      impactSummary: "12 个用户已接入",
+      handlingAdvice: "建议卸载或等待修复版本"
+    });
+
+    expect(() => buildExtensionGovernancePayload("security-delist", {
+      reason: "紧急处置",
+      targetVisibilityMode: "AUTHORIZED_ONLY",
+      targetScopeJson: "{}",
+      securityReason: "疑似泄露敏感配置",
+      impactSummary: "",
+      handlingAdvice: "建议卸载"
+    })).toThrow("安全下架必须填写安全原因、影响范围和处置建议。");
   });
 });
 
