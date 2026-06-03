@@ -88,8 +88,10 @@ public class ExtensionGovernanceService {
         if (!actor.isSystemAdmin()) {
             throw new BusinessException(ErrorCode.PERMISSION_DENIED, "安全下架仅系统管理员可执行");
         }
+        String reason = securityReason(request);
+        Map<String, Object> auditSummary = securityAuditSummary(request);
         updateStatus(actor, requireExtension(extensionId), "SECURITY_DELISTED", "extension.security_delist",
-                securityReason(request));
+                reason, auditSummary);
         return result(extensionId, "SECURITY_DELISTED");
     }
 
@@ -165,12 +167,20 @@ public class ExtensionGovernanceService {
     }
 
     private void updateStatus(CurrentUser actor, Map<String, Object> row, String status, String action, String reason) {
+        updateStatus(actor, row, status, action, reason, Map.of());
+    }
+
+    private void updateStatus(CurrentUser actor, Map<String, Object> row, String status, String action, String reason,
+            Map<String, Object> afterMetadata) {
         String before = String.valueOf(row.get("status"));
         if (status.equals(before)) {
             return;
         }
         jdbc.update("update extensions set status = ?, updated_at = now() where id = ?", status, row.get("id"));
-        audit(actor, row, action, reason, Map.of("status", before), Map.of("status", status));
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("status", status);
+        after.putAll(afterMetadata);
+        audit(actor, row, action, reason, Map.of("status", before), after);
     }
 
     private void reduceVisibility(CurrentUser actor, Map<String, Object> row, String reason) {
@@ -308,6 +318,16 @@ public class ExtensionGovernanceService {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "安全下架必须填写安全原因、影响范围和处置建议");
         }
         return request.securityReason();
+    }
+
+    private Map<String, Object> securityAuditSummary(ExtensionGovernanceRequest request) {
+        Map<String, Object> summary = new LinkedHashMap<>();
+        if (StringUtils.hasText(request.reasonType())) {
+            summary.put("reasonType", request.reasonType());
+        }
+        summary.put("impactSummary", request.impactSummary());
+        summary.put("handlingAdvice", request.handlingAdvice());
+        return summary;
     }
 
     private Map<String, Object> result(String extensionId, String status) {

@@ -340,7 +340,7 @@ class ExtensionCatalogApiTests extends PostgresIntegrationTestBase {
                         .header("Idempotency-Key", newIdempotencyKey())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"reason":"generic note","securityReason":"credential leak",
+                                {"reason":"generic note","reasonType":"vulnerability","securityReason":"credential leak",
                                  "impactSummary":"12 users connected","handlingAdvice":"uninstall until fixed"}
                                 """))
                 .andExpect(status().isOk())
@@ -350,6 +350,12 @@ class ExtensionCatalogApiTests extends PostgresIntegrationTestBase {
                  where action = 'extension.security_delist' and object_name_snapshot = ?
                  order by created_at desc limit 1
                 """, String.class, securityExtensionId)).isEqualTo("credential leak");
+        assertThat(jdbc.queryForObject("""
+                select after_summary::text from audit_logs
+                 where action = 'extension.security_delist' and object_name_snapshot = ?
+                 order by created_at desc limit 1
+                """, String.class, securityExtensionId))
+                .contains("vulnerability", "12 users connected", "uninstall until fixed");
 
         String maxLengthExtensionId = "long-" + "x".repeat(123);
         String longKey = newIdempotencyKey();
