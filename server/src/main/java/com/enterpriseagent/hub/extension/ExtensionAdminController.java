@@ -1,5 +1,6 @@
 package com.enterpriseagent.hub.extension;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -113,9 +114,13 @@ public class ExtensionAdminController {
             ExtensionGovernanceRequest request, String idempotencyKey,
             Function<CurrentUser, Map<String, Object>> operation) {
         var actor = currentUserProvider.requireCurrentUser();
+        String operationName = "admin.extension." + action;
+        Map<String, Object> idempotencyRequest = new LinkedHashMap<>();
+        idempotencyRequest.put("extensionId", extensionId);
+        idempotencyRequest.put("request", request);
         @SuppressWarnings("unchecked")
-        Map<String, Object> response = idempotencyService.execute(actor, "admin.extension." + action + ":" + extensionId,
-                idempotencyKey, request, (Class<Map<String, Object>>) (Class<?>) Map.class,
+        Map<String, Object> response = idempotencyService.execute(actor, operationName,
+                idempotencyKey, idempotencyRequest, (Class<Map<String, Object>>) (Class<?>) Map.class,
                 () -> operation.apply(actor));
         return ApiResponse.success(response);
     }

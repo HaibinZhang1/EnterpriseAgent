@@ -100,6 +100,9 @@ public class ExtensionGovernanceService {
         if ("ARCHIVED".equals(String.valueOf(row.get("status")))) {
             throw new BusinessException(ErrorCode.STATE_CONFLICT, "归档扩展不可重新上架");
         }
+        if ("SECURITY_DELISTED".equals(String.valueOf(row.get("status"))) && !actor.isSystemAdmin()) {
+            throw new BusinessException(ErrorCode.PERMISSION_DENIED, "安全下架扩展仅系统管理员可重新上架");
+        }
         updateStatus(actor, row, "PUBLISHED", "extension.relist", reason(request));
         return result(extensionId, "PUBLISHED");
     }

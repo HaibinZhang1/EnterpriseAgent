@@ -322,7 +322,7 @@ class ExtensionCatalogApiTests extends PostgresIntegrationTestBase {
         assertThat(jdbc.queryForObject("""
                 select count(*) from idempotency_records
                  where operation = ? and idempotency_key = ?
-                """, Long.class, "admin.extension.delist:" + extensionId, key)).isEqualTo(1L);
+                """, Long.class, "admin.extension.delist", key)).isEqualTo(1L);
 
         mockMvc.perform(post("/api/admin/extensions/" + extensionId + "/delist")
                         .header("Authorization", "Bearer " + adminToken)
@@ -350,6 +350,63 @@ class ExtensionCatalogApiTests extends PostgresIntegrationTestBase {
                  where action = 'extension.security_delist' and object_name_snapshot = ?
                  order by created_at desc limit 1
                 """, String.class, securityExtensionId)).isEqualTo("credential leak");
+
+        String maxLengthExtensionId = "long-" + "x".repeat(123);
+        String longKey = newIdempotencyKey();
+        createPublished(maxLengthExtensionId, ExtensionType.SKILL, "Long Id Governance Skill",
+                VisibilityMode.PUBLIC_TO_ALL_LOGGED_IN, ROOT_DEPARTMENT_ID, author.getId(), ScopeType.ALL_EMPLOYEES);
+        mockMvc.perform(post("/api/admin/extensions/" + maxLengthExtensionId + "/delist")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", longKey)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"long id\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("DELISTED"));
+        assertThat(jdbc.queryForObject("""
+                select operation from idempotency_records where idempotency_key = ?
+                """, String.class, longKey)).isEqualTo("admin.extension.delist");
+    }
+
+    @Test
+    void securityDelistedExtensionsCanOnlyBeRelistedBySystemAdmins() throws Exception {
+        String adminToken = login("13800000000", "Admin#123456", "ADMIN_WEB");
+        User author = createUser("137" + uniqueDigits(), ROOT_DEPARTMENT_ID, Role.NORMAL_USER);
+        Department managedDepartment = departmentRepository.save(new Department("managed" + uniqueDigits(), ROOT_DEPARTMENT_ID));
+        User managedAdmin = createUser("137" + uniqueDigits(), managedDepartment.getId(), Role.DEPARTMENT_ADMIN);
+        String managedAdminToken = login(managedAdmin.getPhone(), "Temp#123456", "ADMIN_WEB");
+        String extensionId = "security-managed-" + uniqueDigits();
+        createPublished(extensionId, ExtensionType.MCP_SERVER, "Security Managed Server",
+                VisibilityMode.PUBLIC_TO_ALL_LOGGED_IN, managedDepartment.getId(), author.getId(), ScopeType.ALL_EMPLOYEES);
+
+        mockMvc.perform(post("/api/admin/extensions/" + extensionId + "/security-delist")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", newIdempotencyKey())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"securityReason":"credential leak",
+                                 "impactSummary":"managed department affected",
+                                 "handlingAdvice":"system admin review required"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("SECURITY_DELISTED"));
+
+        mockMvc.perform(post("/api/admin/extensions/" + extensionId + "/relist")
+                        .header("Authorization", "Bearer " + managedAdminToken)
+                        .header("Idempotency-Key", newIdempotencyKey())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"department says ready\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("permission_denied"));
+        assertThat(jdbc.queryForObject("select status from extensions where extension_id = ?", String.class, extensionId))
+                .isEqualTo("SECURITY_DELISTED");
+
+        mockMvc.perform(post("/api/admin/extensions/" + extensionId + "/relist")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", newIdempotencyKey())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"system risk cleared\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
     }
 
     private void createPublished(String extensionId, ExtensionType type, String name, VisibilityMode visibilityMode,
