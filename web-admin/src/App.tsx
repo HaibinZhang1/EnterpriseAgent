@@ -606,7 +606,7 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
     }
     const normalizedReason = reason.trim();
     if (governanceActionRequiresReason(action) && !normalizedReason) {
-      setError({ message: "治理动作必须填写原因；安全下架请包含安全原因、影响范围和处置建议。" });
+      setError({ message: "治理动作必须填写原因；安全下架请填写安全原因、影响范围和处置建议。" });
       return;
     }
     if (action === "archive" && typeof window !== "undefined" && !window.confirm("归档为终态，确认归档该扩展？")) {
@@ -799,7 +799,7 @@ export function ExtensionGovernanceButtons({
   return (
     <div className="button-row wrap">
       <button type="button" className="secondary-button" disabled={busy || reasonMissing} onClick={() => onGovern("delist")}>下架</button>
-      <button type="button" className="danger-button" disabled={busy || reasonMissing || !securityDelistReady} onClick={() => onGovern("security-delist")}>安全下架</button>
+      <button type="button" className="danger-button" disabled={busy || !securityDelistReady} onClick={() => onGovern("security-delist")}>安全下架</button>
       <button type="button" className="secondary-button" disabled={busy || reasonMissing} onClick={() => onGovern("relist")}>恢复上架</button>
       <button type="button" className="secondary-button" disabled={busy || reasonMissing} onClick={() => onGovern("scope/reduce")}>收缩授权</button>
       <button type="button" className="secondary-button" disabled={busy || reasonMissing} onClick={() => onGovern("visibility/reduce")}>收缩可见性</button>
@@ -1938,7 +1938,7 @@ function reviewActionRequiresReason(action: ReviewAction): boolean {
 }
 
 function governanceActionRequiresReason(action: GovernanceAction): boolean {
-  return action === "delist" || action === "security-delist" || action === "relist" || action === "scope/reduce" || action === "visibility/reduce" || action === "archive";
+  return action === "delist" || action === "relist" || action === "scope/reduce" || action === "visibility/reduce" || action === "archive";
 }
 
 export function buildExtensionGovernancePayload(
@@ -1954,9 +1954,7 @@ export function buildExtensionGovernancePayload(
 ): ApiRecord {
   const normalizedReason = input.reason.trim();
   const payload: ApiRecord = {
-    reason: normalizedReason,
-    reasonType: action,
-    reasonDetail: normalizedReason
+    reasonType: action
   };
   if (action === "security-delist") {
     const securityReason = input.securityReason.trim();
@@ -1968,6 +1966,9 @@ export function buildExtensionGovernancePayload(
     payload.securityReason = securityReason;
     payload.impactSummary = impactSummary;
     payload.handlingAdvice = handlingAdvice;
+  } else {
+    payload.reason = normalizedReason;
+    payload.reasonDetail = normalizedReason;
   }
   if (action === "visibility/reduce") {
     payload.targetVisibilityMode = input.targetVisibilityMode;

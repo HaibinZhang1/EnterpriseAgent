@@ -9,6 +9,7 @@ import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import com.enterpriseagent.hub.auth.CurrentUser;
 import com.enterpriseagent.hub.common.audit.AuditRecord;
@@ -87,7 +88,8 @@ public class ExtensionGovernanceService {
         if (!actor.isSystemAdmin()) {
             throw new BusinessException(ErrorCode.PERMISSION_DENIED, "安全下架仅系统管理员可执行");
         }
-        updateStatus(actor, requireExtension(extensionId), "SECURITY_DELISTED", "extension.security_delist", reason(request));
+        updateStatus(actor, requireExtension(extensionId), "SECURITY_DELISTED", "extension.security_delist",
+                securityReason(request));
         return result(extensionId, "SECURITY_DELISTED");
     }
 
@@ -288,16 +290,21 @@ public class ExtensionGovernanceService {
         if (request == null) {
             return null;
         }
-        if (request.reason() != null) {
+        if (StringUtils.hasText(request.reason())) {
             return request.reason();
         }
-        if (request.securityReason() != null) {
-            return request.securityReason();
-        }
-        if (request.reasonDetail() != null) {
+        if (StringUtils.hasText(request.reasonDetail())) {
             return request.reasonDetail();
         }
         return request.reasonType();
+    }
+
+    private String securityReason(ExtensionGovernanceRequest request) {
+        if (request == null || !StringUtils.hasText(request.securityReason())
+                || !StringUtils.hasText(request.impactSummary()) || !StringUtils.hasText(request.handlingAdvice())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "安全下架必须填写安全原因、影响范围和处置建议");
+        }
+        return request.securityReason();
     }
 
     private Map<String, Object> result(String extensionId, String status) {

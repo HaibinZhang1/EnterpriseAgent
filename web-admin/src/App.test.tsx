@@ -453,7 +453,7 @@ describe("Web Admin renderer", () => {
     const governanceWithoutReason = renderToStaticMarkup(
       <ExtensionGovernanceButtons reason="" onGovern={() => undefined} />
     );
-    expect(disabledCount(governanceWithoutReason)).toBe(6);
+    expect(disabledCount(governanceWithoutReason)).toBe(5);
 
     const governanceWithReason = renderToStaticMarkup(
       <ExtensionGovernanceButtons reason="维护下架" onGovern={() => undefined} />
@@ -509,11 +509,13 @@ describe("Web Admin renderer", () => {
     });
 
     expect(securityPayload).toMatchObject({
-      reason: "紧急处置",
+      reasonType: "security-delist",
       securityReason: "疑似泄露敏感配置",
       impactSummary: "12 个用户已接入",
       handlingAdvice: "建议卸载或等待修复版本"
     });
+    expect(securityPayload.reason).toBeUndefined();
+    expect(securityPayload.reasonDetail).toBeUndefined();
 
     expect(() => buildExtensionGovernancePayload("security-delist", {
       reason: "紧急处置",

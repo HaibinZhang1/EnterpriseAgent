@@ -225,12 +225,14 @@ class ExtensionCatalogApiTests extends PostgresIntegrationTestBase {
                 .andExpect(jsonPath("$.data.status").value("DELISTED"));
         mockMvc.perform(post("/api/admin/extensions/" + extensionId + "/relist")
                         .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", newIdempotencyKey())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"ready\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
         mockMvc.perform(post("/api/admin/extensions/" + extensionId + "/ownership-transfer")
                         .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", newIdempotencyKey())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"targetOwnerDepartmentId\":\"" + transferDepartment.getId() + "\",\"reason\":\"handoff\"}"))
                 .andExpect(status().isOk())
@@ -238,12 +240,14 @@ class ExtensionCatalogApiTests extends PostgresIntegrationTestBase {
         assertThat(jdbc.queryForObject("select count(*) from extension_ownership_history", Long.class)).isGreaterThan(0L);
         mockMvc.perform(post("/api/admin/extensions/" + extensionId + "/security-delist")
                         .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", newIdempotencyKey())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"securityReason\":\"risk\"}"))
+                        .content("{\"securityReason\":\"risk\",\"impactSummary\":\"one extension\",\"handlingAdvice\":\"remove until fixed\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("SECURITY_DELISTED"));
         mockMvc.perform(post("/api/admin/extensions/" + extensionId + "/archive")
                         .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", newIdempotencyKey())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"end\"}"))
                 .andExpect(status().isOk())
@@ -274,10 +278,78 @@ class ExtensionCatalogApiTests extends PostgresIntegrationTestBase {
                 .andExpect(jsonPath("$.error.code").value("permission_denied"));
         mockMvc.perform(post("/api/admin/extensions/" + managedExtensionId + "/delist")
                         .header("Authorization", "Bearer " + outsideAdminToken)
+                        .header("Idempotency-Key", newIdempotencyKey())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"outside denied\"}"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("permission_denied"));
+    }
+
+    @Test
+    void adminExtensionGovernanceRequiresIdempotencyAndAuditsSecurityReason() throws Exception {
+        String adminToken = login("13800000000", "Admin#123456", "ADMIN_WEB");
+        User author = createUser("137" + uniqueDigits(), ROOT_DEPARTMENT_ID, Role.NORMAL_USER);
+        String extensionId = "idem-govern-" + uniqueDigits();
+        createPublished(extensionId, ExtensionType.SKILL, "Idempotent Govern Skill",
+                VisibilityMode.PUBLIC_TO_ALL_LOGGED_IN, ROOT_DEPARTMENT_ID, author.getId(), ScopeType.ALL_EMPLOYEES);
+
+        mockMvc.perform(post("/api/admin/extensions/" + extensionId + "/delist")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"maintenance\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("validation_failed"));
+
+        String key = newIdempotencyKey();
+        mockMvc.perform(post("/api/admin/extensions/" + extensionId + "/delist")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"maintenance\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("DELISTED"));
+        mockMvc.perform(post("/api/admin/extensions/" + extensionId + "/delist")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"maintenance\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("DELISTED"));
+        assertThat(jdbc.queryForObject("""
+                select count(*) from audit_logs
+                 where action = 'extension.delist' and object_name_snapshot = ?
+                """, Long.class, extensionId)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("""
+                select count(*) from idempotency_records
+                 where operation = ? and idempotency_key = ?
+                """, Long.class, "admin.extension.delist:" + extensionId, key)).isEqualTo(1L);
+
+        mockMvc.perform(post("/api/admin/extensions/" + extensionId + "/delist")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"different\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("idempotency_conflict"));
+
+        String securityExtensionId = "security-govern-" + uniqueDigits();
+        createPublished(securityExtensionId, ExtensionType.MCP_SERVER, "Security Govern Server",
+                VisibilityMode.PUBLIC_TO_ALL_LOGGED_IN, ROOT_DEPARTMENT_ID, author.getId(), ScopeType.ALL_EMPLOYEES);
+        mockMvc.perform(post("/api/admin/extensions/" + securityExtensionId + "/security-delist")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", newIdempotencyKey())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"reason":"generic note","securityReason":"credential leak",
+                                 "impactSummary":"12 users connected","handlingAdvice":"uninstall until fixed"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("SECURITY_DELISTED"));
+        assertThat(jdbc.queryForObject("""
+                select reason from audit_logs
+                 where action = 'extension.security_delist' and object_name_snapshot = ?
+                 order by created_at desc limit 1
+                """, String.class, securityExtensionId)).isEqualTo("credential leak");
     }
 
     private void createPublished(String extensionId, ExtensionType type, String name, VisibilityMode visibilityMode,
@@ -336,5 +408,9 @@ class ExtensionCatalogApiTests extends PostgresIntegrationTestBase {
 
     private String uniqueDigits() {
         return UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+    }
+
+    private String newIdempotencyKey() {
+        return "idem-" + UUID.randomUUID();
     }
 }
