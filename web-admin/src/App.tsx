@@ -33,6 +33,9 @@ type Resource<T> =
   | { status: "success"; data: T }
   | { status: "error"; error: ViewError };
 
+type ReviewAction = "approve" | "request-changes" | "reject";
+type GovernanceAction = "delist" | "security-delist" | "relist" | "scope/reduce" | "visibility/reduce" | "archive";
+
 const emptyPage: PageResult<ApiRecord> = { items: [], page: 1, pageSize: 20, total: 0, hasNext: false };
 
 const pageDefinitions: Array<{ key: PageKey; label: string; systemOnly?: boolean }> = [
@@ -337,15 +340,20 @@ function ReviewDetailPanel({ selected, onChanged }: { selected: ApiRecord | null
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<ViewError | null>(null);
 
-  async function decide(action: "approve" | "request-changes" | "reject", detail: ApiRecord) {
+  async function decide(action: ReviewAction, detail: ApiRecord) {
+    const normalizedComment = comment.trim();
+    if (reviewActionRequiresReason(action) && !normalizedComment) {
+      setError({ message: "退回修改和拒绝必须填写审核原因。" });
+      return;
+    }
     setBusyAction(action);
     setError(null);
     try {
       const revisionId = safeString(read(detail, "revisionId", "currentRevisionId", "revision.id"));
       await adminApi.reviews.decision(submissionId, action, {
         revisionId: revisionId || undefined,
-        comment,
-        reasonCodes: comment ? ["MANUAL_REVIEW"] : []
+        comment: normalizedComment,
+        reasonCodes: normalizedComment ? ["MANUAL_REVIEW"] : []
       });
       setComment("");
       onChanged();
@@ -375,17 +383,7 @@ function ReviewDetailPanel({ selected, onChanged }: { selected: ApiRecord | null
                 <textarea value={comment} onChange={(event) => setComment(event.target.value)} />
               </label>
               {error ? <InlineError error={error} /> : null}
-              <div className="button-row">
-                <button className="primary-button" type="button" disabled={!!busyAction} onClick={() => decide("approve", detail)}>
-                  {busyAction === "approve" ? "处理中" : "通过"}
-                </button>
-                <button className="secondary-button" type="button" disabled={!!busyAction} onClick={() => decide("request-changes", detail)}>
-                  要求修改
-                </button>
-                <button className="danger-button" type="button" disabled={!!busyAction} onClick={() => decide("reject", detail)}>
-                  驳回
-                </button>
-              </div>
+              <ReviewDecisionButtons busyAction={busyAction} comment={comment} onDecide={(action) => decide(action, detail)} />
             </div>
           );
         }}
@@ -397,6 +395,7 @@ function ReviewDetailPanel({ selected, onChanged }: { selected: ApiRecord | null
 export function ReviewDetailSections({ detail }: { detail: ApiRecord }) {
   const latestRevision = read(detail, "latestRevision", "revision", "currentRevision");
   const extensionType = safeString(read(detail, "extensionType", "type", "latestRevision.type", "latestRevision.extensionType"));
+  const typedPreview = read(detail, "typedPreview", "definition", "manifest", "latestRevision.definition") ?? latestRevision;
 
   return (
     <>
@@ -431,15 +430,15 @@ export function ReviewDetailSections({ detail }: { detail: ApiRecord }) {
       </DetailSection>
 
       <DetailSection title="系统校验结果">
-        <JsonOrEmpty value={read(detail, "systemCheck", "systemChecks", "rulePrecheck", "policyPrecheck", "validationResults")} />
+        <SystemCheckResult value={read(detail, "systemCheck", "systemChecks", "rulePrecheck", "policyPrecheck", "validationResults")} />
       </DetailSection>
 
       <DetailSection title="AI 系统预审结果">
-        <JsonOrEmpty value={read(detail, "aiPrecheck", "precheck", "aiReview")} />
+        <AiPrecheckResult value={read(detail, "aiPrecheck", "precheck", "aiReview")} />
       </DetailSection>
 
       <DetailSection title={`${reviewTypeLabel(extensionType)}内容预览`}>
-        <JsonOrEmpty value={read(detail, "typedPreview", "definition", "manifest", "latestRevision.definition") ?? latestRevision} />
+        <TypedContentPreview detail={detail} extensionType={extensionType} value={typedPreview} />
       </DetailSection>
 
       <DetailSection title="授权、可见选项与影响范围">
@@ -471,6 +470,36 @@ export function ReviewDetailSections({ detail }: { detail: ApiRecord }) {
         <JsonOrEmpty value={read(detail, "reviewHistory", "history", "events", "comments", "decisionHistory")} />
       </DetailSection>
     </>
+  );
+}
+
+export function ReviewDecisionButtons({
+  busyAction,
+  comment,
+  onDecide
+}: {
+  busyAction: string | null;
+  comment: string;
+  onDecide: (action: ReviewAction) => void;
+}) {
+  const hasReason = comment.trim().length > 0;
+  return (
+    <div className="button-row">
+      <button className="primary-button" type="button" disabled={!!busyAction} onClick={() => onDecide("approve")}>
+        {busyAction === "approve" ? "处理中" : "通过"}
+      </button>
+      <button
+        className="secondary-button"
+        type="button"
+        disabled={!!busyAction || !hasReason}
+        onClick={() => onDecide("request-changes")}
+      >
+        要求修改
+      </button>
+      <button className="danger-button" type="button" disabled={!!busyAction || !hasReason} onClick={() => onDecide("reject")}>
+        驳回
+      </button>
+    </div>
   );
 }
 
@@ -537,18 +566,26 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
   const [error, setError] = useState<ViewError | null>(null);
   const [success, setSuccess] = useState("");
 
-  async function govern(action: string) {
+  async function govern(action: GovernanceAction) {
     if (!extensionId) {
+      return;
+    }
+    const normalizedReason = reason.trim();
+    if (governanceActionRequiresReason(action) && !normalizedReason) {
+      setError({ message: "治理动作必须填写原因；安全下架请包含安全原因、影响范围和处置建议。" });
+      return;
+    }
+    if (action === "archive" && typeof window !== "undefined" && !window.confirm("归档为终态，确认归档该扩展？")) {
       return;
     }
     setError(null);
     setSuccess("");
     try {
       await adminApi.extensions.govern(extensionId, action, {
-        reason,
+        reason: normalizedReason,
         reasonType: action,
-        reasonDetail: reason,
-        securityReason: action === "security-delist" ? reason : undefined,
+        reasonDetail: normalizedReason,
+        securityReason: action === "security-delist" ? normalizedReason : undefined,
         targetVisibilityMode: action === "visibility/reduce" ? targetVisibilityMode : undefined,
         targetScope: action === "scope/reduce" ? JSON.parse(targetScope) : undefined
       });
@@ -597,14 +634,7 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
               </label>
               {error ? <InlineError error={error} /> : null}
               {success ? <p className="success-text">{success}</p> : null}
-              <div className="button-row wrap">
-                <button type="button" className="secondary-button" onClick={() => govern("delist")}>下架</button>
-                <button type="button" className="danger-button" onClick={() => govern("security-delist")}>安全下架</button>
-                <button type="button" className="secondary-button" onClick={() => govern("relist")}>恢复上架</button>
-                <button type="button" className="secondary-button" onClick={() => govern("scope/reduce")}>收缩授权</button>
-                <button type="button" className="secondary-button" onClick={() => govern("visibility/reduce")}>收缩可见性</button>
-                <button type="button" className="ghost-button" onClick={() => govern("archive")}>归档</button>
-              </div>
+              <ExtensionGovernanceButtons reason={reason} onGovern={govern} />
             </div>
           );
         }}
@@ -678,6 +708,26 @@ export function ExtensionDetailSections({ detail }: { detail: ApiRecord }) {
         <JsonOrEmpty value={read(detail, "localEvents", "deviceExceptions", "exceptionEvents", "recentEvents")} />
       </DetailSection>
     </>
+  );
+}
+
+export function ExtensionGovernanceButtons({
+  reason,
+  onGovern
+}: {
+  reason: string;
+  onGovern: (action: GovernanceAction) => void;
+}) {
+  const reasonMissing = reason.trim().length === 0;
+  return (
+    <div className="button-row wrap">
+      <button type="button" className="secondary-button" disabled={reasonMissing} onClick={() => onGovern("delist")}>下架</button>
+      <button type="button" className="danger-button" disabled={reasonMissing} onClick={() => onGovern("security-delist")}>安全下架</button>
+      <button type="button" className="secondary-button" disabled={reasonMissing} onClick={() => onGovern("relist")}>恢复上架</button>
+      <button type="button" className="secondary-button" disabled={reasonMissing} onClick={() => onGovern("scope/reduce")}>收缩授权</button>
+      <button type="button" className="secondary-button" disabled={reasonMissing} onClick={() => onGovern("visibility/reduce")}>收缩可见性</button>
+      <button type="button" className="ghost-button" disabled={reasonMissing} onClick={() => onGovern("archive")}>归档</button>
+    </div>
   );
 }
 
@@ -1517,6 +1567,166 @@ function JsonOrEmpty({ value }: { value: unknown }) {
   return hasDisplayValue(value) ? <JsonPreview value={value} /> : <p className="section-empty">暂无数据</p>;
 }
 
+function SystemCheckResult({ value }: { value: unknown }) {
+  if (!hasDisplayValue(value)) {
+    return (
+      <PrecheckUnavailable title="系统校验结果缺失" description="系统校验结果未随详情返回，审核前需要本地或服务端继续确认。" />
+    );
+  }
+  return (
+    <PrecheckResult
+      value={value}
+      fields={[
+        field("状态", read(value, "status", "result", "overallStatus")),
+        field("包安全校验", read(value, "packageSecurity", "packageSecurityStatus", "securityStatus")),
+        field("类型特定校验", read(value, "typedValidation", "typeSpecificCheck", "typeSpecificStatus")),
+        field("内容外显风险", read(value, "contentExposureRisk", "exposureRisk", "visibilityRisk")),
+        field("校验时间", formatDate(read(value, "checkedAt", "createdAt", "updatedAt")))
+      ]}
+      failureValue={read(value, "failures", "failedItems", "errors", "blockingIssues")}
+      warningValue={read(value, "warnings", "warningItems", "riskWarnings")}
+    />
+  );
+}
+
+function AiPrecheckResult({ value }: { value: unknown }) {
+  if (!hasDisplayValue(value)) {
+    return <PrecheckUnavailable title="AI 预审不可用" description="申请仍进入人工审核；管理员决定必须独立记录，不得只保存 AI 建议。" />;
+  }
+  if (isUnavailablePrecheck(value)) {
+    return (
+      <div className="precheck-result warning">
+        <PrecheckUnavailable title="AI 预审不可用" description="申请仍进入人工审核；管理员决定必须独立记录，不得只保存 AI 建议。" />
+        <JsonPreview title="完整结果" value={value} />
+      </div>
+    );
+  }
+  return (
+    <PrecheckResult
+      value={value}
+      fields={[
+        field("预审状态", read(value, "status", "result", "precheckStatus")),
+        field("模型或规则版本", read(value, "modelVersion", "ruleVersion", "version")),
+        field("风险摘要", read(value, "summary", "riskSummary")),
+        field("疑似敏感信息摘要", read(value, "sensitiveInfoSummary", "sensitiveDataSummary")),
+        field("建议重点检查", read(value, "suggestedChecks", "recommendations", "checkpoints")),
+        field("预审时间", formatDate(read(value, "checkedAt", "createdAt", "updatedAt")))
+      ]}
+      failureValue={read(value, "failures", "failedItems", "errors", "blockingIssues")}
+      warningValue={read(value, "warnings", "warningItems", "riskWarnings")}
+    />
+  );
+}
+
+function PrecheckResult({
+  value,
+  fields,
+  failureValue,
+  warningValue
+}: {
+  value: unknown;
+  fields: DetailField[];
+  failureValue: unknown;
+  warningValue: unknown;
+}) {
+  return (
+    <div className={`precheck-result ${precheckTone(value, failureValue, warningValue)}`}>
+      <FieldGrid fields={fields} />
+      {hasDisplayValue(failureValue) ? <PrecheckCallout tone="danger" title="失败项" value={failureValue} /> : null}
+      {hasDisplayValue(warningValue) ? <PrecheckCallout tone="warning" title="警告项" value={warningValue} /> : null}
+      <JsonPreview title="完整结果" value={value} />
+    </div>
+  );
+}
+
+function PrecheckUnavailable({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="precheck-unavailable">
+      <strong>{title}</strong>
+      <p>{description}</p>
+    </div>
+  );
+}
+
+function PrecheckCallout({ tone, title, value }: { tone: "danger" | "warning"; title: string; value: unknown }) {
+  return (
+    <div className={`precheck-callout ${tone}`}>
+      <strong>{title}</strong>
+      <JsonPreview value={value} />
+    </div>
+  );
+}
+
+function TypedContentPreview({ detail, extensionType, value }: { detail: ApiRecord; extensionType: string; value: unknown }) {
+  if (extensionType === "MCP_SERVER") {
+    return (
+      <TypedContentBlock
+        value={value}
+        fields={[
+          field("MCP 定义清单", read(value, "definitionList", "definitions", "mcpDefinition", "servers")),
+          field("接入方式", read(value, "accessMode", "accessMethod", "connectionMode")),
+          field("transport", read(value, "transport")),
+          field("accessType", read(value, "accessType")),
+          field("command 或 endpoint", read(value, "command", "endpoint", "url", "serverUrl")),
+          field("配置模板", read(value, "configTemplate", "configurationTemplate")),
+          field("变量 schema", read(value, "variableSchema", "variablesSchema", "schema")),
+          field("敏感变量", read(value, "sensitiveVariables", "secretVariables")),
+          field("支持工具", read(value, "tools", "supportedTools")),
+          field("连接检测", read(value, "connectionCheck", "healthCheck")),
+          field("权限声明", read(value, "permissions", "permissionDeclaration")),
+          field("数据访问说明", read(value, "dataAccess", "dataAccessDescription")),
+          field("端点/命令风险", read(detail, "endpointRiskSummary", "commandRiskSummary", "aiPrecheck.endpointRisks", "precheck.commandRisks")),
+          field("local-command 风险", read(value, "localCommandRisk", "commandRisk", "executionRisk"))
+        ]}
+      />
+    );
+  }
+  if (extensionType === "PLUGIN") {
+    return (
+      <TypedContentBlock
+        value={value}
+        fields={[
+          field("插件包文件清单", read(value, "fileList", "packageFiles", "files")),
+          field("安装模式", read(value, "installMode", "installationMode")),
+          field("安装清单", read(value, "installManifest", "manifest")),
+          field("安装、更新、卸载步骤", read(value, "lifecycleSteps", "installSteps", "updateSteps", "uninstallSteps")),
+          field("支持回滚", read(value, "rollbackSupported", "supportsRollback")),
+          field("目标工具", read(value, "targetTool", "targetTools")),
+          field("兼容版本", read(value, "compatibleVersions", "compatibility")),
+          field("权限声明", read(value, "permissions", "permissionDeclaration")),
+          field("风险说明", read(value, "riskNotes", "riskStatement")),
+          field("受控文件摘要", read(value, "downloadSummary", "controlledFileSummary")),
+          field("安装路径/脚本风险", read(detail, "installPathRiskSummary", "scriptRiskSummary", "aiPrecheck.installationRisks", "precheck.installationRisks"))
+        ]}
+      />
+    );
+  }
+  if (extensionType === "SKILL") {
+    return (
+      <TypedContentBlock
+        value={value}
+        fields={[
+          field("文件清单", read(value, "fileList", "files")),
+          field("SKILL.md 预览", read(value, "skillMarkdownPreview", "skillMdPreview", "skillMd")),
+          field("README.md 预览", read(value, "readmePreview", "readme")),
+          field("包 Hash", read(value, "packageHash", "sha256")),
+          field("风险文件摘要", read(value, "riskFileSummary", "riskyFiles"))
+        ]}
+      />
+    );
+  }
+  return <JsonOrEmpty value={value} />;
+}
+
+function TypedContentBlock({ fields, value }: { fields: DetailField[]; value: unknown }) {
+  return (
+    <div className="typed-content">
+      <FieldGrid fields={fields} />
+      <JsonOrEmpty value={value} />
+    </div>
+  );
+}
+
 function KeyValue({ record, keys }: { record: ApiRecord; keys: string[] }) {
   return (
     <dl className="key-value">
@@ -1551,6 +1761,33 @@ function hasDisplayValue(value: unknown): boolean {
     return Object.keys(value).length > 0;
   }
   return true;
+}
+
+function reviewActionRequiresReason(action: ReviewAction): boolean {
+  return action === "request-changes" || action === "reject";
+}
+
+function governanceActionRequiresReason(action: GovernanceAction): boolean {
+  return action === "delist" || action === "security-delist" || action === "relist" || action === "scope/reduce" || action === "visibility/reduce" || action === "archive";
+}
+
+function precheckTone(value: unknown, failureValue: unknown, warningValue: unknown): "danger" | "warning" | "success" | "neutral" {
+  const status = safeString(read(value, "status", "result", "overallStatus", "precheckStatus", "riskLevel")).toLowerCase();
+  if (hasDisplayValue(failureValue) || status.includes("fail") || status.includes("error") || status.includes("失败") || status.includes("high")) {
+    return "danger";
+  }
+  if (hasDisplayValue(warningValue) || status.includes("warn") || status.includes("警告") || status.includes("medium")) {
+    return "warning";
+  }
+  if (status.includes("pass") || status.includes("success") || status.includes("通过") || status.includes("low")) {
+    return "success";
+  }
+  return "neutral";
+}
+
+function isUnavailablePrecheck(value: unknown): boolean {
+  const status = safeString(read(value, "status", "result", "precheckStatus")).toLowerCase();
+  return status.includes("unavailable") || status.includes("不可用");
 }
 
 function reviewTypeLabel(value: string): string {

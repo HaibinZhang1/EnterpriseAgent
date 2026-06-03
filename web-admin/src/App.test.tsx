@@ -1,6 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import App, { ExtensionDetailSections, LoginScreen, PageRouter, ReviewDetailSections } from "./App";
+import App, {
+  ExtensionDetailSections,
+  ExtensionGovernanceButtons,
+  LoginScreen,
+  PageRouter,
+  ReviewDecisionButtons,
+  ReviewDetailSections
+} from "./App";
 import { Role, UserSummary } from "./api";
 
 const baseUser: UserSummary = {
@@ -87,9 +94,16 @@ describe("Web Admin renderer", () => {
           submittedAt: "2026-06-03T08:00:00Z",
           applicationType: "UPDATE",
           changeSummary: "新增只读同步工具",
-          systemChecks: { packageValid: true, signature: "VALID" },
-          aiPrecheck: { riskLevel: "MEDIUM", summary: "需要人工确认外部 API 范围" },
-          definition: { tools: ["syncDocuments"] },
+          systemChecks: { status: "WARNING", packageValid: true, signature: "VALID", warnings: ["存在外部端点"] },
+          aiPrecheck: { status: "WARNING", riskLevel: "MEDIUM", summary: "需要人工确认外部 API 范围" },
+          definition: {
+            accessType: "TEAM",
+            transport: "stdio",
+            command: "node server.js",
+            tools: ["syncDocuments"],
+            variableSchema: { token: "secret" },
+            localCommandRisk: "local-command 需要确认工作目录"
+          },
           targetVisibilityMode: "AUTHORIZED_ONLY",
           impactUserCount: 42,
           riskStatement: "涉及内部文档索引",
@@ -112,7 +126,70 @@ describe("Web Admin renderer", () => {
     }
     expect(html).toContain("知识库同步");
     expect(html).toContain("syncDocuments");
+    expect(html).toContain("stdio");
+    expect(html).toContain("local-command");
     expect(html).toContain("42");
+  });
+
+  it("keeps unavailable AI precheck and failed system checks visible", () => {
+    const html = renderToStaticMarkup(
+      <ReviewDetailSections
+        detail={{
+          submissionId: "sub-2",
+          extensionName: "安装包治理",
+          extensionType: "PLUGIN",
+          systemChecks: {
+            status: "FAILURE",
+            failures: ["包安全校验存在风险"]
+          },
+          definition: {
+            installMode: "managed",
+            installManifest: { files: ["plugin.exe"] },
+            rollbackSupported: true,
+            targetTool: "VS Code",
+            compatibleVersions: ["1.90+"],
+            permissions: ["file-system"],
+            installationRisks: ["安装路径需要管理员确认"]
+          }
+        }}
+      />
+    );
+
+    expect(html).toContain("AI 预审不可用");
+    expect(html).toContain("申请仍进入人工审核");
+    expect(html).toContain("失败项");
+    expect(html).toContain("包安全校验存在风险");
+    expect(html).toContain("安装模式");
+    expect(html).toContain("managed");
+    expect(html).toContain("支持回滚");
+    expect(html).toContain("VS Code");
+  });
+
+  it("keeps explicit unavailable AI precheck status visible with returned details", () => {
+    const html = renderToStaticMarkup(
+      <ReviewDetailSections
+        detail={{
+          submissionId: "sub-3",
+          extensionName: "外部端点接入",
+          extensionType: "MCP_SERVER",
+          systemChecks: { status: "PASS" },
+          aiPrecheck: {
+            status: "UNAVAILABLE",
+            summary: "AI service timeout",
+            checkedAt: "2026-06-03T09:00:00Z"
+          },
+          definition: {
+            accessType: "TEAM",
+            transport: "http",
+            endpoint: "https://internal.example/api"
+          }
+        }}
+      />
+    );
+
+    expect(html).toContain("AI 预审不可用");
+    expect(html).toContain("AI service timeout");
+    expect(html).toContain("https://internal.example/api");
   });
 
   it("renders extension governance sections required by the admin extension flow", () => {
@@ -153,7 +230,33 @@ describe("Web Admin renderer", () => {
     expect(html).toContain("Platform Team");
     expect(html).toContain("DEVICE_EXCEPTION");
   });
+
+  it("disables reason-required review and governance actions until a reason is present", () => {
+    const reviewWithoutReason = renderToStaticMarkup(
+      <ReviewDecisionButtons busyAction={null} comment="" onDecide={() => undefined} />
+    );
+    expect(disabledCount(reviewWithoutReason)).toBe(2);
+
+    const reviewWithReason = renderToStaticMarkup(
+      <ReviewDecisionButtons busyAction={null} comment="需要补充风险说明" onDecide={() => undefined} />
+    );
+    expect(disabledCount(reviewWithReason)).toBe(0);
+
+    const governanceWithoutReason = renderToStaticMarkup(
+      <ExtensionGovernanceButtons reason="" onGovern={() => undefined} />
+    );
+    expect(disabledCount(governanceWithoutReason)).toBe(6);
+
+    const governanceWithReason = renderToStaticMarkup(
+      <ExtensionGovernanceButtons reason="维护下架" onGovern={() => undefined} />
+    );
+    expect(disabledCount(governanceWithReason)).toBe(0);
+  });
 });
+
+function disabledCount(html: string): number {
+  return (html.match(/disabled=\"\"/g) ?? []).length;
+}
 
 function stubSession(user: UserSummary) {
   const storage = new Map<string, string>([
