@@ -26,6 +26,7 @@ interface ViewError {
   message: string;
   code?: string;
   requestId?: string;
+  details?: unknown;
 }
 
 type Resource<T> =
@@ -305,33 +306,60 @@ function OverviewPage({ user, setPage }: { user: UserSummary; setPage: (page: Pa
 
 function ReviewsPage() {
   const [status, setStatus] = useState("PENDING");
+  const [keyword, setKeyword] = useState("");
+  const [submitter, setSubmitter] = useState("");
+  const [type, setType] = useState("");
+  const [timeSort, setTimeSort] = useState("submitted_desc");
   const [selected, setSelected] = useState<ApiRecord | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const resource = useResource(
-    () => adminApi.reviews.list({ status, pageSize: 20 }),
-    [status, refreshKey]
+    () => adminApi.reviews.list({ status, keyword, submitter, type, sort: timeSort, pageSize: 20 }),
+    [status, keyword, submitter, type, timeSort, refreshKey]
+  );
+  const filterActions = (
+    <div className="filter-row" aria-label="审核筛选">
+      <input className="compact-input" aria-label="审核关键词搜索" placeholder="extensionId / 申请 ID" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
+      <input className="compact-input" aria-label="提交人筛选" placeholder="提交人" value={submitter} onChange={(event) => setSubmitter(event.target.value)} />
+      <Select value={type} onChange={setType} options={["", "SKILL", "MCP_SERVER", "PLUGIN"]} ariaLabel="类型筛选" />
+      <Select value={status} onChange={setStatus} options={["PENDING", "APPROVED", "CHANGES_REQUESTED", "REJECTED"]} ariaLabel="状态筛选" />
+      <Select value={timeSort} onChange={setTimeSort} options={["submitted_desc", "submitted_asc"]} ariaLabel="提交时间排序" />
+    </div>
   );
 
   return (
     <div className="split-page">
-      <Panel title="审核列表" actions={<Select value={status} onChange={setStatus} options={["PENDING", "APPROVED", "CHANGES_REQUESTED", "REJECTED"]} />}>
+      <Panel title="审核列表" actions={filterActions}>
         <ResourceState resource={resource}>
-          {(page) =>
-            page.items.length === 0 ? (
+          {(page) => {
+            const items = page.items;
+            return items.length === 0 ? (
               <EmptyState title="暂无审核任务" />
             ) : (
               <DataTable
-                items={page.items}
+                items={items}
                 columns={[
+                  {
+                    label: "申请 ID",
+                    render: (row) => {
+                      const id = safeString(read(row, "submissionId", "id"));
+                      return (
+                        <span className="inline-actions">
+                          <span>{id || "-"}</span>
+                          {id ? <button type="button" aria-label={`复制申请 ID ${id}`} onClick={(event) => { event.stopPropagation(); copyText(id); }}>复制</button> : null}
+                        </span>
+                      );
+                    }
+                  },
                   { label: "扩展", render: (row) => safeString(read(row, "extensionName", "name", "extensionId")) },
                   { label: "类型", render: (row) => safeString(read(row, "extensionType", "type")) },
+                  { label: "提交人", render: (row) => safeString(read(row, "submitterName", "submittedByName", "applicantName", "submitter.name")) },
                   { label: "状态", render: (row) => <Badge value={safeString(read(row, "status"))} /> },
                   { label: "提交时间", render: (row) => formatDate(read(row, "submittedAt", "createdAt")) }
                 ]}
                 onSelect={setSelected}
               />
-            )
-          }
+            );
+          }}
         </ResourceState>
       </Panel>
       <ReviewDetailPanel selected={selected} onChanged={() => setRefreshKey((value) => value + 1)} />
@@ -466,6 +494,10 @@ export function ReviewDetailSections({ detail }: { detail: ApiRecord }) {
         <AiPrecheckResult value={aiPrecheck} />
       </DetailSection>
 
+      <DetailSection title="包摘要与文件清单">
+        <PackageSnapshotSummary value={packageSnapshot} />
+      </DetailSection>
+
       <DetailSection title={`${reviewTypeLabel(extensionType)}内容预览`}>
         <TypedContentPreview detail={detail} extensionType={extensionType} value={typedPreview} />
       </DetailSection>
@@ -496,8 +528,17 @@ export function ReviewDetailSections({ detail }: { detail: ApiRecord }) {
       </DetailSection>
 
       <DetailSection title="历史记录与审核意见">
-        <JsonOrEmpty value={read(detail, "reviewHistory", "history", "events", "comments", "decisionHistory", "revisions", "prechecks")} />
+        <HistorySummary value={read(detail, "reviewHistory", "history", "events", "comments", "decisionHistory")} />
       </DetailSection>
+
+      <AdvancedJsonDetails
+        items={[
+          ["payloadSnapshot", revisionPayload],
+          ["packageSnapshot", packageSnapshot],
+          ["latestRevision", latestRevision],
+          ["prechecks", read(detail, "prechecks")]
+        ]}
+      />
     </>
   );
 }
@@ -1490,13 +1531,45 @@ function ErrorBanner({ error, onClose }: { error: ViewError; onClose: () => void
   );
 }
 
-function InlineError({ error }: { error: ViewError }) {
+export function InlineError({ error }: { error: ViewError }) {
   return (
     <div className="inline-error" role="alert">
       <strong>{error.message}</strong>
       {error.code ? <span>错误码：{error.code}</span> : null}
       {error.requestId ? <span>Request ID：{error.requestId}</span> : null}
+      {error.code === "internal_error" ? (
+        <span className="probe-hint">
+          状态核验：请用扩展详情或审核详情重新确认最终发布状态；保留 Request ID 给后端定位。
+        </span>
+      ) : null}
+      <ErrorDetails value={error.details} />
     </div>
+  );
+}
+
+function ErrorDetails({ value }: { value: unknown }) {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const fields = [
+    field("interface", read(record, "interfaceName", "path")),
+    field("resourceId", read(record, "resourceId", "submissionId", "extensionId")),
+    field("nextStep", read(record, "nextStep")),
+    field("requestId", read(record, "requestId"))
+  ].filter((item) => hasDisplayValue(item.value));
+  if (fields.length === 0) {
+    return null;
+  }
+  return (
+    <dl className="error-detail-list">
+      {fields.map((item) => (
+        <div key={item.label}>
+          <dt>{item.label}</dt>
+          <dd>{safeString(item.value)}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -1576,12 +1649,18 @@ function RecordList({
   );
 }
 
-function Select({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: string[] }) {
+function selectLabel(option: string): string {
+  if (option === "submitted_desc") return "提交时间：最新优先";
+  if (option === "submitted_asc") return "提交时间：最早优先";
+  return option || "全部";
+}
+
+function Select({ value, onChange, options, ariaLabel }: { value: string; onChange: (value: string) => void; options: string[]; ariaLabel?: string }) {
   return (
-    <select value={value} onChange={(event) => onChange(event.target.value)}>
+    <select value={value} aria-label={ariaLabel} onChange={(event) => onChange(event.target.value)}>
       {options.map((option) => (
         <option key={option || "all"} value={option}>
-          {option || "全部"}
+          {selectLabel(option)}
         </option>
       ))}
     </select>
@@ -1727,6 +1806,79 @@ function FieldGrid({ fields }: { fields: DetailField[] }) {
 
 function JsonOrEmpty({ value }: { value: unknown }) {
   return hasDisplayValue(value) ? <JsonPreview value={value} /> : <p className="section-empty">暂无数据</p>;
+}
+
+function PackageSnapshotSummary({ value }: { value: unknown }) {
+  const record = asRecord(value);
+  if (!record) {
+    return <p className="section-empty">暂无包摘要</p>;
+  }
+  const precheck = asRecord(read(record, "precheck"));
+  const files = asRecordArray(read(record, "files", "items", "fileManifest", "manifestItems"));
+  return (
+    <div className="detail-stack compact">
+      <FieldGrid
+        fields={[
+          field("packageId", read(record, "packageId", "id")),
+          field("SHA-256", read(record, "sha256", "packageSha256")),
+          field("文件数", read(record, "fileCount", "file_count") ?? read(precheck, "fileManifestSummary.previewableCount")),
+          field("预检状态", read(precheck, "status")),
+          field("风险等级", read(precheck, "riskSummary.riskLevel", "riskLevel")),
+          field("文件清单接口", read(record, "filesUrl")),
+          field("storagePath", read(record, "storagePath"))
+        ]}
+      />
+      {files.length > 0 ? (
+        <DataTable
+          items={files.slice(0, 8)}
+          columns={[
+            { label: "路径", render: (row) => safeString(read(row, "path", "relativePath")) },
+            { label: "大小", render: (row) => safeString(read(row, "size", "sizeBytes")) },
+            { label: "类型", render: (row) => safeString(read(row, "type", "fileType")) }
+          ]}
+        />
+      ) : (
+        <FieldGrid
+          fields={[
+            field("可预览文件", read(precheck, "fileManifestSummary.previewableCount")),
+            field("风险文件", read(precheck, "fileManifestSummary.riskFileCount")),
+            field("要求结构", read(precheck, "requiredStructure"))
+          ]}
+        />
+      )}
+    </div>
+  );
+}
+
+function HistorySummary({ value }: { value: unknown }) {
+  const records = asRecordArray(value);
+  if (records.length === 0) {
+    return hasDisplayValue(value) ? <p>{safeString(value)}</p> : <p className="section-empty">暂无历史记录</p>;
+  }
+  return (
+    <div className="record-list compact">
+      {records.slice(0, 6).map((item, index) => (
+        <div className="record-row" key={safeString(read(item, "id", "eventId", "revisionId")) || index}>
+          <div>
+            <strong>{safeString(read(item, "action", "status", "decision", "eventType")) || "记录"}</strong>
+            <span>{safeString(read(item, "actor", "actorName", "comment", "reason", "summary")) || formatDate(read(item, "createdAt", "submittedAt"))}</span>
+          </div>
+          {read(item, "requestId") ? <span className="api-pill">{safeString(read(item, "requestId"))}</span> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AdvancedJsonDetails({ items }: { items: Array<[string, unknown]> }) {
+  const visible = items.filter(([, value]) => hasDisplayValue(value));
+  if (visible.length === 0) return null;
+  return (
+    <details className="advanced-json">
+      <summary>高级/调试信息</summary>
+      {visible.map(([title, value]) => <JsonPreview key={title} title={title} value={value} />)}
+    </details>
+  );
 }
 
 function SystemCheckResult({ value }: { value: unknown }) {
@@ -2073,6 +2225,13 @@ function JsonPreview({ value, title }: { value: unknown; title?: string }) {
   );
 }
 
+function copyText(value: string): void {
+  if (typeof navigator === "undefined" || !navigator.clipboard) {
+    return;
+  }
+  void navigator.clipboard.writeText(value);
+}
+
 function useResource<T>(loader: () => Promise<T>, deps: unknown[]): Resource<T> {
   const [resource, setResource] = useState<Resource<T>>({ status: "loading" });
   useEffect(() => {
@@ -2101,7 +2260,8 @@ function normalizeError(error: unknown): ViewError {
     return {
       message: error.message,
       code: error.code,
-      requestId: error.requestId
+      requestId: error.requestId,
+      details: error.details
     };
   }
   if (error instanceof Error) {

@@ -58,6 +58,39 @@ describe('ApiClient', () => {
     await expect(client.me('req_auth')).rejects.toMatchObject({ desktopError: { code: 'unauthenticated', requestID: 'req_auth' } });
   });
 
+  it('keeps upload validation details and request IDs readable', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      calls.push({ url: String(input), init: init ?? {} });
+      return new Response(JSON.stringify({
+        success: false,
+        error: {
+          code: 'validation_failed',
+          message: '参数校验失败',
+          details: { uploadType: 'SKILL_PACKAGE', rejectCode: 'skill_manifest_missing' }
+        },
+        requestId: 'req_upload_server'
+      }), { status: 400 });
+    };
+    const client = new ApiClient({ baseURL: 'http://server.test', clientVersion: '0.1.0-m8', fetchImpl });
+
+    await expect(client.uploadPackage({
+      uploadType: 'SKILL_PACKAGE',
+      fileName: 'skill.zip',
+      mimeType: 'application/zip',
+      contentBase64: Buffer.from('zip-bytes').toString('base64')
+    }, 'req_upload_renderer')).rejects.toMatchObject({
+      desktopError: {
+        code: 'validation_failed',
+        requestID: 'req_upload_server',
+        details: { details: { uploadType: 'SKILL_PACKAGE', rejectCode: 'skill_manifest_missing' } }
+      }
+    });
+    expect(calls[0].url).toBe('http://server.test/api/uploads/package');
+    expect((calls[0].init.headers as Record<string, string>)['Content-Type']).toBeUndefined();
+    expect(calls[0].init.body).toBeInstanceOf(FormData);
+  });
+
   it('calls M8 device and client update endpoints with stable payloads and redacted tickets', async () => {
     const temp = await tempRoot();
     try {

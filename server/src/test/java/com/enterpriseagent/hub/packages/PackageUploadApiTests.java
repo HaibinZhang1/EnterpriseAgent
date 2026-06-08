@@ -46,7 +46,7 @@ class PackageUploadApiTests extends PostgresIntegrationTestBase {
         User user = createUser("136" + uniqueDigits(), Role.NORMAL_USER);
         String token = login(user.getPhone(), "Temp#123456", "DESKTOP");
         MockMultipartFile file = new MockMultipartFile("file", "skill.zip", "application/zip", zip(
-                entry("SKILL.md", "---\nname: demo\n---\n# Demo"),
+                entry("SKILL.md", "---\nExtensionID: demo.skill\nname: demo\ndescription: Demo desc\nversion: 1.2.3\n---\n# Demo"),
                 entry("README.md", "apiKey=abcdefghijklmnopqrstuvwxyz\nhello"),
                 entry("scripts/install.ps1", "Write-Host hi")));
 
@@ -59,6 +59,10 @@ class PackageUploadApiTests extends PostgresIntegrationTestBase {
                 .andExpect(jsonPath("$.data.sha256").isString())
                 .andExpect(jsonPath("$.data.fileCount").value(3))
                 .andExpect(jsonPath("$.data.precheck.status").value("WARNING"))
+                .andExpect(jsonPath("$.data.precheck.uploadType").value("SKILL_PACKAGE"))
+                .andExpect(jsonPath("$.data.precheck.definition.extensionId").value("demo.skill"))
+                .andExpect(jsonPath("$.data.precheck.definition.name").value("demo"))
+                .andExpect(jsonPath("$.data.precheck.definition.version").value("1.2.3"))
                 .andReturn().getResponse().getContentAsString();
         String packageId = extract(response, "packageId");
 
@@ -85,10 +89,21 @@ class PackageUploadApiTests extends PostgresIntegrationTestBase {
         String token = login(user.getPhone(), "Temp#123456", "DESKTOP");
         mockMvc.perform(multipart("/api/uploads/package")
                         .file(new MockMultipartFile("file", "missing.zip", "application/zip", zip(entry("README.md", "no skill"))))
-                        .param("uploadType", "SKILL_PACKAGE")
-                        .header("Authorization", "Bearer " + token))
+                .param("uploadType", "SKILL_PACKAGE")
+                .header("Authorization", "Bearer " + token))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.code").value("skill_manifest_missing"));
+                .andExpect(jsonPath("$.error.code").value("skill_manifest_missing"))
+                .andExpect(jsonPath("$.error.details.uploadType").value("SKILL_PACKAGE"))
+                .andExpect(jsonPath("$.error.details.requiredStructure").value("SKILL.md must be present at the zip root"));
+
+        mockMvc.perform(multipart("/api/uploads/package")
+                        .file(new MockMultipartFile("file", "wrapped.zip", "application/zip",
+                                zip(entry("wrapped/SKILL.md", "---\nname: wrapped\n---\n# Wrapped"))))
+                .param("uploadType", "SKILL_PACKAGE")
+                .header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("skill_manifest_missing"))
+                .andExpect(jsonPath("$.error.details.definition").doesNotExist());
 
         mockMvc.perform(multipart("/api/uploads/package")
                         .file(new MockMultipartFile("file", "bad.zip", "application/zip", zip(entry("../evil.txt", "bad"))))

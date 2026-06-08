@@ -304,6 +304,10 @@ tbody tr:hover {
   gap: 14px;
 }
 
+.detail-stack.compact {
+  gap: 10px;
+}
+
 .form-stack label {
   display: grid;
   gap: 7px;
@@ -439,6 +443,33 @@ tbody tr:hover {
   color: #8d2d2d;
 }
 
+.probe-hint {
+  color: #6b3f14 !important;
+}
+
+.error-detail-list {
+  display: grid;
+  gap: 4px;
+  margin: 2px 0 0;
+}
+
+.error-detail-list div {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.error-detail-list dt {
+  color: #8d2d2d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.error-detail-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .error-banner {
   display: flex;
   justify-content: space-between;
@@ -480,6 +511,14 @@ tbody tr:hover {
   gap: 10px;
   padding: 0;
   margin: 0;
+}
+
+.record-list.compact {
+  gap: 8px;
+}
+
+.record-list.compact .record-row {
+  align-items: flex-start;
 }
 
 .record-row,
@@ -632,6 +671,20 @@ tbody tr:hover {
 .json-preview {
   display: grid;
   gap: 8px;
+}
+
+.advanced-json {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid rgba(120, 136, 166, 0.18);
+  padding-top: 12px;
+}
+
+.advanced-json summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .json-preview pre,

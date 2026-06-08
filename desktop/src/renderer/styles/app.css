@@ -490,6 +490,10 @@ html[data-theme="glass-light"] .drawer::before {
   padding: var(--space-5);
 }
 
+.extension-result-card {
+  padding: var(--space-4);
+}
+
 .card:hover {
   transform: translateY(-2px);
   background: var(--glass-solid);
@@ -527,6 +531,10 @@ html[data-theme="glass-light"] .drawer::before {
   gap: var(--space-3);
 }
 
+.card-action-row.compact {
+  gap: var(--space-2);
+}
+
 .toolbar {
   margin-bottom: var(--space-3);
 }
@@ -541,6 +549,24 @@ html[data-theme="glass-light"] .drawer::before {
 
 .local-scan-meta {
   margin: -4px 0 var(--space-3);
+}
+
+.key-value-list {
+  display: grid;
+  grid-template-columns: minmax(96px, max-content) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  margin: var(--space-3) 0 0;
+  font-size: var(--font-caption);
+}
+
+.key-value-list dt {
+  color: var(--text-placeholder);
+}
+
+.key-value-list dd {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .search-form {
@@ -701,6 +727,18 @@ html[data-theme="glass-light"] .drawer::before {
   color: var(--text-placeholder);
   font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
   font-size: var(--font-caption);
+}
+
+.error-details {
+  display: grid;
+  gap: 4px;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-secondary);
+  font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: var(--font-caption);
+  text-align: left;
 }
 
 .success-text {
@@ -1344,16 +1382,12 @@ html[data-theme="glass-dark"] .saas-sidebar-item.active .saas-sidebar-item-badge
   align-self: stretch;
 }
 
-/* ==================== 22. 桌面原生化交互动效 (去网页感重构) ==================== */
-
-/* 1. 高低频操作区自适应 Hover 滑出平滑动画 */
 .action-group-wrapper {
   position: relative;
   overflow: hidden;
   padding-right: 6px;
 }
 
-/* 低频按钮默认宽度锁定为 0，隐藏，超出隐藏 */
 .action-group-wrapper .action-button-low-freq {
   max-width: 0;
   opacity: 0;
@@ -1364,15 +1398,13 @@ html[data-theme="glass-dark"] .saas-sidebar-item.active .saas-sidebar-item-badge
   flex-shrink: 0;
 }
 
-/* 当鼠标 hover 在整个卡片行 list-card-row 或者操作区本身时自动滑出 */
 .list-card-row:hover .action-button-low-freq,
 .action-group-wrapper:hover .action-button-low-freq {
-  max-width: 200px; /* 能够容纳详情和清理两个按钮的充分宽度 */
+  max-width: 200px;
   opacity: 1;
   gap: 6px;
 }
 
-/* 收起指示器 (...) 微动效，在 Hover 展开时淡出，隐藏视觉冗余 */
 .more-indicator-dot {
   transition: opacity 180ms ease, transform 180ms ease;
 }

@@ -1,5 +1,9 @@
 package com.enterpriseagent.hub.review;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,15 +46,23 @@ public class ReviewService {
     }
 
     @Transactional(readOnly = true)
-    public PageResult<Map<String, Object>> tasks(CurrentUser actor, String status, int page, int pageSize) {
+    public PageResult<Map<String, Object>> tasks(CurrentUser actor, String status, String keyword, String submitter,
+            String type, String sort, int page, int pageSize) {
         requireAdmin(actor);
         var rows = jdbc.queryForList("""
-                select * from submissions
-                where status in ('PENDING_REVIEW', 'IN_REVIEW', 'CHANGES_REQUESTED', 'REJECTED', 'APPROVED')
-                order by created_at desc
+                select s.*, u.name as submitter_name, d.name as submitter_department_name
+                from submissions s
+                join users u on u.id = s.submitter_id
+                join departments d on d.id = s.submitter_department_id
+                where s.status in ('PENDING_REVIEW', 'IN_REVIEW', 'CHANGES_REQUESTED', 'REJECTED', 'APPROVED')
                 """).stream()
                 .filter(row -> canReview(actor, row))
-                .filter(row -> status == null || statusMatches(row, status))
+                .filter(row -> status == null || status.isBlank() || statusMatches(row, status))
+                .filter(row -> keywordMatches(row, keyword))
+                .filter(row -> submitterMatches(row, submitter))
+                .filter(row -> type == null || type.isBlank()
+                        || String.valueOf(row.get("extension_type")).equalsIgnoreCase(type))
+                .sorted((left, right) -> compareSubmittedAt(left, right, sort))
                 .map(this::taskSummary)
                 .toList();
         return PageResult.of(rows, page, pageSize);
@@ -394,6 +406,9 @@ public class ReviewService {
         item.put("extensionType", row.get("extension_type"));
         item.put("extensionId", row.get("target_extension_id"));
         item.put("submitterId", row.get("submitter_id"));
+        item.put("submitterName", row.get("submitter_name"));
+        item.put("departmentName", row.get("submitter_department_name"));
+        item.put("submitterDepartmentName", row.get("submitter_department_name"));
         item.put("status", row.get("status"));
         item.put("currentRevisionId", row.get("current_revision_id"));
         item.put("createdAt", row.get("created_at"));
@@ -406,6 +421,52 @@ public class ReviewService {
             case "PROCESSED" -> List.of("APPROVED", "REJECTED", "CHANGES_REQUESTED").contains(String.valueOf(row.get("status")));
             default -> status.equals(row.get("status"));
         };
+    }
+
+    private boolean keywordMatches(Map<String, Object> row, String keyword) {
+        String value = normalizeSearch(keyword);
+        return value.isBlank() || contains(value, row.get("id"), row.get("target_extension_id"),
+                row.get("extension_type"), row.get("type"), row.get("submitter_name"));
+    }
+
+    private boolean submitterMatches(Map<String, Object> row, String submitter) {
+        String value = normalizeSearch(submitter);
+        return value.isBlank() || contains(value, row.get("submitter_id"), row.get("submitter_name"),
+                row.get("submitter_department_name"));
+    }
+
+    private boolean contains(String needle, Object... values) {
+        for (Object value : values) {
+            if (String.valueOf(value).toLowerCase().contains(needle)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String normalizeSearch(String value) {
+        return value == null ? "" : value.trim().toLowerCase();
+    }
+
+    private int compareSubmittedAt(Map<String, Object> left, Map<String, Object> right, String sort) {
+        int comparison = Long.compare(epochMillis(left.get("created_at")), epochMillis(right.get("created_at")));
+        return "submitted_asc".equals(sort) ? comparison : -comparison;
+    }
+
+    private long epochMillis(Object value) {
+        if (value instanceof java.sql.Timestamp timestamp) {
+            return timestamp.getTime();
+        }
+        if (value instanceof OffsetDateTime dateTime) {
+            return dateTime.toInstant().toEpochMilli();
+        }
+        if (value instanceof LocalDateTime dateTime) {
+            return dateTime.toInstant(ZoneOffset.UTC).toEpochMilli();
+        }
+        if (value instanceof Instant instant) {
+            return instant.toEpochMilli();
+        }
+        return 0L;
     }
 
     private boolean canReview(CurrentUser actor, Map<String, Object> submission) {

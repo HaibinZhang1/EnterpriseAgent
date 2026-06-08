@@ -19,6 +19,12 @@ export function ExtensionDetailDrawer({
   onStar: (item: ExtensionSummary) => void;
 }) {
   const item = detail.item;
+  const isLocalFallback = detail.source === 'local-fallback';
+  const versions = detail.versions.length > 0
+    ? detail.versions
+    : item?.version
+      ? [{ version: item.version, status: item.status ?? 'PUBLISHED' }]
+      : [];
   return (
     <Drawer title={item?.name ?? '扩展详情'} onClose={onClose}>
       {detail.state === 'loading' ? <LoadingState label="正在加载详情" /> : null}
@@ -28,25 +34,29 @@ export function ExtensionDetailDrawer({
           <section className="grid">
             <div className="card-action-row">
               <StatusBadge tone="info">{extensionKindLabel(item.type)}</StatusBadge>
+              {isLocalFallback ? <StatusBadge tone="info">本地记录</StatusBadge> : null}
               {item.status ? <StatusBadge tone={riskTone(item.status)}>{statusLabel(item.status)}</StatusBadge> : null}
               {item.riskLevel ? <StatusBadge tone={riskTone(item.riskLevel)}>{item.riskLevel}</StatusBadge> : null}
             </div>
             <p>{item.description ?? item.summary ?? '暂无详情描述。'}</p>
             {item.authorizationMessage ? <ErrorState title="权限提示" error={{ message: item.authorizationMessage }} /> : null}
-            <div className="card-action-row">
-              <Button tone="primary" disabled={item.authorized === false} onClick={() => onPrimaryAction(item)}>
-                {primaryActionLabel(item)}
-              </Button>
-              <Button onClick={() => onStar(item)}>{item.starred ? '取消 Star' : 'Star'}</Button>
-            </div>
+            {isLocalFallback ? <p className="muted">当前显示本地扫描缓存；登录后可查看社区详情、版本历史和 Star 状态。</p> : (
+              <div className="card-action-row">
+                <Button tone="primary" disabled={item.authorized === false} onClick={() => onPrimaryAction(item)}>
+                  {primaryActionLabel(item)}
+                </Button>
+                <Button onClick={() => onStar(item)}>{item.starred ? '取消 Star' : 'Star'}</Button>
+              </div>
+            )}
           </section>
 
           <section className="panel">
             <header className="section-header">
               <h2>版本</h2>
-              <span className="meta">{detail.versions.length} 个版本</span>
+              <span className="meta">{versions.length} 个版本</span>
             </header>
-            {detail.versions.length === 0 ? <EmptyState title="暂无版本信息" /> : (
+            {detail.versions.length === 0 && item.version ? <p className="muted">当前版本 {item.version}，历史版本暂未加载。</p> : null}
+            {versions.length === 0 ? <EmptyState title="暂无版本信息" /> : (
               <table className="table">
                 <thead>
                   <tr>
@@ -56,7 +66,7 @@ export function ExtensionDetailDrawer({
                   </tr>
                 </thead>
                 <tbody>
-                  {detail.versions.map((version) => (
+                  {versions.map((version) => (
                     <tr key={version.version}>
                       <td>{version.version}</td>
                       <td>{version.status ?? '-'}</td>

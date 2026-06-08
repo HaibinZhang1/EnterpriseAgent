@@ -14,6 +14,7 @@ export function SearchResultsPage({
   error,
   onBack,
   onOpen,
+  onPrimaryAction,
   onStar
 }: {
   query: string;
@@ -22,6 +23,7 @@ export function SearchResultsPage({
   error?: UiError;
   onBack: () => void;
   onOpen: (item: ExtensionSummary) => void;
+  onPrimaryAction: (item: ExtensionSummary) => void;
   onStar: (item: ExtensionSummary) => void;
 }) {
   const getInitialTab = (q: string): ExtensionKind => {
@@ -115,6 +117,7 @@ export function SearchResultsPage({
                       key={item.id}
                       item={item}
                       onOpen={onOpen}
+                      onPrimaryAction={onPrimaryAction}
                       onStar={onStar}
                     />
                   ))}

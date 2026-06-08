@@ -1,8 +1,10 @@
 package com.enterpriseagent.hub.common.error;
 
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 
 import org.slf4j.Logger;
@@ -44,10 +46,10 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiResponse<Void>> handleUnexpected(Exception exception) {
+    public ResponseEntity<ApiResponse<Void>> handleUnexpected(Exception exception, HttpServletRequest request) {
         log.error("Unhandled server error requestId={}", RequestContext.requireRequestId(), exception);
         return ResponseEntity.status(ErrorCode.INTERNAL_ERROR.httpStatus())
-                .body(ApiResponse.error(ErrorCode.INTERNAL_ERROR, "服务内部错误", null));
+                .body(ApiResponse.error(ErrorCode.INTERNAL_ERROR, "服务内部错误", unexpectedDetails(request)));
     }
 
     private ResponseEntity<ApiResponse<Void>> validationResponse(Object details) {
@@ -59,5 +61,31 @@ public class GlobalExceptionHandler {
         return Map.of(
                 "field", error.getField(),
                 "reason", error.getDefaultMessage() == null ? "invalid" : error.getDefaultMessage());
+    }
+
+    private Map<String, String> unexpectedDetails(HttpServletRequest request) {
+        Map<String, String> details = new LinkedHashMap<>();
+        String path = request.getRequestURI();
+        details.put("interfaceName", request.getMethod() + " " + path);
+        details.put("requestId", RequestContext.requireRequestId());
+        String resourceId = resourceIdFromPath(path);
+        if (!resourceId.isBlank()) {
+            details.put("resourceId", resourceId);
+        }
+        details.put("nextStep", "Use review or extension detail endpoints to confirm final publication state.");
+        return details;
+    }
+
+    private String resourceIdFromPath(String path) {
+        if (path == null || path.isBlank()) {
+            return "";
+        }
+        String[] parts = path.split("/");
+        for (int index = parts.length - 1; index >= 0; index -= 1) {
+            if (!parts[index].isBlank()) {
+                return parts[index];
+            }
+        }
+        return "";
     }
 }

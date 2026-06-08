@@ -268,6 +268,16 @@ public class ClientDeviceService {
         Map<String, Object> output = new LinkedHashMap<>(row);
         output.put("userSnapshot", json.read((String) output.remove("user_snapshot")));
         output.put("departmentSnapshot", json.read((String) output.remove("department_snapshot")));
+        output.put("deviceId", output.get("device_id"));
+        output.put("userId", output.get("user_id"));
+        output.put("departmentId", output.get("department_id"));
+        output.put("hostnameHash", output.get("hostname_hash"));
+        output.put("osVersion", output.get("os_version"));
+        output.put("clientVersion", output.get("client_version"));
+        output.put("firstSeenAt", output.get("first_seen_at"));
+        output.put("lastSeenAt", output.get("last_seen_at"));
+        output.put("recentUpdateStatus", output.get("recent_update_status"));
+        output.put("recentErrorSummary", output.get("recent_error_summary"));
         return output;
     }
 

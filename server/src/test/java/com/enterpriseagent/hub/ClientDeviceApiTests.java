@@ -83,7 +83,9 @@ class ClientDeviceApiTests extends PostgresIntegrationTestBase {
                         .header("Authorization", "Bearer " + adminToken)
                         .param("keyword", deviceId))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.items[0].device_id").value(deviceId));
+                .andExpect(jsonPath("$.data.items[0].device_id").value(deviceId))
+                .andExpect(jsonPath("$.data.items[0].deviceId").value(deviceId))
+                .andExpect(jsonPath("$.data.items[0].clientVersion").value(heartbeatVersion));
 
         String distributionResponse = mockMvc.perform(get("/api/admin/client-devices/version-distribution")
                         .header("Authorization", "Bearer " + adminToken))
@@ -95,6 +97,8 @@ class ClientDeviceApiTests extends PostgresIntegrationTestBase {
                         .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.device_id").value(deviceId))
+                .andExpect(jsonPath("$.data.deviceId").value(deviceId))
+                .andExpect(jsonPath("$.data.clientVersion").value(heartbeatVersion))
                 .andExpect(jsonPath("$.data.events[0].event_type").exists());
 
         mockMvc.perform(get("/api/admin/client-devices")

@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -329,10 +330,14 @@ public class PackageUploadService {
     private Map<String, Object> precheckEnvelope(SafeZipExtractResult result, UploadType uploadType) {
         Map<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("schemaVersion", 1);
+        envelope.put("uploadType", uploadType.name());
         envelope.put("status", result.status().name());
         envelope.put("rejected", result.rejected());
         if (result.rejectCode() != null) {
             envelope.put("rejectCode", result.rejectCode());
+        }
+        if (uploadType == UploadType.SKILL_PACKAGE) {
+            envelope.put("requiredStructure", "SKILL.md must be present at the zip root");
         }
         envelope.put("warnings", result.findings());
         envelope.put("fileManifestSummary", Map.of(
@@ -348,6 +353,10 @@ public class PackageUploadService {
     }
 
     private Map<String, Object> definitionSnapshot(UploadType uploadType, SafeZipExtractResult result) {
+        if (uploadType == UploadType.SKILL_PACKAGE) {
+            PreviewCandidate manifest = rootPreview(result, "SKILL.md");
+            return manifest == null ? Map.of() : skillDefinitionSnapshot(manifest.content());
+        }
         if (uploadType == UploadType.MCP_MANIFEST) {
             PreviewCandidate manifest = firstPreview(result, "mcp.json", "mcp.yaml", "mcp.yml", "manifest.json");
             return manifest == null ? Map.of() : mcpDefinitionSnapshot(parseLooseManifest(manifest.content()));
@@ -357,6 +366,16 @@ public class PackageUploadService {
             return manifest == null ? Map.of() : pluginDefinitionSnapshot(parseLooseManifest(manifest.content()));
         }
         return Map.of();
+    }
+
+    private Map<String, Object> skillDefinitionSnapshot(String content) {
+        Map<String, Object> manifest = parseSkillFrontmatter(content);
+        Map<String, Object> definition = new LinkedHashMap<>();
+        putIfPresent(definition, "extensionId", firstString(manifest, "extensionid", "extension_id", "id"));
+        putIfPresent(definition, "name", manifest.get("name"));
+        putIfPresent(definition, "description", firstString(manifest, "description", "summary"));
+        putIfPresent(definition, "version", manifest.get("version"));
+        return definition;
     }
 
     private Map<String, Object> mcpDefinitionSnapshot(Map<String, Object> manifest) {
@@ -464,9 +483,19 @@ public class PackageUploadService {
     private PreviewCandidate firstPreview(SafeZipExtractResult result, String... names) {
         for (String name : names) {
             for (PreviewCandidate preview : result.previews()) {
-                if (name.equalsIgnoreCase(preview.path()) || preview.path().toLowerCase().endsWith("/" + name.toLowerCase())) {
+                if (name.equalsIgnoreCase(preview.path())
+                        || preview.path().toLowerCase(Locale.ROOT).endsWith("/" + name.toLowerCase(Locale.ROOT))) {
                     return preview;
                 }
+            }
+        }
+        return null;
+    }
+
+    private PreviewCandidate rootPreview(SafeZipExtractResult result, String name) {
+        for (PreviewCandidate preview : result.previews()) {
+            if (name.equalsIgnoreCase(preview.path())) {
+                return preview;
             }
         }
         return null;
@@ -487,6 +516,47 @@ public class PackageUploadService {
             }
         }
         return output;
+    }
+
+    private Map<String, Object> parseSkillFrontmatter(String content) {
+        String normalized = content.replace("\r\n", "\n");
+        if (!normalized.startsWith("---\n")) {
+            return Map.of();
+        }
+        int end = normalized.indexOf("\n---", 4);
+        if (end < 0) {
+            return Map.of();
+        }
+        Map<String, Object> output = new LinkedHashMap<>();
+        for (String line : normalized.substring(4, end).split("\\R")) {
+            int separator = line.indexOf(':');
+            if (separator > 0) {
+                output.put(normalizeManifestKey(line.substring(0, separator)),
+                        unquote(line.substring(separator + 1).trim()));
+            }
+        }
+        return output;
+    }
+
+    private String normalizeManifestKey(String key) {
+        return key.trim().toLowerCase(Locale.ROOT).replace("-", "_");
+    }
+
+    private String firstString(Map<String, Object> values, String... keys) {
+        for (String key : keys) {
+            String value = stringValue(values.get(key));
+            if (!value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private String unquote(String value) {
+        if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+            return value.substring(1, value.length() - 1);
+        }
+        return value;
     }
 
     private String stringValue(Object value) {

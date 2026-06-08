@@ -38,7 +38,7 @@ class M8BusinessE2eTests extends PostgresIntegrationTestBase {
         M8TestSupport.SeededUpdatePackage seed = M8TestSupport.seedClientUpdatePackage(jdbc, adminId,
                 "m8 business e2e client update " + UUID.randomUUID());
         String version = "4." + System.nanoTime() + ".0";
-        String channel = "E2E";
+        String channel = "E2E" + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
 
         mockMvc.perform(post("/api/client-devices/register")
                         .header("Authorization", "Bearer " + userToken)

@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { EnterpriseAgentAppView, initialView, normalizeActionResult, resolveTheme, type EnterpriseAgentActions, type EnterpriseAgentViewModel } from '../src/renderer/App';
+import { EnterpriseAgentAppView, initialView, normalizeActionResult, resolveTheme, shouldUseLocalDetailFallback, type EnterpriseAgentActions, type EnterpriseAgentViewModel } from '../src/renderer/App';
 import { ExtensionActionModal } from '../src/renderer/features/extension/ExtensionActionModal';
 import { ExtensionDetailDrawer } from '../src/renderer/features/extension/ExtensionDetailDrawer';
 import { PublishWizard } from '../src/renderer/features/publish/PublishWizard';
 import { SettingsModal } from '../src/renderer/features/settings/SettingsModal';
 import { UpdateModal } from '../src/renderer/features/update/UpdateModal';
+import { readableErrorMessage } from '../src/renderer/lib/errors';
 import type { ExtensionKind, ExtensionSummary } from '../src/renderer/types/desktop';
 
 describe('renderer app view', () => {
@@ -40,6 +41,25 @@ describe('renderer app view', () => {
     expect(offline).toContain('Agent 工作台');
     expect(offline).not.toContain('客户端初始化失败');
     expect(offline).not.toContain('req-offline-boot');
+  });
+
+  it('treats expired sessions as recoverable startup state on the local page', () => {
+    const html = renderView({
+      activeTab: 'local',
+      user: undefined,
+      modal: 'none',
+      bootState: 'error',
+      bootError: { code: 'unauthenticated', message: '登录已失效，请重新登录。', requestID: 'req-auth-boot' },
+      lifecycle: { extensions: [], versions: [], targets: [], tools: [], projects: [], mcpInstallations: [], pluginInstallations: [] }
+    });
+    expect(html).toContain('本地仓库管理');
+    expect(html).not.toContain('客户端初始化失败');
+    expect(html).not.toContain('req-auth-boot');
+  });
+
+  it('normalizes unauthenticated raw messages', () => {
+    expect(readableErrorMessage('?????????', 'unauthenticated')).toBe('登录已失效，请重新登录。');
+    expect(readableErrorMessage('raw unauthenticated backend error', 'unauthenticated')).toBe('登录已失效，请重新登录。');
   });
 
   it('renders community areas, empty rankings, search cards, and search requestId errors', () => {
@@ -90,6 +110,7 @@ describe('renderer app view', () => {
     );
     expect(unauthorized).toContain('disabled=""');
     expect(unauthorized).toContain('未授权');
+    expect(unauthorized).toContain('当前版本 1.0.0，历史版本暂未加载');
 
     const failed = renderToStaticMarkup(
       <ExtensionDetailDrawer
@@ -101,6 +122,25 @@ describe('renderer app view', () => {
     );
     expect(failed).toContain('详情加载失败');
     expect(failed).toContain('req-detail-1');
+
+    const localFallback = renderToStaticMarkup(
+      <ExtensionDetailDrawer
+        detail={{ state: 'ready', source: 'local-fallback', item: { ...extension('local-skill', 'skill'), status: 'scanned', version: undefined, description: '本地状态：已扫描' }, versions: [] }}
+        onClose={() => undefined}
+        onPrimaryAction={() => undefined}
+        onStar={() => undefined}
+      />
+    );
+    expect(localFallback).toContain('本地记录');
+    expect(localFallback).toContain('当前显示本地扫描缓存');
+    expect(localFallback).not.toContain('启用 Skill');
+    expect(localFallback).not.toContain('取消 Star');
+  });
+
+  it('falls back to local details only for local unauthenticated records', () => {
+    expect(shouldUseLocalDetailFallback({ ...extension('local-skill', 'skill'), status: 'installed' }, { code: 'unauthenticated', message: '登录已失效，请重新登录。' })).toBe(true);
+    expect(shouldUseLocalDetailFallback(extension('community-skill', 'skill'), { code: 'unauthenticated', message: '登录已失效，请重新登录。' })).toBe(false);
+    expect(shouldUseLocalDetailFallback({ ...extension('local-skill', 'skill'), status: 'installed' }, { code: 'server_unavailable', message: '无法连接服务端，请检查网络或服务状态。' })).toBe(false);
   });
 
   it('shows local pending events, offline server-action warning, and cleanup for scope-reduced entries', () => {
@@ -162,12 +202,40 @@ describe('renderer app view', () => {
     expect(plugin).toContain('http://intranet/plugins/manual');
   });
 
+  it('previews Skill enable targets and exposes post-action path helpers', () => {
+    const html = renderToStaticMarkup(
+      <ExtensionActionModal
+        item={extension('skill-one', 'skill')}
+        busy={false}
+        result={{
+          status: 'success',
+          planTitle: 'Enable Skill',
+          artifactPath: '/tmp/skill-one.package',
+          targetPath: '/Users/alice/.codex/skills/skill-one',
+          syncStatus: '本地记录已更新；如事件仍排队，可在本地页查看同步状态。',
+          warnings: [],
+          steps: []
+        }}
+        onClose={() => undefined}
+        onOpenLocal={() => undefined}
+        onRun={() => undefined}
+      />
+    );
+    expect(html).toContain('~/.codex/skills');
+    expect(html).toContain('central-store/skill-one/1.0.0');
+    expect(html).toContain('current.json 负责指向当前版本');
+    expect(html).toContain('复制目标路径');
+    expect(html).toContain('查看本地');
+  });
+
   it('renders publish wizard steps, fixed form labels, success IDs, and failure errors', () => {
     const first = renderToStaticMarkup(<PublishWizard busy={false} onClose={() => undefined} onSubmit={() => undefined} />);
     expect(first).toContain('类型与包');
     expect(first).toContain('Skill 表单');
     expect(first).toContain('MCP 表单');
     expect(first).toContain('Plugin 表单');
+    expect(first).toContain('aria-label="打开步骤：元数据" disabled=""');
+    expect(first).toContain('aria-label="打开步骤：确认提交" disabled=""');
 
     const policy = renderToStaticMarkup(<PublishWizard busy={false} initialStep={2} onClose={() => undefined} onSubmit={() => undefined} />);
     expect(policy).toContain('仅授权范围可见');

@@ -287,7 +287,7 @@ export class ApiClient {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     const headers = {
-      ...await this.buildHeaders(resolvedRequestID, options.auth !== false, options.rawBody ? undefined : 'application/json'),
+      ...await this.buildHeaders(resolvedRequestID, options.auth !== false, options.rawBody ? null : 'application/json'),
       ...(options.extraHeaders ?? {})
     };
     try {
@@ -333,7 +333,7 @@ export class ApiClient {
     }
   }
 
-  private async buildHeaders(requestID: string, includeAuth: boolean, contentType: string | undefined = 'application/json'): Promise<Record<string, string>> {
+  private async buildHeaders(requestID: string, includeAuth: boolean, contentType: string | null = 'application/json'): Promise<Record<string, string>> {
     const headers: Record<string, string> = {
       'X-Request-ID': requestID,
       'X-Client-Version': this.options.clientVersion
@@ -390,11 +390,26 @@ function mapServerEnvelopeError<T>(envelope: ApiEnvelope<T> | T | undefined, sta
 
 function toDesktopErrorCode(code: string): DesktopErrorCode {
   const known = new Set<DesktopErrorCode>([
+    'validation_failed',
     'permission_denied',
     'scope_restricted',
     'resource_not_found',
+    'state_conflict',
     'unauthenticated',
     'hash_mismatch',
+    'package_too_large',
+    'package_file_count_exceeded',
+    'package_path_traversal',
+    'package_uncompressed_size_exceeded',
+    'package_unsafe_file_detected',
+    'skill_manifest_missing',
+    'mcp_config_template_invalid',
+    'mcp_transport_invalid',
+    'mcp_endpoint_invalid',
+    'plugin_manifest_invalid',
+    'upload_expired',
+    'upload_not_owned',
+    'upload_already_consumed',
     'download_ticket_required',
     'download_ticket_expired',
     'download_ticket_used',

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readableErrorMessage } from '../src/renderer/lib/errors';
+import { readableErrorMessage, toUiError } from '../src/renderer/lib/errors';
 
 describe('renderer error messages', () => {
   it('keeps explicit unauthenticated business messages when the session is still present', () => {
@@ -9,6 +9,15 @@ describe('renderer error messages', () => {
 
   it('uses the relogin guidance for missing or expired sessions', () => {
     expect(readableErrorMessage('未登录或会话已失效', 'unauthenticated')).toBe('登录已失效，请重新登录。');
+    expect(readableErrorMessage('?????????', 'unauthenticated')).toBe('登录已失效，请重新登录。');
     expect(readableErrorMessage('', 'unauthenticated')).toBe('登录已失效，请重新登录。');
+  });
+
+  it('does not infer unauthenticated from malformed raw errors', () => {
+    expect(toUiError(new Error('?????????'))).toEqual({ message: '?????????' });
+    expect(toUiError(new Error('raw unauthenticated backend error'))).toEqual({
+      code: 'unauthenticated',
+      message: '登录已失效，请重新登录。'
+    });
   });
 });

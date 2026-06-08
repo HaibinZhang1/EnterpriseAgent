@@ -303,6 +303,71 @@ class SubmissionReviewNotificationApiTests extends PostgresIntegrationTestBase {
         assertThat(systemTasks).contains(submissionId);
     }
 
+    @Test
+    void reviewTasksFilterAndSortBeforePaginationWithSubmitterSummary() throws Exception {
+        User firstSubmitter = createUser("136" + uniqueDigits(), Role.NORMAL_USER);
+        User secondSubmitter = createUser("136" + uniqueDigits(), Role.NORMAL_USER);
+        String firstToken = login(firstSubmitter.getPhone(), "Temp#123456", "DESKTOP");
+        String secondToken = login(secondSubmitter.getPhone(), "Temp#123456", "DESKTOP");
+        String adminToken = login("13800000000", "Admin#123456", "ADMIN_WEB");
+        String group = "review-filter-" + uniqueDigits();
+        String olderExtension = group + "-older";
+        String newerExtension = group + "-newer";
+
+        mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + firstToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody(olderExtension, "{}", uploadRefs(firstToken, olderExtension))))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + secondToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody(newerExtension, "{}", uploadRefs(secondToken, newerExtension))))
+                .andExpect(status().isOk());
+        jdbc.update("update submissions set created_at = now() - interval '2 hours' where target_extension_id = ?",
+                olderExtension);
+        jdbc.update("update submissions set created_at = now() - interval '1 hour' where target_extension_id = ?",
+                newerExtension);
+
+        mockMvc.perform(get("/api/reviews/tasks")
+                        .param("status", "PENDING")
+                        .param("keyword", group)
+                        .param("sort", "submitted_asc")
+                        .param("pageSize", "1")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.items[0].extensionId").value(olderExtension))
+                .andExpect(jsonPath("$.data.items[0].submitterName").value(firstSubmitter.getName()));
+        mockMvc.perform(get("/api/reviews/tasks")
+                        .param("status", "PENDING")
+                        .param("keyword", group)
+                        .param("sort", "submitted_desc")
+                        .param("pageSize", "1")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].extensionId").value(newerExtension));
+        mockMvc.perform(get("/api/reviews/tasks")
+                        .param("status", "PENDING")
+                        .param("keyword", group)
+                        .param("submitter", firstSubmitter.getName())
+                        .param("pageSize", "1")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].extensionId").value(olderExtension));
+        mockMvc.perform(get("/api/reviews/tasks")
+                        .param("status", "PENDING")
+                        .param("keyword", group)
+                        .param("type", "PLUGIN")
+                        .param("pageSize", "1")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(0));
+    }
+
 
     @Test
     void checklistCompatibilityAliasesSupportMineResubmitAndSplitReviewDecisions() throws Exception {

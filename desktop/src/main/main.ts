@@ -2,8 +2,10 @@ import { app, BrowserWindow, ipcMain, safeStorage } from 'electron';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { registerElectronIpc } from './ipc/ipc-router';
-import { createMainWindowOptions } from './main-window';
+import { createManagedMainWindow, MainWindowRegistry } from './main-window';
 import { createDesktopServices } from './services';
+
+const mainWindowRegistry = new MainWindowRegistry<BrowserWindow>();
 
 async function createWindow(): Promise<void> {
   const services = await createDesktopServices({ app, safeStorage });
@@ -16,7 +18,7 @@ async function createWindow(): Promise<void> {
     void services.logger.warn('client_update.startup_report_failed', error);
   });
 
-  const window = new BrowserWindow(createMainWindowOptions(__dirname));
+  const window = createManagedMainWindow(BrowserWindow, mainWindowRegistry, __dirname);
   if (process.env.VITE_DEV_SERVER_URL) {
     await window.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {

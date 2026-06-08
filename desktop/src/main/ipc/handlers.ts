@@ -1,4 +1,5 @@
 import path from 'node:path';
+import os from 'node:os';
 import { readFile, writeFile } from 'node:fs/promises';
 import { requiredString, assertRecord, optionalString, optionalBoolean, optionalRecord, requiredRecord, type RecordPayload } from '../../shared/validation';
 import { DesktopErrorException, makeDesktopError } from '../../shared/errors';
@@ -171,7 +172,7 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
   router.register(IPC_CHANNELS.localCleanup, async (payload, context) => {
     const record = assertRecord(payload, context.requestID);
     const extensionId = requiredExtensionId(record, context.requestID);
-    const target = optionalString(record, 'target', context.requestID) ?? optionalString(record, 'configPath', context.requestID);
+    const target = expandUserPath(optionalString(record, 'target', context.requestID) ?? optionalString(record, 'configPath', context.requestID));
     const kind = normalizeLocalKind(optionalString(record, 'localKind', context.requestID), record);
     const metadata = optionalRecord(record, 'metadata', context.requestID) ?? {};
     const version = stringValue(record.version ?? metadata.version, '1.0.0');
@@ -221,7 +222,7 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
     const record = assertRecord(payload, context.requestID);
     const extensionId = requiredString(record, 'extensionID', context.requestID);
     const version = optionalString(record, 'version', context.requestID) ?? '1.0.0';
-    const targetPath = requiredString(record, 'targetPath', context.requestID);
+    const targetPath = expandUserPath(requiredString(record, 'targetPath', context.requestID));
     const dryRun = optionalBoolean(record, 'dryRun', context.requestID) ?? true;
     const adapter = selectAdapter(services, {
       extensionKind: 'skill',
@@ -247,13 +248,13 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
       await services.lifecycleRepository.recordSkillInstalled({ extensionId, version, packageSha256: packageInfo.expectedSha256, name: detail.name, summary: detail.summary });
       await services.lifecycleRepository.recordTarget({ extensionId, target: targetPath, status: 'enabled', metadata: { version, adapterId: adapter.manifest.adapterId } });
     }
-    return { adapter: adapter.manifest, installPlan, installResult, plan, result };
+    return { adapter: adapter.manifest, packageInfo, installPlan, installResult, plan, result };
   });
 
   router.register(IPC_CHANNELS.mcpConfigure, async (payload, context) => {
     const record = assertRecord(payload, context.requestID);
     const extensionId = requiredString(record, 'extensionID', context.requestID);
-    const targetConfigPath = requiredString(record, 'targetConfigPath', context.requestID);
+    const targetConfigPath = expandUserPath(requiredString(record, 'targetConfigPath', context.requestID));
     const variables = stringMap(optionalRecord(record, 'variables', context.requestID) ?? {}, context.requestID);
     const dryRun = optionalBoolean(record, 'dryRun', context.requestID) ?? true;
     const adapter = selectAdapter(services, {
@@ -318,7 +319,7 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
     const record = assertRecord(payload, context.requestID);
     const extensionId = requiredString(record, 'extensionID', context.requestID);
     const definition = normalizePluginDefinition(await services.apiClient.getPluginDefinition(extensionId, context.requestID), extensionId);
-    const targetPath = requiredString(record, 'targetPath', context.requestID);
+    const targetPath = expandUserPath(requiredString(record, 'targetPath', context.requestID));
     const installMode = normalizePluginInstallMode(optionalString(record, 'installMode', context.requestID) ?? definition.installMode, context.requestID);
     const dryRun = optionalBoolean(record, 'dryRun', context.requestID) ?? true;
     const operation = normalizePluginOperation(optionalString(record, 'operation', context.requestID), context.requestID);
@@ -644,6 +645,15 @@ function pluginLifecycleStatus(installMode: PluginInstallMode, operation: Return
   if (installMode === 'MANUAL_DOWNLOAD') return 'downloaded';
   if (installMode === 'CONFIG_PLUGIN') return 'configured';
   return 'installed';
+}
+
+function expandUserPath(value: string): string;
+function expandUserPath(value: string | undefined): string | undefined;
+function expandUserPath(value: string | undefined): string | undefined {
+  if (!value) return value;
+  if (value === '~') return os.homedir();
+  if (value.startsWith('~/')) return path.join(os.homedir(), value.slice(2));
+  return value;
 }
 
 function uniquePaths(paths: string[]): string[] {

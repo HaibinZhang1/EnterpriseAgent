@@ -79,6 +79,7 @@ export interface DetailState {
   error?: UiError;
   item?: ExtensionSummary;
   raw?: unknown;
+  source?: 'remote' | 'local-fallback';
   versions: VersionSummary[];
 }
 

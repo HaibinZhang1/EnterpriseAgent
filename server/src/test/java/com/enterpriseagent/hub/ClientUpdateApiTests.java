@@ -35,15 +35,16 @@ class ClientUpdateApiTests extends PostgresIntegrationTestBase {
         M8TestSupport.SeededUpdatePackage seed = M8TestSupport.seedClientUpdatePackage(jdbc, adminId,
                 "m8 client update package " + UUID.randomUUID());
         String version = "2." + System.nanoTime() + ".0";
+        String channel = "M8TEST" + UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
 
         String createResponse = mockMvc.perform(post("/api/admin/client-updates")
                         .header("Authorization", "Bearer " + adminToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"version":"%s","buildNo":"200","platform":"WINDOWS","arch":"X64","channel":"STABLE",
+                                {"version":"%s","buildNo":"200","platform":"WINDOWS","arch":"X64","channel":"%s",
                                  "forceUpdate":false,"packageTempUploadId":"%s","packageSha256":"%s","packageSize":%d,
                                  "signatureStatus":"VALID","certificateSummary":{"subject":"CN=Enterprise Agent"},"reason":"m8 test"}
-                                """.formatted(version, seed.tempUploadId(), seed.sha256(), seed.bytes().length)))
+                                """.formatted(version, channel, seed.tempUploadId(), seed.sha256(), seed.bytes().length)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("DRAFT"))
                 .andReturn().getResponse().getContentAsString();
@@ -63,7 +64,7 @@ class ClientUpdateApiTests extends PostgresIntegrationTestBase {
                         .header("Authorization", "Bearer " + userToken)
                         .header("X-Client-Version", "1.0.0")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"deviceId\":\"" + deviceId + "\",\"clientVersion\":\"1.0.0\",\"arch\":\"X64\",\"installChannel\":\"STABLE\"}"))
+                        .content("{\"deviceId\":\"" + deviceId + "\",\"clientVersion\":\"1.0.0\",\"arch\":\"X64\",\"installChannel\":\"" + channel + "\"}"))
                 .andExpect(status().isOk());
 
         mockMvc.perform(post("/api/client-updates/events")
@@ -84,7 +85,7 @@ class ClientUpdateApiTests extends PostgresIntegrationTestBase {
                         .param("currentVersion", "1.0.0")
                         .param("platform", "win32")
                         .param("arch", "x64")
-                        .param("channel", "STABLE"))
+                        .param("channel", channel))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.updateAvailable").value(true))
                 .andExpect(jsonPath("$.data.versionId").value(versionId))
@@ -179,6 +180,43 @@ class ClientUpdateApiTests extends PostgresIntegrationTestBase {
                         .content("{\"expectedStatus\":\"DRAFT\",\"reason\":\"should fail\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("signature_invalid"));
+    }
+
+    @Test
+    void malformedClientUpdatePackageUploadIdReturnsValidationError() throws Exception {
+        String adminToken = M8TestSupport.login(mockMvc, "13800000000", "Admin#123456", "ADMIN_WEB",
+                "admin-malformed-update-upload");
+
+        mockMvc.perform(post("/api/admin/client-updates")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"version":"3.%d.0","buildNo":"300","platform":"WINDOWS","arch":"X64","channel":"BETA",
+                                 "packageTempUploadId":"missing-temp-upload-for-negative-smoke","packageSha256":"%s","packageSize":1,
+                                 "signatureStatus":"VALID","reason":"browser negative smoke"}
+                                """.formatted(System.nanoTime(), "0".repeat(64))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("validation_failed"));
+    }
+
+    @Test
+    void nonNumericClientUpdatePackageSizeReturnsValidationError() throws Exception {
+        UUID adminId = jdbc.queryForObject("select id from users where phone = '13800000000'", UUID.class);
+        String adminToken = M8TestSupport.login(mockMvc, "13800000000", "Admin#123456", "ADMIN_WEB",
+                "admin-nonnumeric-update-size");
+        M8TestSupport.SeededUpdatePackage seed = M8TestSupport.seedClientUpdatePackage(jdbc, adminId,
+                "m8 nonnumeric client update package " + UUID.randomUUID());
+
+        mockMvc.perform(post("/api/admin/client-updates")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"version":"3.%d.0","buildNo":"300","platform":"WINDOWS","arch":"X64","channel":"BETA",
+                                 "packageTempUploadId":"%s","packageSha256":"%s","packageSize":"not-a-number",
+                                 "signatureStatus":"VALID","reason":"browser numeric validation smoke"}
+                                """.formatted(System.nanoTime(), seed.tempUploadId(), seed.sha256())))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("validation_failed"));
     }
 
     @Test

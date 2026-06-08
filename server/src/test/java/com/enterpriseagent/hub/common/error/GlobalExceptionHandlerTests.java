@@ -39,10 +39,14 @@ class GlobalExceptionHandlerTests extends PostgresIntegrationTestBase {
 
     @Test
     void unexpectedExceptionDoesNotExposeStackDetails() throws Exception {
-        mockMvc.perform(get("/api/test/errors/unexpected"))
+        mockMvc.perform(get("/api/test/errors/unexpected").header("X-Request-ID", "req_error_unexpected"))
                 .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.requestId").value("req_error_unexpected"))
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.error.code").value("internal_error"))
-                .andExpect(jsonPath("$.error.details").doesNotExist());
+                .andExpect(jsonPath("$.error.details.interfaceName").value("GET /api/test/errors/unexpected"))
+                .andExpect(jsonPath("$.error.details.requestId").value("req_error_unexpected"))
+                .andExpect(jsonPath("$.error.details.resourceId").value("unexpected"))
+                .andExpect(jsonPath("$.error.details.nextStep").isNotEmpty());
     }
 }

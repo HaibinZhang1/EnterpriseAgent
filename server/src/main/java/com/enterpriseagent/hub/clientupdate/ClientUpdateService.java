@@ -509,8 +509,14 @@ public class ClientUpdateService {
     }
 
     private UUID uuid(Object value) {
-        if (value == null || !StringUtils.hasText(String.valueOf(value))) return null;
-        return UUID.fromString(String.valueOf(value));
+        if (value == null || !StringUtils.hasText(String.valueOf(value))) {
+            return null;
+        }
+        try {
+            return UUID.fromString(String.valueOf(value));
+        } catch (IllegalArgumentException exception) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "UUID 格式无效");
+        }
     }
 
     private long requiredLong(Map<String, Object> request, String field) {
@@ -519,7 +525,11 @@ public class ClientUpdateService {
         if (value == null || !StringUtils.hasText(String.valueOf(value))) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "缺少 " + field);
         }
-        return Long.parseLong(String.valueOf(value));
+        try {
+            return Long.parseLong(String.valueOf(value));
+        } catch (NumberFormatException exception) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, field + " 必须是数字");
+        }
     }
 
     private String required(Map<String, Object> request, String field) {

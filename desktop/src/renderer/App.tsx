@@ -13,7 +13,7 @@ import { ExtensionDetailDrawer } from './features/extension/ExtensionDetailDrawe
 import { DangerConfirmModal } from './features/local/DangerConfirmModal';
 import { NotificationsPanel } from './features/notifications/NotificationsPanel';
 import { MySubmissionsDrawer } from './features/publish/MySubmissionsDrawer';
-import { PublishWizard, type PublishDraft } from './features/publish/PublishWizard';
+import { PublishWizard, submitValidationMessage, type PublishDraft } from './features/publish/PublishWizard';
 import { SettingsModal } from './features/settings/SettingsModal';
 import { UpdateModal } from './features/update/UpdateModal';
 import { Button } from './components/Button';
@@ -23,10 +23,21 @@ import { Modal } from './components/Modal';
 import { desktopApi } from './lib/api';
 import { toUiError } from './lib/errors';
 import { normalizeCatalogHome, normalizeExtension, normalizeLifecycle, normalizeNotifications, normalizePendingEvents, normalizePublishResult, normalizeSearchResults, normalizeSessionUser, normalizeUpdateState, normalizeVersions } from './lib/normalize';
-import type { AppTab, CatalogHome, DetailState, DeviceSummary, ExtensionSummary, LoadState, LocalInventoryScanSummary, LocalLifecycleSnapshot, LocalTab, NotificationItem, OfflineState, PendingEvent, PublishResult, SessionUser, UiError, UpdateState } from './types/desktop';
+import type { AppTab, CatalogHome, DetailState, DeviceSummary, ExtensionSummary, LoadState, LocalInventoryScanSummary, LocalLifecycleSnapshot, LocalTab, NotificationItem, OfflineState, PendingEvent, PublishResult, SessionUser, UiError, UpdateState, VersionSummary } from './types/desktop';
 
 const emptyHome: CatalogHome = { skills: [], mcps: [], plugins: [], hot: [], stars: [], downloads: [] };
 const emptyLifecycle: LocalLifecycleSnapshot = { extensions: [], versions: [], targets: [], tools: [], projects: [], mcpInstallations: [], pluginInstallations: [] };
+const localOnlyDetailStatuses = new Set([
+  'scanned',
+  'installed',
+  'enabled',
+  'connected',
+  'failed',
+  'partial_success',
+  'scope_reduced',
+  'security_blocked',
+  'security_risk'
+]);
 
 type ModalName = 'none' | 'login' | 'settings' | 'notifications' | 'update' | 'publish' | 'submissions' | 'account' | 'password' | 'cleanup';
 
@@ -100,6 +111,7 @@ export interface EnterpriseAgentActions {
   cancelUpdate: () => void;
   installUpdate: () => void;
   submitPublish: (draft: PublishDraft) => void;
+  resetPublishState: () => void;
   refreshSubmissions: () => void;
   withdrawSubmission: (submissionID: string) => void;
   markNotificationRead: (id: string) => void;
@@ -235,9 +247,14 @@ export function App() {
       setView((current) => ({ ...current, detail: { state: 'loading', item, versions: [] } }));
       try {
         const [detail, versions] = await Promise.all([desktopApi.extension.detail(item.id), desktopApi.extension.versions(item.id)]);
-        setView((current) => ({ ...current, detail: { state: 'ready', item: normalizeExtension(detail, item.type), raw: detail, versions: normalizeVersions(versions) } }));
+        setView((current) => ({ ...current, detail: { state: 'ready', item: normalizeExtension(detail, item.type), raw: detail, source: 'remote', versions: normalizeVersions(versions) } }));
       } catch (error) {
-        setView((current) => ({ ...current, detail: { state: 'error', item, versions: [], error: toUiError(error) } }));
+        const uiError = toUiError(error);
+        if (shouldUseLocalDetailFallback(item, uiError)) {
+          setView((current) => ({ ...current, detail: { state: 'ready', item, raw: { localOnly: true, error: uiError }, source: 'local-fallback', versions: localFallbackVersions(item) } }));
+          return;
+        }
+        setView((current) => ({ ...current, detail: { state: 'error', item, versions: [], error: uiError } }));
       }
     },
     closeDetail: () => setView((current) => ({ ...current, detail: undefined })),
@@ -346,11 +363,12 @@ export function App() {
     submitPublish: async (draft) => {
       setView((current) => ({ ...current, publishBusy: true, publishError: undefined, publishResult: undefined }));
       try {
-        if (!draft.file) {
+        const validation = submitValidationMessage(draft);
+        if (validation) {
           setView((current) => ({
             ...current,
             publishBusy: false,
-            publishError: { code: 'validation_failed', message: '请选择要提交的包或 manifest 文件' }
+            publishError: { code: 'validation_failed', message: validation }
           }));
           return;
         }
@@ -376,6 +394,7 @@ export function App() {
         setView((current) => ({ ...current, publishBusy: false, publishError: toUiError(error) }));
       }
     },
+    resetPublishState: () => setView((current) => ({ ...current, publishError: undefined, publishResult: undefined })),
     refreshSubmissions,
     withdrawSubmission: async (submissionID) => {
       try {
@@ -472,6 +491,7 @@ export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAg
             error={model.searchError}
             onBack={actions.backToCommunity}
             onOpen={actions.openDetail}
+            onPrimaryAction={actions.openAction}
             onStar={actions.star}
           />
         </main>
@@ -493,13 +513,35 @@ export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAg
       ) : null}
 
       {model.detail ? <ExtensionDetailDrawer detail={model.detail} onClose={actions.closeDetail} onPrimaryAction={actions.openAction} onStar={actions.star} /> : null}
-      {model.selectedAction ? <ExtensionActionModal item={model.selectedAction} busy={model.actionBusy} error={model.actionError} result={model.actionResult} onClose={actions.closeAction} onRun={actions.runAction} /> : null}
+      {model.selectedAction ? (
+        <ExtensionActionModal
+          item={model.selectedAction}
+          busy={model.actionBusy}
+          error={model.actionError}
+          result={model.actionResult}
+          onClose={actions.closeAction}
+          onOpenLocal={() => {
+            actions.closeAction();
+            actions.changeTab('local');
+          }}
+          onRun={actions.runAction}
+        />
+      ) : null}
       {showLogin ? <LoginModal busy={model.bootState === 'loading'} error={model.bootError} onClose={actions.closeModal} onLogin={actions.login} /> : null}
       {model.modal === 'settings' ? <SettingsModal config={model.settingsConfig} busy={model.settingsBusy} error={model.settingsError} onClose={actions.closeModal} onSave={actions.saveSettings} onChangePassword={() => actions.openModal('password')} onOpenUpdate={() => actions.openModal('update')} /> : null}
       {model.modal === 'password' ? <ChangePasswordModal force={model.user?.mustChangePassword} busy={model.passwordBusy} error={model.passwordError} onClose={actions.closeModal} onSubmit={actions.changePassword} /> : null}
       {model.modal === 'notifications' ? <NotificationsPanel items={model.notifications} onClose={actions.closeModal} onRead={actions.markNotificationRead} /> : null}
       {model.modal === 'update' ? <UpdateModal update={model.updateState} busy={model.updateBusy} onClose={actions.closeModal} onCheck={actions.checkUpdate} onDownload={actions.downloadUpdate} onCancel={actions.cancelUpdate} onInstall={actions.installUpdate} /> : null}
-      {model.modal === 'publish' ? <PublishWizard busy={model.publishBusy} error={model.publishError} result={model.publishResult} onClose={actions.closeModal} onSubmit={actions.submitPublish} /> : null}
+      {model.modal === 'publish' ? (
+        <PublishWizard
+          busy={model.publishBusy}
+          error={model.publishError}
+          result={model.publishResult}
+          onClose={actions.closeModal}
+          onSubmit={actions.submitPublish}
+          onResetError={actions.resetPublishState}
+        />
+      ) : null}
       {model.modal === 'submissions' ? <MySubmissionsDrawer state={model.submissionsState} items={model.submissions} error={model.submissionsError} onClose={actions.closeModal} onRefresh={actions.refreshSubmissions} onWithdraw={actions.withdrawSubmission} /> : null}
       {model.modal === 'account' ? (
         <AccountMenu
@@ -663,9 +705,16 @@ export function normalizeActionResult(value: unknown): ActionResultView {
       : [{ stepId: 'mcp-config-rollback', action: 'rollback', status: str(rollbackResult.status), message: str(rollbackResult.message) }];
     steps.push(...rollbackSteps);
   }
+  const planSteps = Array.isArray(plan.steps) ? plan.steps.filter(isRecord) : [];
+  const linkStep = planSteps.find((step) => step.stepId === 'link-skill') ?? planSteps.find((step) => typeof step.targetPath === 'string');
+  const copyStep = planSteps.find((step) => step.stepId === 'copy-package');
+  const packageInfo = isRecord(record.packageInfo) ? record.packageInfo : {};
   return {
     status: connectionFailed ? 'connection_test_failed' : typeof result.status === 'string' ? result.status : typeof plan.dryRun === 'boolean' && plan.dryRun ? 'dry_run' : undefined,
     planTitle: typeof summary.title === 'string' ? summary.title : typeof plan.operation === 'string' ? plan.operation : undefined,
+    artifactPath: str(packageInfo.packagePath ?? copyStep?.targetPath ?? linkStep?.sourcePath),
+    targetPath: str(linkStep?.targetPath),
+    syncStatus: result.status === 'success' ? '本地记录已更新；如事件仍排队，可在本地页查看同步状态。' : undefined,
     warnings,
     manualInstructions: manual.instructions,
     manualInstructionsUrl: manual.instructionsUrl,
@@ -703,7 +752,10 @@ async function uploadDraftFile(draft: PublishDraft): Promise<Record<string, unkn
   });
   return isRecord(response) ? {
     tempUploadId: response.tempUploadId ?? response.uploadId ?? response.id,
-    sha256: response.sha256 ?? response.packageSha256
+    sha256: response.sha256 ?? response.packageSha256,
+    uploadType: response.uploadType,
+    fileName: draft.file.name,
+    precheck: response.precheck
   } : {};
 }
 
@@ -736,6 +788,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-function isRecoverableBootError(error?: UiError): boolean {
-  return error?.code === 'server_unavailable';
+export function isRecoverableBootError(error?: UiError): boolean {
+  return error?.code === 'server_unavailable' || error?.code === 'unauthenticated';
+}
+
+export function shouldUseLocalDetailFallback(item: ExtensionSummary, error?: UiError): boolean {
+  if (error?.code !== 'unauthenticated') return false;
+  return isLocalOnlyStatus(item.status);
+}
+
+function localFallbackVersions(item: ExtensionSummary): VersionSummary[] {
+  if (!item.version || item.version === '-') return [];
+  return [{ version: item.version, status: item.status }];
+}
+
+function isLocalOnlyStatus(status?: string): boolean {
+  if (!status) return false;
+  return localOnlyDetailStatuses.has(status.toLowerCase());
 }

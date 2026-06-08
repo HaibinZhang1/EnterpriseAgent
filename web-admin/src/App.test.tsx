@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import App, {
   ExtensionDetailSections,
   ExtensionGovernanceButtons,
+  InlineError,
   LoginScreen,
   PageRouter,
   ReviewDecisionButtons,
@@ -108,6 +109,7 @@ describe("Web Admin renderer", () => {
           targetVisibilityMode: "AUTHORIZED_ONLY",
           impactUserCount: 42,
           riskStatement: "涉及内部文档索引",
+          prechecks: [{ id: "precheck-1", status: "PASS" }],
           reviewHistory: [{ action: "SUBMITTED", actor: "Alice" }]
         }}
       />
@@ -118,10 +120,12 @@ describe("Web Admin renderer", () => {
       "本次申请内容",
       "系统校验结果",
       "AI 系统预审结果",
+      "包摘要与文件清单",
       "MCP 服务内容预览",
       "授权、可见选项与影响范围",
       "风险声明",
-      "历史记录与审核意见"
+      "历史记录与审核意见",
+      "高级/调试信息"
     ]) {
       expect(html).toContain(label);
     }
@@ -285,8 +289,15 @@ describe("Web Admin renderer", () => {
                 type: "submission",
                 data: {
                   extensionType: "MCP_SERVER",
+                  sha256: "sha256:abc",
+                  fileCount: 4,
                   precheck: {
                     status: "PASSED",
+                    requiredStructure: "SKILL.md must be present at the zip root",
+                    fileManifestSummary: {
+                      previewableCount: 2,
+                      riskFileCount: 0
+                    },
                     definition: {
                       accessType: "TEAM",
                       transport: "http",
@@ -306,6 +317,9 @@ describe("Web Admin renderer", () => {
     );
 
     expect(mcpHtml).toContain("包预审 MCP");
+    expect(mcpHtml).toContain("包摘要与文件清单");
+    expect(mcpHtml).toContain("sha256:abc");
+    expect(mcpHtml).toContain("SKILL.md must be present at the zip root");
     expect(mcpHtml).toContain("https://mcp.example/api/{tenant}");
     expect(mcpHtml).toContain("/health");
     expect(mcpHtml).toContain("documents:read");
@@ -352,6 +366,28 @@ describe("Web Admin renderer", () => {
     expect(pluginHtml).toContain("使用控制台卸载");
     expect(pluginHtml).toContain("https://downloads.example/plugin.zip");
     expect(pluginHtml).toContain("plugin.jar");
+  });
+
+  it("renders internal error status-probe details without hiding request anchors", () => {
+    const html = renderToStaticMarkup(
+      <InlineError
+        error={{
+          message: "服务内部错误",
+          code: "internal_error",
+          requestId: "req_probe_1",
+          details: {
+            interfaceName: "GET /api/reviews/tasks/sub-1",
+            resourceId: "sub-1",
+            nextStep: "Use review or extension detail endpoints to confirm final publication state."
+          }
+        }}
+      />
+    );
+
+    expect(html).toContain("状态核验");
+    expect(html).toContain("GET /api/reviews/tasks/sub-1");
+    expect(html).toContain("sub-1");
+    expect(html).toContain("req_probe_1");
   });
 
   it("renders extension governance sections required by the admin extension flow", () => {

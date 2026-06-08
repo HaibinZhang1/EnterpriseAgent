@@ -36,8 +36,13 @@ public class ReviewTaskController {
 
     @GetMapping
     public ApiResponse<PageResult<Map<String, Object>>> tasks(@RequestParam(required = false) String status,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String submitter,
+            @RequestParam(required = false) String type,
+            @RequestParam(required = false) String sort,
             @RequestParam(defaultValue = "1") int page, @RequestParam(defaultValue = "20") int pageSize) {
-        return ApiResponse.success(service.tasks(currentUserProvider.requireCurrentUser(), status, page, pageSize));
+        return ApiResponse.success(service.tasks(currentUserProvider.requireCurrentUser(), status, keyword, submitter,
+                type, sort, page, pageSize));
     }
 
     @GetMapping("/{submissionId}")

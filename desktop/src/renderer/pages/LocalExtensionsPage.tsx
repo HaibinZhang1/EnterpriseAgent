@@ -4,9 +4,12 @@ import { EmptyState } from '../components/EmptyState';
 import { StatusBadge } from '../components/StatusBadge';
 import { ErrorState } from '../components/ErrorState';
 import { asText, compactDate, riskTone, statusLabel, extensionKindLabel } from '../lib/formatting';
+import { formatLocalDetailDescription } from '../lib/localDetail';
 import type { LocalLifecycleSnapshot, PendingEvent, ExtensionSummary, LoadState, LocalInventoryScanSummary, UiError } from '../types/desktop';
 import { LocalProjectsPage } from './LocalProjectsPage';
 import { LocalToolsPage } from './LocalToolsPage';
+
+type LocalPageTab = 'skill' | 'mcp' | 'plugin' | 'project' | 'event';
 
 export function LocalExtensionsPage({
   snapshot,
@@ -29,7 +32,7 @@ export function LocalExtensionsPage({
   localScanError?: UiError;
   onRefreshLocal?: () => void;
 }) {
-  const [activeTab, setActiveTab] = useState<'skill' | 'mcp' | 'plugin' | 'project' | 'event'>('skill');
+  const [activeTab, setActiveTab] = useState<LocalPageTab>('skill');
   const [statusFilter, setStatusFilter] = useState<string>('全部');
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
 
@@ -194,14 +197,15 @@ export function LocalExtensionsPage({
         type: entry.kind,
         name: entry.name,
         summary: entry.summary,
-        version: String(entry.localVersion),
+        description: formatLocalDetailDescription(entry),
+        version: entry.localVersion !== '-' ? String(entry.localVersion) : undefined,
         tags: [],
         status: entry.status
       });
     }
   };
 
-  const navItems = [
+  const navItems: Array<{ id: LocalPageTab; label: string; icon: string; count: number }> = [
     { id: 'skill', label: 'Skills 技能', icon: '⚡', count: allLocalEntries.filter(e => e.kind === 'skill').length },
     { id: 'mcp', label: 'MCP 服务', icon: '🔌', count: allLocalEntries.filter(e => e.kind === 'mcp').length },
     { id: 'plugin', label: '插件 Plugins', icon: '⚙️', count: allLocalEntries.filter(e => e.kind === 'plugin').length },
@@ -210,6 +214,8 @@ export function LocalExtensionsPage({
   ];
 
   const activeLabel = activeTab === 'skill' ? 'Skill 技能' : activeTab === 'mcp' ? 'MCP 服务' : activeTab === 'plugin' ? 'Plugin 原生插件' : activeTab === 'project' ? '关联项目' : '同步事件';
+  const isExtensionTab = activeTab === 'skill' || activeTab === 'mcp' || activeTab === 'plugin';
+  const scanSummaryText = formatScanSummary(localScanSummary);
 
   return (
     <div className="saas-layout" style={{ height: '100%', overflow: 'hidden' }} aria-label="本地已安装扩展">
@@ -221,8 +227,11 @@ export function LocalExtensionsPage({
             key={item.id}
             type="button"
             className={`saas-sidebar-item ${activeTab === item.id ? 'active' : ''}`}
+            aria-label={`打开本地分类：${item.label}`}
+            aria-pressed={activeTab === item.id}
+            data-testid={`local-nav-${item.id}`}
             onClick={() => {
-              setActiveTab(item.id as 'skill' | 'mcp' | 'plugin' | 'project' | 'event');
+              setActiveTab(item.id);
               setStatusFilter('全部');
             }}
           >
@@ -238,7 +247,7 @@ export function LocalExtensionsPage({
       {/* Right Main Content */}
       <div className="saas-content" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', padding: '20px 24px' }}>
 
-        {localScanError && (activeTab === 'skill' || activeTab === 'mcp' || activeTab === 'plugin') && (
+        {localScanError && isExtensionTab && (
           <div style={{ marginBottom: '16px', flexShrink: 0 }}>
             <ErrorState error={localScanError} title="本地扫描失败" />
           </div>
@@ -278,6 +287,9 @@ export function LocalExtensionsPage({
                       key={opt}
                       type="button"
                       className={`chip ${statusFilter === opt ? 'active' : ''}`}
+                      aria-label={`筛选本地${activeLabel}：${opt}`}
+                      aria-pressed={statusFilter === opt}
+                      data-testid={`local-filter-${opt}`}
                       onClick={() => setStatusFilter(opt)}
                     >
                       {opt}
@@ -287,10 +299,12 @@ export function LocalExtensionsPage({
               </div>
 
               {/* Merge Rescan Button here */}
-              {onRefreshLocal && (activeTab === 'skill' || activeTab === 'mcp' || activeTab === 'plugin') && (
+              {onRefreshLocal && isExtensionTab && (
                 <Button
                   onClick={onRefreshLocal}
                   disabled={localScanState === 'loading'}
+                  aria-label={`重新扫描本地${activeLabel}`}
+                  data-testid="local-rescan"
                   style={{
                     minHeight: '28px',
                     padding: '0 12px',
@@ -302,6 +316,13 @@ export function LocalExtensionsPage({
                 </Button>
               )}
             </div>
+
+            {(localScanState === 'loading' || scanSummaryText) ? (
+              <div className="pending-event-summary" aria-live="polite" data-testid="local-scan-summary">
+                <span className="filter-label">扫描状态</span>
+                <span className="meta">{localScanState === 'loading' ? '正在扫描本地目录' : scanSummaryText}</span>
+              </div>
+            ) : null}
 
             {pendingEvents.length > 0 ? (
               <div className="pending-event-summary">
@@ -330,16 +351,11 @@ export function LocalExtensionsPage({
                     if (entry.kind === 'mcp') kindColorClass = 'badge-mcp';
                     if (entry.kind === 'plugin') kindColorClass = 'badge-plugin';
 
-                    // Define main core high frequency button label
-                    let mainButtonText = '⚙️ 启用配置';
-                    if (entry.kind === 'mcp') mainButtonText = '🔌 接入检测';
-                    if (entry.kind === 'plugin') mainButtonText = '⚙️ 管理插件';
-                    if (hasUpdate) mainButtonText = '🔄 更新扩展';
-
                     return (
                       <div
                         key={entry.extensionId}
                         className="list-card-row"
+                        data-testid={`local-${entry.kind}-row-${entry.extensionId}`}
                         style={{
                           display: 'flex',
                           flexDirection: 'column',
@@ -395,6 +411,9 @@ export function LocalExtensionsPage({
                               <button
                                 type="button"
                                 onClick={() => toggleRow(entry.extensionId)}
+                                aria-expanded={isExpanded}
+                                aria-label={`${isExpanded ? '收起' : '展开'} ${entry.name} 的 ${entry.targetCount} 个本地实例`}
+                                data-testid={`local-expand-${entry.extensionId}`}
                                 style={{
                                   background: 'transparent',
                                   border: 'none',
@@ -413,41 +432,31 @@ export function LocalExtensionsPage({
                             )}
                           </div>
 
-                          {/* Right Interactive Action Group (With CSS Hover Expand support) */}
-                          <div className="action-group-wrapper" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                          {/* Right Interactive Action Group */}
+                          <div className="action-group-wrapper" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '8px', flexShrink: 0, overflow: 'visible' }}>
 
-                            {/* Lower frequency buttons wrapper - auto glides out via class transition */}
-                            <div className="action-button-low-freq" style={{ display: 'flex', gap: '6px' }}>
-                              <Button onClick={() => handleOpenDetail(entry)} tone="ghost" style={{ padding: '0 12px', minHeight: '32px', fontSize: '12px' }}>
-                                详情
-                              </Button>
-                              {entry.baseExt && (
-                                <Button onClick={() => onCleanup(entry.baseExt!)} tone="danger" style={{ padding: '0 12px', minHeight: '32px', fontSize: '12px' }}>
-                                  清理
-                                </Button>
-                              )}
-                            </div>
-
-                            {/* Main High Frequency core action */}
-                            <Button onClick={() => handleOpenDetail(entry)} style={{ padding: '0 14px', minHeight: '32px', fontSize: '12px' }}>
-                              {mainButtonText}
+                            <Button
+                              onClick={() => handleOpenDetail(entry)}
+                              aria-label={`查看 ${entry.name} 详情`}
+                              data-testid={`local-detail-${entry.extensionId}`}
+                              style={{ padding: '0 14px', minHeight: '32px', fontSize: '12px' }}
+                            >
+                              {hasUpdate ? '查看更新' : '查看详情'}
                             </Button>
 
-                            {/* More Icon Indicator (•••) */}
-                            <span
-                              className="more-indicator-dot"
-                              style={{
-                                padding: '4px 6px',
-                                color: 'var(--text-tertiary)',
-                                fontSize: '14px',
-                                opacity: 0.6,
-                                cursor: 'default',
-                                display: 'inline-block'
-                              }}
-                              title="悬停展开更多操作"
-                            >
-                              •••
-                            </span>
+                            <div className="secondary-actions" style={{ display: 'flex', gap: '6px' }}>
+                              {entry.baseExt ? (
+                                <Button
+                                  onClick={() => onCleanup(entry.baseExt!)}
+                                  tone="danger"
+                                  aria-label={`清理 ${entry.name} 本地记录`}
+                                  data-testid={`local-cleanup-${entry.extensionId}`}
+                                  style={{ padding: '0 12px', minHeight: '32px', fontSize: '12px' }}
+                                >
+                                  本地清理
+                                </Button>
+                              ) : null}
+                            </div>
                           </div>
                         </div>
 
@@ -490,7 +499,13 @@ export function LocalExtensionsPage({
                                       </td>
                                       <td style={{ textAlign: 'right' }}>
                                         {managed ? (
-                                          <Button tone="danger" onClick={() => onCleanup(row)} style={{ padding: '0 8px', minHeight: '26px', fontSize: '11px' }}>
+                                          <Button
+                                            tone="danger"
+                                            onClick={() => onCleanup(row)}
+                                            aria-label={`停用 ${entry.name} 托管项 ${idx + 1}`}
+                                            data-testid={`local-cleanup-target-${entry.extensionId}-${idx}`}
+                                            style={{ padding: '0 8px', minHeight: '26px', fontSize: '11px' }}
+                                          >
                                             停用托管项
                                           </Button>
                                         ) : (
@@ -511,7 +526,13 @@ export function LocalExtensionsPage({
                                         </StatusBadge>
                                       </td>
                                       <td style={{ textAlign: 'right' }}>
-                                        <Button tone="danger" onClick={() => onCleanup(row)} style={{ padding: '0 8px', minHeight: '26px', fontSize: '11px' }}>
+                                        <Button
+                                          tone="danger"
+                                          onClick={() => onCleanup(row)}
+                                          aria-label={`清理 ${entry.name} MCP 配置 ${idx + 1}`}
+                                          data-testid={`local-cleanup-mcp-${entry.extensionId}-${idx}`}
+                                          style={{ padding: '0 8px', minHeight: '26px', fontSize: '11px' }}
+                                        >
                                           清理配置
                                         </Button>
                                       </td>
@@ -529,7 +550,13 @@ export function LocalExtensionsPage({
                                         </StatusBadge>
                                       </td>
                                       <td style={{ textAlign: 'right' }}>
-                                        <Button tone="danger" onClick={() => onCleanup(row)} style={{ padding: '0 8px', minHeight: '26px', fontSize: '11px' }}>
+                                        <Button
+                                          tone="danger"
+                                          onClick={() => onCleanup(row)}
+                                          aria-label={`清理 ${entry.name} Plugin 实例 ${idx + 1}`}
+                                          data-testid={`local-cleanup-plugin-${entry.extensionId}-${idx}`}
+                                          style={{ padding: '0 8px', minHeight: '26px', fontSize: '11px' }}
+                                        >
                                           清理插件
                                         </Button>
                                       </td>
@@ -588,6 +615,22 @@ function PendingEventsPanel({ events }: { events: PendingEvent[] }) {
       )}
     </div>
   );
+}
+
+function formatScanSummary(summary?: LocalInventoryScanSummary): string | undefined {
+  const discovered = summary?.discovered;
+  if (!discovered) return undefined;
+  const parts = [
+    ['Skill', discovered.skills],
+    ['MCP', discovered.mcpConfigs],
+    ['Plugin', discovered.plugins],
+    ['Tool', discovered.tools],
+    ['Project', discovered.projects]
+  ]
+    .filter((item): item is [string, number] => typeof item[1] === 'number' && item[1] > 0)
+    .map(([label, count]) => `${label} ${count}`);
+  if (parts.length === 0) return '未发现本地记录';
+  return `${parts.join(' / ')}${summary.scannedAt ? ` · ${compactDate(summary.scannedAt)}` : ''}`;
 }
 
 // Chevron SVG helper component for clean expandable animations

@@ -357,7 +357,7 @@ class ExtensionCatalogApiTests extends PostgresIntegrationTestBase {
                 """, String.class, securityExtensionId))
                 .contains("vulnerability", "12 users connected", "uninstall until fixed");
 
-        String maxLengthExtensionId = "long-" + "x".repeat(123);
+        String maxLengthExtensionId = "long-" + UUID.randomUUID().toString().replace("-", "") + "x".repeat(91);
         String longKey = newIdempotencyKey();
         createPublished(maxLengthExtensionId, ExtensionType.SKILL, "Long Id Governance Skill",
                 VisibilityMode.PUBLIC_TO_ALL_LOGGED_IN, ROOT_DEPARTMENT_ID, author.getId(), ScopeType.ALL_EMPLOYEES);
