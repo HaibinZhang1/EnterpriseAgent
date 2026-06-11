@@ -233,8 +233,8 @@ public class SubmissionService {
         payload.put("baseExtensionId", request.baseExtensionId());
         payload.put("version", request.version());
         payload.put("metadata", request.metadata() == null ? Map.of() : request.metadata());
-        payload.put("authorizationScope", request.authorizationScope() == null ? Map.of() : request.authorizationScope());
-        payload.put("visibilityMode", request.visibilityMode() == null ? "PUBLIC_TO_ALL_LOGGED_IN" : request.visibilityMode().name());
+        payload.put("authorizationScope", request.authorizationScope());
+        payload.put("visibilityMode", request.visibilityMode().name());
         payload.put("riskStatement", request.riskStatement() == null ? Map.of() : request.riskStatement());
         payload.put("typePayload", request.typePayload() == null ? Map.of() : request.typePayload());
         return payload;

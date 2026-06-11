@@ -9,12 +9,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.StringUtils;
 
 import com.enterpriseagent.hub.extension.ExtensionJson;
 
 @Service
 public class NotificationOutboxConsumer {
     private static final Logger log = LoggerFactory.getLogger(NotificationOutboxConsumer.class);
+    private static final int MAX_RETRY_COUNT = 3;
     private final JdbcTemplate jdbc;
     private final ExtensionJson json;
     private final TransactionTemplate transactions;
@@ -64,9 +66,15 @@ public class NotificationOutboxConsumer {
     private void recordFailure(UUID eventId, RuntimeException exception) {
         try {
             transactions.executeWithoutResult(status -> jdbc.update("""
-                    update outbox_events set status = 'FAILED', retry_count = retry_count + 1,
-                      next_retry_at = ?, last_error = ?, updated_at = now() where id = ?
-                    """, OffsetDateTime.now().plusMinutes(1), safeError(exception), eventId));
+                    update outbox_events
+                       set status = case when retry_count + 1 >= ? then 'DEAD_LETTER' else 'FAILED' end,
+                           retry_count = retry_count + 1,
+                           next_retry_at = case when retry_count + 1 >= ? then null else ? end,
+                           last_error = ?,
+                           updated_at = now()
+                     where id = ?
+                    """, MAX_RETRY_COUNT, MAX_RETRY_COUNT, OffsetDateTime.now().plusMinutes(1),
+                    safeError(exception), eventId));
         } catch (RuntimeException failureRecordingException) {
             log.warn("Unable to record notification outbox failure for event {}", eventId, failureRecordingException);
         }
@@ -76,16 +84,33 @@ public class NotificationOutboxConsumer {
         Map<String, Object> envelope = json.readMap(payloadJson);
         Object dataObject = envelope.get("data");
         Map<String, Object> data = dataObject instanceof Map<?, ?> map ? toStringKeyMap(map) : Map.of();
-        UUID userId = UUID.fromString(String.valueOf(data.get("userId")));
-        String type = String.valueOf(data.getOrDefault("type", "REVIEW_DECISION"));
-        String title = String.valueOf(data.getOrDefault("title", "审核通知"));
-        String summary = String.valueOf(data.getOrDefault("summary", "审核状态已更新"));
-        String objectType = String.valueOf(data.getOrDefault("objectType", "submission"));
-        String objectId = String.valueOf(data.getOrDefault("objectId", ""));
+        UUID userId = requiredUuid(data, "userId");
+        String type = requiredText(data, "type");
+        String title = requiredText(data, "title");
+        String summary = requiredText(data, "summary");
+        String objectType = requiredText(data, "objectType");
+        String objectId = requiredText(data, "objectId");
         jdbc.update("""
                 insert into notifications (id, user_id, type, title, summary, object_type, object_id, payload)
                 values (?, ?, ?, ?, ?, ?, ?, ?::jsonb)
                 """, UUID.randomUUID(), userId, type, title, summary, objectType, objectId, payloadJson);
+    }
+
+    private UUID requiredUuid(Map<String, Object> data, String field) {
+        String value = requiredText(data, field);
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException("notification payload has invalid field: " + field);
+        }
+    }
+
+    private String requiredText(Map<String, Object> data, String field) {
+        Object value = data.get(field);
+        if (value == null || !StringUtils.hasText(String.valueOf(value))) {
+            throw new IllegalArgumentException("notification payload missing required field: " + field);
+        }
+        return String.valueOf(value);
     }
 
     private String safeError(RuntimeException exception) {

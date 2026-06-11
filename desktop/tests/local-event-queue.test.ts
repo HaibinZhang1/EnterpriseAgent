@@ -31,6 +31,7 @@ describe('LocalEventQueue', () => {
       expect(queue.listPending()[0].attemptCount).toBe(1);
       await queue.markSynced(first.id, 'accepted');
       expect(queue.listPending()).toHaveLength(0);
+      expect(queue.findByIdempotencyKey('dup-key')?.result).toBeUndefined();
       await db.close();
 
       const reopened = new LocalDatabase(paths.localDbFile);
@@ -38,6 +39,46 @@ describe('LocalEventQueue', () => {
       const reopenedQueue = new LocalEventQueue(reopened);
       expect(reopenedQueue.findByIdempotencyKey('dup-key')?.status).toBe('accepted');
       await reopened.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('preserves the original business result when sync is accepted rejected or ignored', async () => {
+    const temp = await tempRoot();
+    try {
+      const paths = await initializeAppDataLayout(temp.root);
+      const db = new LocalDatabase(paths.localDbFile);
+      await db.initialize();
+      const queue = new LocalEventQueue(db);
+      const accepted = await queue.enqueue({
+        idempotencyKey: 'accepted-failure',
+        deviceID: 'device_1',
+        eventType: 'verify.failed',
+        result: 'FAILURE',
+        errorCode: 'hash_mismatch'
+      });
+      const rejected = await queue.enqueue({
+        idempotencyKey: 'rejected-failure',
+        deviceID: 'device_1',
+        eventType: 'verify.failed',
+        result: 'FAILURE'
+      });
+      const ignored = await queue.enqueue({
+        idempotencyKey: 'ignored-cancelled',
+        deviceID: 'device_1',
+        eventType: 'user.cancelled',
+        result: 'CANCELLED'
+      });
+
+      await queue.markSynced(accepted.id, 'accepted');
+      await queue.markSynced(rejected.id, 'rejected');
+      await queue.markSynced(ignored.id, 'ignored');
+
+      expect(queue.findByIdempotencyKey('accepted-failure')).toMatchObject({ status: 'accepted', result: 'FAILURE' });
+      expect(queue.findByIdempotencyKey('rejected-failure')).toMatchObject({ status: 'rejected', result: 'FAILURE' });
+      expect(queue.findByIdempotencyKey('ignored-cancelled')).toMatchObject({ status: 'ignored', result: 'CANCELLED' });
+      await db.close();
     } finally {
       await temp.cleanup();
     }

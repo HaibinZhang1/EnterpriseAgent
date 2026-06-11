@@ -237,6 +237,12 @@ tbody tr:hover {
   flex-wrap: wrap;
 }
 
+.filter-row .compact-input,
+.filter-row select {
+  width: auto;
+  min-width: 150px;
+}
+
 .api-pill {
   max-width: 300px;
   overflow: hidden;
@@ -302,6 +308,12 @@ tbody tr:hover {
 .page-grid {
   display: grid;
   gap: 14px;
+}
+
+.form-grid-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .detail-stack.compact {
@@ -740,6 +752,17 @@ tbody tr:hover {
 
 .check-row input {
   width: auto;
+}
+
+.compact-check {
+  width: auto;
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.66);
+  padding: 7px 10px;
+  color: var(--text-muted);
+  font-size: 13px;
 }
 
 .distribution-list {

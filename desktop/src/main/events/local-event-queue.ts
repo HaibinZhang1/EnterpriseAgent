@@ -85,8 +85,8 @@ export class LocalEventQueue {
   async markSynced(id: string, result: LocalEventSyncResult): Promise<void> {
     const now = new Date().toISOString();
     await this.db.run(
-      `UPDATE local_events SET status = ?, result = ?, synced_at = ?, updated_at = ? WHERE id = ?`,
-      [result, result, now, now, id]
+      `UPDATE local_events SET status = ?, synced_at = ?, updated_at = ? WHERE id = ?`,
+      [result, now, now, id]
     );
   }
 

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ApiClient, ClientUpdateInfo } from '../src/main/api/api-client';
 import { DesktopErrorException, makeDesktopError } from '../src/shared/errors';
 import type { ClientUpdateLauncher } from '../src/main/update/client-update-service';
@@ -136,6 +136,102 @@ describe('ClientUpdateService', () => {
     }
   });
 
+  it('reports ticket and download failures before rethrowing', async () => {
+    const ticketEvents: Array<{ eventType: string; result?: string; errorCode?: string; idempotencyKey?: string }> = [];
+    const ticketService = new ClientUpdateService({
+      apiClient: {
+        checkClientUpdate: async () => ({ updateAvailable: true, versionId: 'version-1', version: '0.1.0-m8', packageSha256: '0'.repeat(64), signature: { status: 'VALID' } }),
+        createClientUpdateDownloadTicket: async () => {
+          throw new DesktopErrorException(makeDesktopError('server_unavailable', 'ticket service down', 'req_confirm'));
+        },
+        reportClientUpdateEvents: async (_deviceID: string, events: typeof ticketEvents) => {
+          ticketEvents.push(...events);
+          return { accepted: true };
+        }
+      } as unknown as ApiClient,
+      getDeviceInfo: async () => ({ deviceID: 'device_1', clientVersion: '0.1.0-m7', createdAt: 'now', updatedAt: 'now' }),
+      downloadsDir: '/tmp',
+      signatureVerifier: { verify: async () => undefined },
+      launcher: { launchInstaller: async () => undefined }
+    });
+    await ticketService.check('req_check');
+    await expect(ticketService.confirmDownload('req_confirm')).rejects.toMatchObject({ desktopError: { code: 'server_unavailable' } });
+    expect(ticketEvents).toEqual([
+      expect.objectContaining({ eventType: 'UPDATE_AVAILABLE', result: 'SUCCESS' }),
+      expect.objectContaining({ eventType: 'DOWNLOAD_CONFIRMED', result: 'SUCCESS' }),
+      expect.objectContaining({ eventType: 'DOWNLOAD_TICKET_FAILED', result: 'FAILURE', errorCode: 'server_unavailable' })
+    ]);
+    expect(ticketEvents[2].idempotencyKey).toContain('DOWNLOAD_TICKET_FAILED:device_1:0.1.0-m8:req_confirm');
+
+    const temp = await tempRoot();
+    try {
+      const downloadEvents: Array<{ eventType: string; result?: string; errorCode?: string }> = [];
+      const downloadService = new ClientUpdateService({
+        apiClient: {
+          checkClientUpdate: async () => ({ updateAvailable: true, versionId: 'version-1', version: '0.1.0-m8', packageSha256: '0'.repeat(64), signature: { status: 'VALID' } }),
+          createClientUpdateDownloadTicket: async () => ({ ticket: 'ticket-secret' }),
+          downloadClientUpdate: async () => {
+            throw new DesktopErrorException(makeDesktopError('download_failed', 'download failed', 'req_confirm'));
+          },
+          reportClientUpdateEvents: async (_deviceID: string, events: typeof downloadEvents) => {
+            downloadEvents.push(...events);
+            return { accepted: true };
+          }
+        } as unknown as ApiClient,
+        getDeviceInfo: async () => ({ deviceID: 'device_1', clientVersion: '0.1.0-m7', createdAt: 'now', updatedAt: 'now' }),
+        downloadsDir: temp.root,
+        signatureVerifier: { verify: async () => undefined },
+        launcher: { launchInstaller: async () => undefined }
+      });
+      await downloadService.check('req_check');
+      await expect(downloadService.confirmDownload('req_confirm')).rejects.toMatchObject({ desktopError: { code: 'download_failed' } });
+      expect(downloadEvents).toContainEqual(expect.objectContaining({
+        eventType: 'DOWNLOAD_FAILED',
+        result: 'FAILURE',
+        errorCode: 'download_failed'
+      }));
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('preserves the original update failure when failure reporting also fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const service = new ClientUpdateService({
+        apiClient: {
+          createClientUpdateDownloadTicket: async () => {
+            throw new DesktopErrorException(makeDesktopError('download_failed', 'ticket service down', 'req_confirm'));
+          },
+          reportClientUpdateEvents: async (_deviceID: string, events: Array<{ eventType: string }>) => {
+            if (events[0].eventType === 'DOWNLOAD_TICKET_FAILED') {
+              throw new DesktopErrorException(makeDesktopError('server_unavailable', 'event sink down', 'req_confirm'));
+            }
+            return { accepted: true };
+          }
+        } as unknown as ApiClient,
+        getDeviceInfo: async () => ({ deviceID: 'device_1', clientVersion: '0.1.0-m7', createdAt: 'now', updatedAt: 'now' }),
+        downloadsDir: '/tmp',
+        signatureVerifier: { verify: async () => undefined },
+        launcher: { launchInstaller: async () => undefined }
+      });
+      (service as unknown as { pending: unknown }).pending = {
+        state: 'available',
+        update: { updateAvailable: true, versionId: 'version-1', version: '0.1.0-m8', packageSha256: '0'.repeat(64) }
+      };
+
+      await expect(service.confirmDownload('req_confirm')).rejects.toMatchObject({
+        desktopError: { code: 'download_failed', message: 'ticket service down' }
+      });
+      expect(consoleError).toHaveBeenCalledWith('Failed to report client update failure event', expect.objectContaining({
+        eventType: 'DOWNLOAD_TICKET_FAILED',
+        reportErrorCode: 'server_unavailable'
+      }));
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it('reports signature failures and does not launch installer', async () => {
     const temp = await tempRoot();
     try {
@@ -208,7 +304,7 @@ describe('ClientUpdateService', () => {
     };
 
     await expect(service.confirmInstall('req_install')).rejects.toMatchObject({ desktopError: { code: 'installer_launch_failed' } });
-    expect(calls).toEqual(['event:LAUNCH_CONFIRMED']);
+    expect(calls).toEqual(['event:LAUNCH_CONFIRMED', 'event:INSTALLER_LAUNCH_FAILED']);
   });
 
   it('records the initial startup version without sending an update event', async () => {

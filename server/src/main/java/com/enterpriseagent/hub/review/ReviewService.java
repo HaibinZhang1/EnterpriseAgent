@@ -12,6 +12,7 @@ import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import com.enterpriseagent.hub.auth.CurrentUser;
 import com.enterpriseagent.hub.common.audit.AuditRecord;
@@ -21,6 +22,8 @@ import com.enterpriseagent.hub.common.error.BusinessException;
 import com.enterpriseagent.hub.common.error.ErrorCode;
 import com.enterpriseagent.hub.common.pagination.PageResult;
 import com.enterpriseagent.hub.extension.ExtensionJson;
+import com.enterpriseagent.hub.extension.ScopeType;
+import com.enterpriseagent.hub.extension.VisibilityMode;
 import com.enterpriseagent.hub.organization.DepartmentTreeService;
 import com.enterpriseagent.hub.submission.AuthorizationScopeReviewPolicy;
 import com.enterpriseagent.hub.submission.SubmissionService;
@@ -148,9 +151,9 @@ public class ReviewService {
         String submissionType = String.valueOf(payload.get("type"));
         String version = String.valueOf(payload.get("version"));
         Map<String, Object> metadata = asStringKeyMap(payload.get("metadata"));
-        Map<String, Object> authorizationScope = asStringKeyMap(payload.get("authorizationScope"));
+        Map<String, Object> authorizationScope = requireAuthorizationScope(payload);
         Map<String, Object> typePayload = asStringKeyMap(payload.get("typePayload"));
-        String visibilityMode = String.valueOf(payload.getOrDefault("visibilityMode", "PUBLIC_TO_ALL_LOGGED_IN"));
+        String visibilityMode = requireVisibilityMode(payload);
         UUID extensionPk = findExtensionPk(extensionId);
         if ("ARCHIVE".equals(submissionType)) {
             if (extensionPk == null) {
@@ -195,7 +198,7 @@ public class ReviewService {
                     String.valueOf(metadata.getOrDefault("changeLog", "")));
         }
         attachPackageObject(extensionPk, extensionId, version, packageSnapshot);
-        createScope(extensionPk, authorizationScope, (UUID) submission.get("submitter_department_id"));
+        createScope(extensionPk, authorizationScope);
         if ("MCP_SERVER".equals(extensionType)) {
             materializeMcpDefinition(extensionPk, typePayload, packageSnapshot);
         }
@@ -210,8 +213,9 @@ public class ReviewService {
         if (definition.isEmpty()) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "MCP 定义缺少可落库的配置快照");
         }
-        String accessType = stringValue(definition.get("accessType"), "remote-http");
-        String transport = normalizeMcpTransport(stringValue(definition.get("transport"), "streamable-http"));
+        String accessType = requiredDefinitionString(definition, "accessType", "MCP 定义缺少 accessType");
+        String transport = normalizeMcpTransport(requiredDefinitionString(definition, "transport", "MCP 定义缺少 transport"));
+        validateMcpDefinition(accessType, transport, definition);
         Map<String, Object> configSchema = new LinkedHashMap<>(definition);
         configSchema.remove("accessType");
         configSchema.remove("transport");
@@ -229,7 +233,9 @@ public class ReviewService {
         if (definition.isEmpty()) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "Plugin 定义缺少可落库的安装清单");
         }
-        String installMode = normalizePluginInstallMode(stringValue(definition.get("installMode"), "CONFIG_PLUGIN"));
+        String installMode = normalizePluginInstallMode(requiredDefinitionString(definition, "installMode",
+                "Plugin 定义缺少 installMode"));
+        validatePluginInstallMode(installMode);
         List<Object> targetTools = listValue(definition.containsKey("targetTools")
                 ? definition.get("targetTools") : definition.get("targetTool"));
         Map<String, Object> manifest = new LinkedHashMap<>(asStringKeyMap(definition.get("manifest")));
@@ -258,56 +264,109 @@ public class ReviewService {
 
     private void attachPackageObject(UUID extensionPk, String extensionId, String version, Map<String, Object> packageSnapshot) {
         Object packageIdValue = packageSnapshot.get("packageId");
-        if (packageIdValue == null) {
-            return;
+        if (!hasText(packageIdValue)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "包快照缺少 packageId，请重新提交");
         }
+        UUID packageId;
         try {
-            UUID packageId = UUID.fromString(String.valueOf(packageIdValue));
-            jdbc.update("""
-                    update package_objects
-                       set extension_pk = ?,
-                           extension_business_id = ?,
-                           version = ?,
-                           object_id = ?
-                     where id = ?
-                    """, extensionPk, extensionId, version, extensionPk, packageId);
-            jdbc.update("""
-                    update extensions
-                       set risk_level = coalesce((select risk_level from package_objects where id = ?), risk_level),
-                           risk_summary = coalesce((select risk_summary::text from package_objects where id = ?), risk_summary)
-                     where id = ?
-                    """, packageId, packageId, extensionPk);
-        } catch (IllegalArgumentException ignored) {
-            // Legacy placeholder snapshots have no package object to attach.
+            packageId = UUID.fromString(String.valueOf(packageIdValue));
+        } catch (IllegalArgumentException exception) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "包快照 packageId 格式无效，请重新提交");
         }
+        int updated = jdbc.update("""
+                update package_objects
+                   set extension_pk = ?,
+                       extension_business_id = ?,
+                       version = ?,
+                       object_id = ?
+                 where id = ?
+                """, extensionPk, extensionId, version, extensionPk, packageId);
+        if (updated == 0) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "包快照 packageId 无法绑定包对象，请重新提交");
+        }
+        jdbc.update("""
+                update extensions
+                   set risk_level = coalesce((select risk_level from package_objects where id = ?), risk_level),
+                       risk_summary = coalesce((select risk_summary::text from package_objects where id = ?), risk_summary)
+                 where id = ?
+                """, packageId, packageId, extensionPk);
     }
 
-    private void createScope(UUID extensionPk, Map<String, Object> authorizationScope, UUID defaultDepartmentId) {
-        String scopeType = String.valueOf(authorizationScope.getOrDefault("scopeType", "ALL_EMPLOYEES"));
+    private void createScope(UUID extensionPk, Map<String, Object> authorizationScope) {
+        ScopeType scopeType = requireScopeType(authorizationScope.get("scopeType"));
         UUID scopeId = UUID.randomUUID();
         jdbc.update("insert into extension_authorization_scopes (id, extension_pk, scope_type) values (?, ?, ?)",
-                scopeId, extensionPk, scopeType);
-        if (!"ALL_EMPLOYEES".equals(scopeType)) {
-            Object departments = authorizationScope.get("departments");
-            if (departments instanceof Iterable<?> iterable) {
-                for (Object item : iterable) {
-                    if (item instanceof Map<?, ?> map) {
-                        UUID departmentId = UUID.fromString(String.valueOf(map.get("departmentId")));
-                        Object includeChildrenValue = map.get("includeChildren");
-                        boolean includeChildren = Boolean.parseBoolean(String.valueOf(includeChildrenValue));
-                        jdbc.update("""
-                                insert into extension_authorized_departments (id, scope_id, department_id, include_children)
-                                values (?, ?, ?, ?)
-                                """, UUID.randomUUID(), scopeId, departmentId, includeChildren);
-                    }
+                scopeId, extensionPk, scopeType.name());
+        if (scopeType != ScopeType.ALL_EMPLOYEES) {
+            Object departments = requireDepartments(authorizationScope.get("departments"));
+            for (Object item : (Iterable<?>) departments) {
+                if (!(item instanceof Map<?, ?> map) || !hasText(map.get("departmentId"))) {
+                    throw new BusinessException(ErrorCode.VALIDATION_FAILED, "授权范围包含无效部门，请重新提交");
                 }
-            } else {
+                UUID departmentId;
+                try {
+                    departmentId = UUID.fromString(String.valueOf(map.get("departmentId")));
+                } catch (IllegalArgumentException exception) {
+                    throw new BusinessException(ErrorCode.VALIDATION_FAILED, "授权范围包含无效部门，请重新提交");
+                }
+                Object includeChildrenValue = map.get("includeChildren");
+                boolean includeChildren = Boolean.parseBoolean(String.valueOf(includeChildrenValue));
                 jdbc.update("""
                         insert into extension_authorized_departments (id, scope_id, department_id, include_children)
                         values (?, ?, ?, ?)
-                        """, UUID.randomUUID(), scopeId, defaultDepartmentId, "DEPARTMENT_TREE".equals(scopeType));
+                        """, UUID.randomUUID(), scopeId, departmentId, includeChildren);
             }
         }
+    }
+
+    private Map<String, Object> requireAuthorizationScope(Map<String, Object> payload) {
+        Object value = payload.get("authorizationScope");
+        if (!(value instanceof Map<?, ?> map)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "历史 revision 缺少授权范围，请重新提交");
+        }
+        Map<String, Object> authorizationScope = asStringKeyMap(map);
+        ScopeType scopeType = requireScopeType(authorizationScope.get("scopeType"));
+        if (scopeType != ScopeType.ALL_EMPLOYEES) {
+            requireDepartments(authorizationScope.get("departments"));
+        }
+        return authorizationScope;
+    }
+
+    private String requireVisibilityMode(Map<String, Object> payload) {
+        Object value = payload.get("visibilityMode");
+        if (!hasText(value)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "历史 revision 缺少可见性模式，请重新提交");
+        }
+        try {
+            return VisibilityMode.valueOf(String.valueOf(value)).name();
+        } catch (IllegalArgumentException exception) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "历史 revision 可见性模式无效，请重新提交");
+        }
+    }
+
+    private ScopeType requireScopeType(Object value) {
+        if (!hasText(value)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "历史 revision 缺少授权范围类型，请重新提交");
+        }
+        try {
+            return ScopeType.valueOf(String.valueOf(value));
+        } catch (IllegalArgumentException exception) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "历史 revision 授权范围类型无效，请重新提交");
+        }
+    }
+
+    private Iterable<?> requireDepartments(Object value) {
+        if (!(value instanceof Iterable<?> iterable)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "历史 revision 缺少授权部门列表，请重新提交");
+        }
+        if (!iterable.iterator().hasNext()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "历史 revision 授权部门列表为空，请重新提交");
+        }
+        return iterable;
+    }
+
+    private boolean hasText(Object value) {
+        return value != null && StringUtils.hasText(String.valueOf(value));
     }
 
     private UUID findExtensionPk(String extensionId) {
@@ -342,22 +401,52 @@ public class ReviewService {
         return List.of();
     }
 
-    private String stringValue(Object value, String fallback) {
-        if (value instanceof String string && !string.isBlank()) {
-            return string;
+    private String requiredDefinitionString(Map<String, Object> definition, String field, String message) {
+        String value = stringValue(definition.get(field));
+        if (!StringUtils.hasText(value)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, message);
         }
-        return value == null ? fallback : String.valueOf(value);
+        return value;
+    }
+
+    private String stringValue(Object value) {
+        if (value instanceof String string && !string.isBlank()) {
+            return string.trim();
+        }
+        return value == null ? "" : String.valueOf(value).trim();
     }
 
     private String normalizeMcpTransport(String transport) {
         return "http".equals(transport) ? "streamable-http" : transport;
     }
 
-    private String normalizePluginInstallMode(String installMode) {
-        if (installMode == null || installMode.isBlank()) {
-            return "CONFIG_PLUGIN";
+    private void validateMcpDefinition(String accessType, String transport, Map<String, Object> definition) {
+        boolean valid = ("remote-http".equals(accessType) && "streamable-http".equals(transport))
+                || ("remote-sse".equals(accessType) && "sse".equals(transport))
+                || ("local-command".equals(accessType) && "stdio".equals(transport));
+        if (!valid) {
+            throw new BusinessException(ErrorCode.MCP_TRANSPORT_INVALID, "MCP transport 与 accessType 组合不合法");
         }
+        String endpoint = stringValue(definition.get("endpoint"));
+        if (!StringUtils.hasText(endpoint)) {
+            endpoint = stringValue(definition.get("endpointTemplate"));
+        }
+        if (accessType.startsWith("remote") && !endpoint.matches("^https?://.+")) {
+            throw new BusinessException(ErrorCode.MCP_ENDPOINT_INVALID, "MCP endpoint 不合法");
+        }
+        if ("local-command".equals(accessType) && !StringUtils.hasText(stringValue(definition.get("command")))) {
+            throw new BusinessException(ErrorCode.MCP_TRANSPORT_INVALID, "MCP transport 与 accessType 组合不合法");
+        }
+    }
+
+    private String normalizePluginInstallMode(String installMode) {
         return installMode.trim().toUpperCase().replace('-', '_');
+    }
+
+    private void validatePluginInstallMode(String installMode) {
+        if (!List.of("MANAGED_PACKAGE", "CONFIG_PLUGIN", "MANUAL_DOWNLOAD").contains(installMode)) {
+            throw new BusinessException(ErrorCode.PLUGIN_MANIFEST_INVALID, "Plugin 安装清单不完整");
+        }
     }
 
     private void putIfAbsent(Map<String, Object> target, String key, Object value) {

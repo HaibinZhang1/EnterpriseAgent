@@ -109,7 +109,7 @@ class ClientUpdateApiTests extends PostgresIntegrationTestBase {
                 .andReturn().getResponse().getContentAsByteArray();
         assertThat(downloaded).isEqualTo(seed.bytes());
 
-        assertThat(jdbc.queryForObject("select count(*) from client_update_events where device_id = ? and event_type = 'PACKAGE_DOWNLOADED'",
+        assertThat(jdbc.queryForObject("select count(*) from client_update_events where device_id = ? and event_type = 'DOWNLOAD_STARTED'",
                 Long.class, deviceId)).isEqualTo(1L);
         assertThat(jdbc.queryForObject("select count(*) from activity_events where payload->>'ticketId' = ?", Long.class, ticketId))
                 .isZero();
@@ -154,6 +154,54 @@ class ClientUpdateApiTests extends PostgresIntegrationTestBase {
                         .content("{\"expectedStatus\":\"PUBLISHED\",\"reason\":\"withdraw for m8\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("WITHDRAWN"));
+    }
+
+    @Test
+    void clientUpdateEventsNormalizeFailureResultsAndRejectSuccessWithErrorCode() throws Exception {
+        User user = M8TestSupport.createUser(userRepository, M8TestSupport.uniquePhone("137"), Role.NORMAL_USER);
+        String deviceId = "m8-update-event-device-" + UUID.randomUUID();
+        String userToken = M8TestSupport.login(mockMvc, user.getPhone(), "Temp#123456", "DESKTOP", deviceId);
+        String adminToken = M8TestSupport.login(mockMvc, "13800000000", "Admin#123456", "ADMIN_WEB", "admin-update-events");
+        mockMvc.perform(post("/api/client-devices/register")
+                        .header("Authorization", "Bearer " + userToken)
+                        .header("X-Client-Version", "1.0.0")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"deviceId\":\"" + deviceId + "\",\"clientVersion\":\"1.0.0\",\"arch\":\"X64\",\"installChannel\":\"STABLE\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/client-updates/events")
+                        .header("Authorization", "Bearer " + userToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"deviceId":"%s","events":[
+                                  {"idempotencyKey":"event-failure-%s","eventType":"DOWNLOAD_FAILED","errorCode":"network_error"},
+                                  {"idempotencyKey":"event-invalid-%s","eventType":"VERIFY_FAILED","result":"SUCCESS","errorCode":"hash_mismatch"},
+                                  {"idempotencyKey":"event-cancelled-%s","eventType":"USER_CANCELLED","result":"cancelled"}
+                                ]}
+                                """.formatted(deviceId, deviceId, deviceId, deviceId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.results[0].status").value("ACCEPTED"))
+                .andExpect(jsonPath("$.data.results[0].result").value("FAILURE"))
+                .andExpect(jsonPath("$.data.results[0].errorCode").value("network_error"))
+                .andExpect(jsonPath("$.data.results[0].serverEventId").isString())
+                .andExpect(jsonPath("$.data.results[1].status").value("REJECTED"))
+                .andExpect(jsonPath("$.data.results[1].result").value("SUCCESS"))
+                .andExpect(jsonPath("$.data.results[1].errorCode").value("invalid_result"))
+                .andExpect(jsonPath("$.data.results[2].status").value("ACCEPTED"))
+                .andExpect(jsonPath("$.data.results[2].result").value("CANCELLED"));
+
+        mockMvc.perform(get("/api/admin/client-updates/events")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .param("deviceId", deviceId)
+                        .param("result", "FAILURE"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].event_type").value("DOWNLOAD_FAILED"))
+                .andExpect(jsonPath("$.data.items[0].result").value("FAILURE"));
+
+        assertThat(jdbc.queryForObject("""
+                select count(*) from client_update_events
+                 where device_id = ? and event_type = 'VERIFY_FAILED'
+                """, Long.class, deviceId)).isZero();
     }
 
     @Test

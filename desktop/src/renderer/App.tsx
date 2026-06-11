@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { Shell } from './components/Shell';
 import { AgentHomePage } from './pages/AgentHomePage';
 import { CommunityHomePage } from './pages/CommunityHomePage';
@@ -225,7 +225,38 @@ export function App() {
     return () => { active = false; };
   }, [loadCommunity, loadLocal, loadNotifications]);
 
-  const actions = useMemo<EnterpriseAgentActions>(() => ({
+  const actions = useMemo<EnterpriseAgentActions>(() => createEnterpriseAgentActions({
+    view,
+    setView,
+    loadCommunity,
+    loadLocal,
+    loadNotifications,
+    refreshSubmissions
+  }), [loadCommunity, loadLocal, loadNotifications, refreshSubmissions, view.cleanupTarget, view.selectedAction, view.user?.departmentId]);
+
+  return <EnterpriseAgentAppView model={view} actions={actions} />;
+}
+
+type EnterpriseAgentViewSetter = Dispatch<SetStateAction<EnterpriseAgentViewModel>>;
+
+interface EnterpriseAgentActionDependencies {
+  view: Pick<EnterpriseAgentViewModel, 'selectedAction' | 'cleanupTarget' | 'user'>;
+  setView: EnterpriseAgentViewSetter;
+  loadCommunity: () => Promise<void>;
+  loadLocal: () => Promise<void>;
+  loadNotifications: () => Promise<void>;
+  refreshSubmissions: () => Promise<void>;
+}
+
+export function createEnterpriseAgentActions({
+  view,
+  setView,
+  loadCommunity,
+  loadLocal,
+  loadNotifications,
+  refreshSubmissions
+}: EnterpriseAgentActionDependencies): EnterpriseAgentActions {
+  return {
     changeTab: (tab) => {
       setView((current) => ({ ...current, activeTab: tab, showingSearch: tab === 'community' ? current.showingSearch : false }));
       if (tab === 'community') void loadCommunity();
@@ -372,18 +403,27 @@ export function App() {
           }));
           return;
         }
+        const authorizationScope = buildAuthorizationScope(draft, view.user?.departmentId);
+        if (!authorizationScope) {
+          setView((current) => ({
+            ...current,
+            publishBusy: false,
+            publishError: { code: 'validation_failed', message: '当前账号缺少部门信息，无法提交部门授权范围。' }
+          }));
+          return;
+        }
         const uploadRefs = [await uploadDraftFile(draft)];
         const result = normalizePublishResult(await desktopApi.publish.createSubmission({
-          idempotencyKey: `renderer:${draft.extensionId}:${draft.version}:${Date.now()}`,
+          idempotencyKey: `renderer:${draft.extensionId}:${draft.version}:${globalThis.crypto.randomUUID()}`,
           request: {
             type: 'FIRST_PUBLISH',
             extensionType: draft.extensionType.toUpperCase(),
             extensionId: draft.extensionId,
             version: draft.version,
             metadata: { name: draft.name, summary: draft.summary },
-            authorizationScope: { scopeType: draft.authorizationScope },
+            authorizationScope,
             visibilityMode: draft.visibilityMode,
-            riskStatement: draft.riskStatement,
+            riskStatement: { summary: draft.riskStatement },
             typePayload: {},
             uploadRefs
           }
@@ -421,9 +461,7 @@ export function App() {
         setView((current) => ({ ...current, cleanupBusy: false, cleanupError: toUiError(error) }));
       }
     }
-  }), [loadCommunity, loadLocal, loadNotifications, refreshSubmissions, view.cleanupTarget, view.selectedAction]);
-
-  return <EnterpriseAgentAppView model={view} actions={actions} />;
+  };
 }
 
 export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAgentViewModel; actions: EnterpriseAgentActions }) {
@@ -757,6 +795,25 @@ async function uploadDraftFile(draft: PublishDraft): Promise<Record<string, unkn
     fileName: draft.file.name,
     precheck: response.precheck
   } : {};
+}
+
+function buildAuthorizationScope(draft: PublishDraft, departmentId?: string): Record<string, unknown> | undefined {
+  if (draft.authorizationScope === 'ALL_EMPLOYEES') {
+    return { scopeType: 'ALL_EMPLOYEES', departments: [] };
+  }
+  if (draft.authorizationScope === 'SELECTED_DEPARTMENTS') {
+    return undefined;
+  }
+  if (!departmentId) {
+    return undefined;
+  }
+  return {
+    scopeType: draft.authorizationScope,
+    departments: [{
+      departmentId,
+      includeChildren: draft.authorizationScope === 'DEPARTMENT_TREE'
+    }]
+  };
 }
 
 function readFileBase64(file: File): Promise<string> {

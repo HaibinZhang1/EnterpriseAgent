@@ -8,6 +8,7 @@ export function normalizeSessionUser(value: unknown): SessionUser | undefined {
     username: str(source.username ?? source.phone ?? source.account),
     displayName: str(source.displayName ?? source.name ?? source.username ?? source.phone),
     role: str(source.role ?? source.roleCode),
+    departmentId: str(source.departmentId ?? source.departmentID),
     mustChangePassword: Boolean(source.mustChangePassword ?? source.forcePasswordChange)
   };
 }

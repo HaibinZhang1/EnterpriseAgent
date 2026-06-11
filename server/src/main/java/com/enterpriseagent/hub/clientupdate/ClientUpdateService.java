@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -38,6 +39,8 @@ import com.enterpriseagent.hub.packages.UploadType;
 public class ClientUpdateService {
     private static final Pattern CLIENT_VERSION_PATTERN = Pattern.compile("\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?");
     private static final Pattern SHA256_PATTERN = Pattern.compile("[0-9a-fA-F]{64}");
+    private static final Pattern EVENT_TYPE_PATTERN = Pattern.compile("[A-Z0-9_.:-]{1,64}");
+    private static final Set<String> EVENT_RESULTS = Set.of("SUCCESS", "FAILURE", "CANCELLED", "PARTIAL_SUCCESS");
     private static final int MAX_PAGE_SIZE = 100;
 
     private final JdbcTemplate jdbc;
@@ -180,40 +183,49 @@ public class ClientUpdateService {
                 }
                 Map<String, Object> merged = new LinkedHashMap<>((Map<String, Object>) event);
                 merged.putIfAbsent("deviceId", parentDeviceId);
-                recordSingleClientEvent(actor, merged);
-                results.add(Map.of("idempotencyKey", defaultString(merged.get("idempotencyKey"), ""),
-                        "status", "ACCEPTED"));
+                try {
+                    Map<String, Object> result = recordSingleClientEvent(actor, merged);
+                    result.remove("accepted");
+                    results.add(result);
+                } catch (EventRejectedException exception) {
+                    results.add(rejectedClientEvent(merged, exception));
+                }
             }
             return Map.of("results", results);
         }
-        return recordSingleClientEvent(actor, request);
+        try {
+            return recordSingleClientEvent(actor, request);
+        } catch (EventRejectedException exception) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, exception.errorCode());
+        }
     }
 
     private Map<String, Object> recordSingleClientEvent(CurrentUser actor, Map<String, Object> request) {
-        UUID versionId = uuid(request.get("versionId"));
-        String deviceId = defaultString(request.get("deviceId"), actor.deviceId());
-        if (StringUtils.hasText(deviceId)) {
-            requireOwnedActiveDevice(actor, deviceId);
-        }
-        String type = required(request, "eventType");
-        String result = defaultString(request.get("result"), "SUCCESS");
-        String errorCode = string(request.get("errorCode"));
-        recordEvent(versionId, actor, deviceId, type, result, errorCode, string(request.get("fromVersion")),
-                string(request.get("toVersion")), payload(request.get("payloadSummary")));
-        if (StringUtils.hasText(errorCode) || type.contains("FAILED") || type.contains("SIGNATURE") || type.contains("HASH")) {
+        PreparedClientEvent event = prepareClientEvent(actor, request);
+        UUID serverEventId = recordEvent(event.versionId(), actor, event.deviceId(), event.type(), event.result(),
+                event.errorCode(), event.fromVersion(), event.toVersion(), event.payload(), event.occurredAt());
+        if (StringUtils.hasText(event.errorCode()) || event.type().contains("FAILED")
+                || event.type().contains("SIGNATURE") || event.type().contains("HASH")) {
             auditService.recordFailure(AuditRecord.builder()
                     .actorId(actor.id())
                     .objectType("client_update")
-                    .objectId(versionId == null ? null : versionId.toString())
-                    .action("client_update.event." + type.toLowerCase(java.util.Locale.ROOT))
+                    .objectId(event.versionId() == null ? null : event.versionId().toString())
+                    .action("client_update.event." + event.type().toLowerCase(java.util.Locale.ROOT))
                     .result(AuditResult.FAILURE)
-                    .reason(errorCode)
-                    .deviceId(deviceId)
+                    .reason(event.errorCode())
+                    .deviceId(event.deviceId())
                     .clientVersion(actor.clientVersion())
-                    .afterSummary(payload(request.get("payloadSummary")))
+                    .afterSummary(event.payload())
                     .build());
         }
-        return Map.of("accepted", true);
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("accepted", true);
+        response.put("idempotencyKey", event.idempotencyKey());
+        response.put("status", "ACCEPTED");
+        response.put("result", event.result());
+        response.put("errorCode", event.errorCode());
+        response.put("serverEventId", serverEventId.toString());
+        return response;
     }
 
     @Transactional(readOnly = true)
@@ -260,7 +272,7 @@ public class ClientUpdateService {
         }
         if (StringUtils.hasText(result)) {
             where.append(" and result = ?");
-            params.add(result);
+            params.add(result.trim().toUpperCase(Locale.ROOT));
         }
         if (StringUtils.hasText(errorCode)) {
             where.append(" and error_code = ?");
@@ -326,14 +338,89 @@ public class ClientUpdateService {
         return new PackageMetadata(tempUploadId, actualHash.toLowerCase(Locale.ROOT), actualSize);
     }
 
-    private void recordEvent(UUID versionId, CurrentUser actor, String deviceId, String type, String result,
+    private UUID recordEvent(UUID versionId, CurrentUser actor, String deviceId, String type, String result,
             String errorCode, String fromVersion, String toVersion, Map<String, Object> payload) {
+        return recordEvent(versionId, actor, deviceId, type, result, errorCode, fromVersion, toVersion, payload,
+                OffsetDateTime.now());
+    }
+
+    private UUID recordEvent(UUID versionId, CurrentUser actor, String deviceId, String type, String result,
+            String errorCode, String fromVersion, String toVersion, Map<String, Object> payload, OffsetDateTime occurredAt) {
+        UUID eventId = UUID.randomUUID();
         jdbc.update("""
                 insert into client_update_events (id, version_id, device_id, user_id, event_type, result, error_code,
                   request_id, from_version, to_version, payload_summary, occurred_at)
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?)
-                """, UUID.randomUUID(), versionId, deviceId, actor.id(), type, result, errorCode,
-                RequestContext.requireRequestId(), fromVersion, toVersion, json.write(payload), OffsetDateTime.now());
+                """, eventId, versionId, deviceId, actor.id(), type, result, errorCode,
+                RequestContext.requireRequestId(), fromVersion, toVersion, json.write(payload), occurredAt);
+        return eventId;
+    }
+
+    private PreparedClientEvent prepareClientEvent(CurrentUser actor, Map<String, Object> request) {
+        UUID versionId = uuid(request.get("versionId"));
+        String deviceId = defaultString(request.get("deviceId"), actor.deviceId());
+        if (StringUtils.hasText(deviceId)) {
+            requireOwnedActiveDevice(actor, deviceId);
+        }
+        String type = normalizeEventType(request.get("eventType"));
+        String errorCode = string(request.get("errorCode"));
+        String result = normalizeResult(request.get("result"), errorCode);
+        OffsetDateTime occurredAt = parseOccurredAt(request.get("occurredAt"));
+        return new PreparedClientEvent(versionId, deviceId, type, result, errorCode,
+                string(request.get("fromVersion")), string(request.get("toVersion")),
+                payload(request.get("payloadSummary")), defaultString(request.get("idempotencyKey"), ""), occurredAt);
+    }
+
+    private String normalizeEventType(Object value) {
+        String type = string(value);
+        if (!StringUtils.hasText(type)) {
+            throw new EventRejectedException("invalid_event_type", null);
+        }
+        String normalized = type.trim().toUpperCase(Locale.ROOT);
+        if (!EVENT_TYPE_PATTERN.matcher(normalized).matches()) {
+            throw new EventRejectedException("invalid_event_type", null);
+        }
+        return normalized;
+    }
+
+    private String normalizeResult(Object value, String errorCode) {
+        String result = string(value);
+        if (!StringUtils.hasText(result) && StringUtils.hasText(errorCode)) {
+            return "FAILURE";
+        }
+        if (!StringUtils.hasText(result)) {
+            throw new EventRejectedException("invalid_result", null);
+        }
+        String normalized = result.trim().toUpperCase(Locale.ROOT);
+        if (!EVENT_RESULTS.contains(normalized)) {
+            throw new EventRejectedException("invalid_result", normalized);
+        }
+        if ("SUCCESS".equals(normalized) && StringUtils.hasText(errorCode)) {
+            throw new EventRejectedException("invalid_result", normalized);
+        }
+        return normalized;
+    }
+
+    private OffsetDateTime parseOccurredAt(Object value) {
+        String occurredAt = string(value);
+        if (!StringUtils.hasText(occurredAt)) {
+            return OffsetDateTime.now();
+        }
+        try {
+            return OffsetDateTime.parse(occurredAt);
+        } catch (RuntimeException exception) {
+            throw new EventRejectedException("invalid_occurred_at", null);
+        }
+    }
+
+    private Map<String, Object> rejectedClientEvent(Map<String, Object> event, EventRejectedException exception) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("idempotencyKey", defaultString(event.get("idempotencyKey"), ""));
+        response.put("status", "REJECTED");
+        response.put("result", exception.result());
+        response.put("errorCode", exception.errorCode());
+        response.put("serverEventId", null);
+        return response;
     }
 
     private Map<String, Object> lockVersion(UUID id) {
@@ -564,6 +651,30 @@ public class ClientUpdateService {
     }
 
     private record PackageMetadata(UUID packageObjectId, String sha256, long sizeBytes) {
+    }
+
+    private record PreparedClientEvent(UUID versionId, String deviceId, String type, String result, String errorCode,
+            String fromVersion, String toVersion, Map<String, Object> payload, String idempotencyKey,
+            OffsetDateTime occurredAt) {
+    }
+
+    private static final class EventRejectedException extends RuntimeException {
+        private final String errorCode;
+        private final String result;
+
+        private EventRejectedException(String errorCode, String result) {
+            super(errorCode);
+            this.errorCode = errorCode;
+            this.result = result;
+        }
+
+        private String errorCode() {
+            return errorCode;
+        }
+
+        private String result() {
+            return result;
+        }
     }
 
     private record ClientVersion(long major, long minor, long patch, String qualifier)

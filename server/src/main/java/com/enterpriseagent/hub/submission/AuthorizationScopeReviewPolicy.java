@@ -31,19 +31,15 @@ public class AuthorizationScopeReviewPolicy {
             return false;
         }
         ScopeType scopeType = scopeType(authorizationScope);
+        if (scopeType == null) {
+            return false;
+        }
         if (scopeType == ScopeType.ALL_EMPLOYEES) {
             return false;
         }
         List<UUID> departments = departmentIds(authorizationScope);
-        if (departments == null) {
+        if (departments == null || departments.isEmpty()) {
             return false;
-        }
-        if (departments.isEmpty()) {
-            if (scopeType == ScopeType.SELECTED_DEPARTMENTS) {
-                return false;
-            }
-            return defaultDepartmentId != null
-                    && departmentTreeService.isSelfOrDescendant(reviewerDepartmentId, defaultDepartmentId);
         }
         return departments.stream()
                 .allMatch(departmentId -> departmentTreeService.isSelfOrDescendant(reviewerDepartmentId, departmentId));
@@ -51,19 +47,19 @@ public class AuthorizationScopeReviewPolicy {
 
     private ScopeType scopeType(Map<String, Object> authorizationScope) {
         if (authorizationScope == null || authorizationScope.get("scopeType") == null) {
-            return ScopeType.ALL_EMPLOYEES;
+            return null;
         }
         try {
             return ScopeType.valueOf(String.valueOf(authorizationScope.get("scopeType")));
         } catch (IllegalArgumentException exception) {
-            return ScopeType.ALL_EMPLOYEES;
+            return null;
         }
     }
 
     private List<UUID> departmentIds(Map<String, Object> authorizationScope) {
         Object departments = authorizationScope == null ? null : authorizationScope.get("departments");
         if (!(departments instanceof Iterable<?> iterable)) {
-            return List.of();
+            return null;
         }
         List<UUID> ids = new ArrayList<>();
         for (Object item : iterable) {

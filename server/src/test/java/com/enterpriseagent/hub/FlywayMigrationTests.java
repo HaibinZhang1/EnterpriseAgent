@@ -47,6 +47,7 @@ class FlywayMigrationTests extends PostgresIntegrationTestBase {
             assertThat(exists(connection, "select to_regclass('public.notifications') is not null")).isTrue();
             assertThat(exists(connection, "select to_regclass('public.outbox_events') is not null")).isTrue();
             assertThat(exists(connection, "select exists (select 1 from information_schema.columns where table_name = 'outbox_events' and column_name = 'retry_count')")).isTrue();
+            assertThat(exists(connection, "select exists (select 1 from pg_constraint where conname = 'ck_outbox_events_status' and pg_get_constraintdef(oid) like '%DEAD_LETTER%')")).isTrue();
             assertThat(exists(connection, "select to_regclass('public.temp_uploads') is not null")).isTrue();
             assertThat(exists(connection, "select to_regclass('public.package_objects') is not null")).isTrue();
             assertThat(exists(connection, "select to_regclass('public.package_files') is not null")).isTrue();

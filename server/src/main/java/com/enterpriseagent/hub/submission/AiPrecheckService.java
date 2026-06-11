@@ -8,6 +8,8 @@ import java.util.Map;
 
 import org.springframework.stereotype.Service;
 
+import com.enterpriseagent.hub.common.error.BusinessException;
+import com.enterpriseagent.hub.common.error.ErrorCode;
 import com.enterpriseagent.hub.settings.SettingsQueryService;
 
 @Service
@@ -22,6 +24,9 @@ public class AiPrecheckService {
 
     public Result precheck(SubmissionRequest request) {
         var settings = settingsQueryService.aiPrecheckSettings();
+        if (!settings.valid()) {
+            return unavailableOrFail(settings, Map.of("summary", "AI 预审配置错误", "error", settings.errorMessage()));
+        }
         if (!settings.enabled()) {
             return new Result("DISABLED", Map.of("summary", "AI 预审未启用", "promptVersion", settings.promptVersion()),
                     settings.model(), settings.promptVersion());
@@ -35,7 +40,17 @@ public class AiPrecheckService {
         input.put("riskStatement", request.riskStatement() == null ? Map.of() : request.riskStatement());
         input.put("typePayload", request.typePayload() == null ? Map.of() : request.typePayload());
         Map<String, Object> sanitized = redact(input);
-        return adapter.precheck(sanitized, settings.model(), settings.promptVersion());
+        Result result;
+        try {
+            result = adapter.precheck(sanitized, settings.model(), settings.promptVersion());
+        } catch (RuntimeException exception) {
+            result = new Result("UNAVAILABLE", Map.of("summary", "AI 预审适配器异常", "error", String.valueOf(exception.getMessage())),
+                    settings.model(), settings.promptVersion());
+        }
+        if ("UNAVAILABLE".equalsIgnoreCase(result.status())) {
+            return unavailableOrFail(settings, result.summary());
+        }
+        return result;
     }
 
     public record Result(String status, Map<String, Object> summary, String model, String promptVersion) {
@@ -53,6 +68,14 @@ public class AiPrecheckService {
             }
         });
         return output;
+    }
+
+    private Result unavailableOrFail(com.enterpriseagent.hub.settings.AiPrecheckSettings settings,
+            Map<String, Object> summary) {
+        if ("FAIL_CLOSED".equals(settings.failurePolicy())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "AI 预审不可用，已按 FAIL_CLOSED 阻断发布");
+        }
+        return new Result("UNAVAILABLE", summary, settings.model(), settings.promptVersion());
     }
 
     private Object redactValue(Object value) {

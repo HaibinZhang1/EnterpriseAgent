@@ -321,12 +321,12 @@ public class DownloadTicketService {
             recordClientUpdateDownloadEvent(actor, ticketRow);
             return;
         }
-        String eventType = "INSTALL".equals(purpose) ? "EXTENSION_DOWNLOAD" : "PACKAGE_DOWNLOAD";
         jdbc.update("""
                 insert into activity_events (id, event_type, user_id, extension_pk, payload)
                 values (?, ?, ?, ?, ?::jsonb)
-                """, UUID.randomUUID(), eventType, actor.id(), ticketRow.get("extension_id"),
-                json.write(Map.of("purpose", purpose, "ticketId", ticketRow.get("id"), "objectId", ticketRow.get("object_id"))));
+                """, UUID.randomUUID(), "DOWNLOAD_STARTED", actor.id(), ticketRow.get("extension_id"),
+                json.write(Map.of("purpose", purpose, "ticketId", ticketRow.get("id"), "objectId", ticketRow.get("object_id"),
+                        "ticketStatus", "USED")));
     }
 
     private void requireRegisteredDevice(CurrentUser actor, String deviceId) {
@@ -349,10 +349,11 @@ public class DownloadTicketService {
         payload.put("ticketId", String.valueOf(ticketRow.get("id")));
         payload.put("objectId", String.valueOf(ticketRow.get("object_id")));
         payload.put("purpose", ticketRow.get("purpose"));
+        payload.put("ticketStatus", "USED");
         jdbc.update("""
                 insert into client_update_events (id, version_id, device_id, user_id, event_type, result, error_code,
                   request_id, from_version, to_version, payload_summary, occurred_at)
-                values (?, ?, ?, ?, 'PACKAGE_DOWNLOADED', 'SUCCESS', null, ?, null, ?, ?::jsonb, ?)
+                values (?, ?, ?, ?, 'DOWNLOAD_STARTED', 'SUCCESS', null, ?, null, ?, ?::jsonb, ?)
                 """, UUID.randomUUID(), versionId, ticketRow.get("device_id"), actor.id(),
                 RequestContext.requireRequestId(), version, json.write(payload), OffsetDateTime.now());
         auditService.record(AuditRecord.builder()
@@ -360,7 +361,7 @@ public class DownloadTicketService {
                 .objectType("client_update")
                 .objectId(versionId == null ? null : versionId.toString())
                 .objectNameSnapshot(version)
-                .action("client_update.package_download")
+                .action("client_update.download_started")
                 .result(AuditResult.SUCCESS)
                 .afterSummary(payload)
                 .deviceId((String) ticketRow.get("device_id"))

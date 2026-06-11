@@ -30,6 +30,8 @@ export interface ClientUpdateServiceOptions {
   arch?: string;
 }
 
+type ClientUpdateResult = 'SUCCESS' | 'FAILURE' | 'CANCELLED';
+
 export class ClientUpdateService {
   private pending?: PendingClientUpdate;
   private readonly hashVerifier: HashVerifier;
@@ -81,7 +83,7 @@ export class ClientUpdateService {
       return undefined;
     }
     this.pending = { state: 'available', update };
-    await this.report(device.deviceID, 'UPDATE_AVAILABLE', 'success', undefined, resolvedRequestID, { version: update.version });
+    await this.report(device.deviceID, 'UPDATE_AVAILABLE', 'SUCCESS', undefined, resolvedRequestID, { version: update.version });
     return this.pending;
   }
 
@@ -89,7 +91,7 @@ export class ClientUpdateService {
     if (!this.pending) return undefined;
     const device = await this.options.getDeviceInfo();
     this.pending = { ...this.pending, state: 'cancelled' };
-    await this.report(device.deviceID, 'USER_CANCELLED', 'cancelled', reason, requestID, { version: this.pending.update.version });
+    await this.report(device.deviceID, 'USER_CANCELLED', 'CANCELLED', reason, requestID, { version: this.pending.update.version });
     return this.pending;
   }
 
@@ -101,24 +103,42 @@ export class ClientUpdateService {
       throw new DesktopErrorException(makeDesktopError('validation_failed', 'Update metadata is incomplete', resolvedRequestID));
     }
     const device = await this.options.getDeviceInfo();
-    await this.report(device.deviceID, 'DOWNLOAD_CONFIRMED', 'success', undefined, resolvedRequestID, { version: update.version });
-    const ticket = await this.options.apiClient.createClientUpdateDownloadTicket({
-      deviceId: device.deviceID,
-      versionId: update.versionId,
-      currentVersion: device.clientVersion
-    }, resolvedRequestID);
-    const bytes = await this.options.apiClient.downloadClientUpdate(ticket.ticket, resolvedRequestID);
-    const installerPath = await this.writeUpdateFile(update.version, bytes);
+    await this.report(device.deviceID, 'DOWNLOAD_CONFIRMED', 'SUCCESS', undefined, resolvedRequestID, { version: update.version });
+    let ticket: { ticket: string };
+    try {
+      ticket = await this.options.apiClient.createClientUpdateDownloadTicket({
+        deviceId: device.deviceID,
+        versionId: update.versionId,
+        currentVersion: device.clientVersion
+      }, resolvedRequestID);
+    } catch (error) {
+      await this.reportFailure(device.deviceID, 'DOWNLOAD_TICKET_FAILED', error, 'download_ticket_failed', resolvedRequestID, { version: update.version });
+      throw error;
+    }
+    let bytes: ArrayBuffer;
+    try {
+      bytes = await this.options.apiClient.downloadClientUpdate(ticket.ticket, resolvedRequestID);
+    } catch (error) {
+      await this.reportFailure(device.deviceID, 'DOWNLOAD_FAILED', error, 'download_failed', resolvedRequestID, { version: update.version });
+      throw error;
+    }
+    let installerPath: string;
+    try {
+      installerPath = await this.writeUpdateFile(update.version, bytes);
+    } catch (error) {
+      await this.reportFailure(device.deviceID, 'DOWNLOAD_FAILED', error, 'download_failed', resolvedRequestID, { version: update.version });
+      throw error;
+    }
     this.pending = { state: 'download_confirmed', update, installerPath };
     try {
       await this.hashVerifier.verifyFile(installerPath, update.packageSha256, resolvedRequestID);
       await this.options.signatureVerifier.verify({ filePath: installerPath, update, requestID: resolvedRequestID });
     } catch (error) {
-      await this.report(device.deviceID, 'VERIFY_FAILED', 'failure', error instanceof DesktopErrorException ? error.desktopError.code : 'verification_failed', resolvedRequestID, { version: update.version });
+      await this.reportFailure(device.deviceID, 'VERIFY_FAILED', error, 'verification_failed', resolvedRequestID, { version: update.version });
       throw error;
     }
     this.pending = { state: 'verified', update, installerPath };
-    await this.report(device.deviceID, 'VERIFIED', 'success', undefined, resolvedRequestID, { version: update.version });
+    await this.report(device.deviceID, 'VERIFIED', 'SUCCESS', undefined, resolvedRequestID, { version: update.version });
     return this.pending;
   }
 
@@ -129,10 +149,15 @@ export class ClientUpdateService {
       throw new DesktopErrorException(makeDesktopError('update_confirmation_required', 'Verified installer is missing', resolvedRequestID));
     }
     const device = await this.options.getDeviceInfo();
-    await this.report(device.deviceID, 'LAUNCH_CONFIRMED', 'success', undefined, resolvedRequestID, { version: pending.update.version });
-    await this.options.launcher.launchInstaller(pending.installerPath, pending.update, resolvedRequestID);
+    await this.report(device.deviceID, 'LAUNCH_CONFIRMED', 'SUCCESS', undefined, resolvedRequestID, { version: pending.update.version });
+    try {
+      await this.options.launcher.launchInstaller(pending.installerPath, pending.update, resolvedRequestID);
+    } catch (error) {
+      await this.reportFailure(device.deviceID, 'INSTALLER_LAUNCH_FAILED', error, 'installer_launch_failed', resolvedRequestID, { version: pending.update.version });
+      throw error;
+    }
     this.pending = { ...pending, state: 'launched' };
-    await this.report(device.deviceID, 'INSTALLER_LAUNCHED', 'success', undefined, resolvedRequestID, { version: pending.update.version });
+    await this.report(device.deviceID, 'INSTALLER_LAUNCHED', 'SUCCESS', undefined, resolvedRequestID, { version: pending.update.version });
     return this.pending;
   }
 
@@ -172,16 +197,35 @@ export class ClientUpdateService {
     return this.options.startupStateFile ?? path.join(this.options.downloadsDir, 'startup-state.json');
   }
 
-  private report(deviceId: string, eventType: string, result: string, errorCode: string | undefined, requestID: string | undefined, payloadSummary: Record<string, unknown>): Promise<unknown> {
+  private report(deviceId: string, eventType: string, result: ClientUpdateResult, errorCode: string | undefined, requestID: string | undefined, payloadSummary: Record<string, unknown>): Promise<unknown> {
+    const resolvedRequestID = ensureRequestID(requestID);
+    const version = String(payloadSummary.version ?? payloadSummary.toVersion ?? payloadSummary.currentVersion ?? 'unknown');
     return this.options.apiClient.reportClientUpdateEvents(deviceId, [{
-      idempotencyKey: `${eventType}:${payloadSummary.version ?? 'unknown'}:${Date.now()}`,
+      idempotencyKey: `${eventType}:${deviceId}:${version}:${resolvedRequestID}`,
       eventType,
       result,
       errorCode,
-      requestID,
+      requestID: resolvedRequestID,
       payloadSummary
-    }], requestID);
+    }], resolvedRequestID);
   }
+
+  private async reportFailure(deviceId: string, eventType: string, originalError: unknown, fallbackErrorCode: string, requestID: string, payloadSummary: Record<string, unknown>): Promise<void> {
+    const originalErrorCode = errorCode(originalError, fallbackErrorCode);
+    try {
+      await this.report(deviceId, eventType, 'FAILURE', originalErrorCode, requestID, payloadSummary);
+    } catch (reportError) {
+      console.error('Failed to report client update failure event', {
+        eventType,
+        originalErrorCode,
+        reportErrorCode: errorCode(reportError, 'client_update_report_failed')
+      });
+    }
+  }
+}
+
+function errorCode(error: unknown, fallback: string): string {
+  return error instanceof DesktopErrorException ? error.desktopError.code : fallback;
 }
 
 export class ShellClientUpdateLauncher implements ClientUpdateLauncher {

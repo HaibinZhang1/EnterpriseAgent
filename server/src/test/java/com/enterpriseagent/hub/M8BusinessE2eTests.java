@@ -93,7 +93,7 @@ class M8BusinessE2eTests extends PostgresIntegrationTestBase {
         mockMvc.perform(get("/api/admin/audit-logs")
                         .header("Authorization", "Bearer " + adminToken)
                         .param("deviceId", deviceId)
-                        .param("action", "client_update.package_download"))
+                        .param("action", "client_update.download_started"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items[0].deviceId").value(deviceId));
     }

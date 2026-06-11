@@ -16,6 +16,8 @@ import {
 import "./styles.css";
 
 type PageKey = "overview" | "reviews" | "extensions" | "organization" | "audit" | "devices" | "updates" | "settings";
+type AuditQueryState = { action: string; result: string; objectType: string; objectId: string };
+type AuditQueryPreset = Partial<AuditQueryState> & { nonce: number };
 
 interface SessionState {
   token: string;
@@ -35,7 +37,7 @@ type Resource<T> =
   | { status: "error"; error: ViewError };
 
 type ReviewAction = "approve" | "request-changes" | "reject";
-export type GovernanceAction = "delist" | "security-delist" | "relist" | "scope/reduce" | "visibility/reduce" | "archive";
+export type GovernanceAction = "delist" | "security-delist" | "relist" | "scope/reduce" | "visibility/reduce" | "archive" | "ownership-transfer";
 
 const emptyPage: PageResult<ApiRecord> = { items: [], page: 1, pageSize: 20, total: 0, hasNext: false };
 export const defaultGovernanceTargetScopeJson = JSON.stringify({
@@ -68,6 +70,7 @@ export default function App() {
   const [activePage, setActivePage] = useState<PageKey>("overview");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
+  const [auditPreset, setAuditPreset] = useState<AuditQueryPreset | null>(null);
   const [shellError, setShellError] = useState<ViewError | null>(null);
 
   useEffect(() => {
@@ -153,7 +156,16 @@ export default function App() {
           </div>
         </header>
         {shellError ? <ErrorBanner error={shellError} onClose={() => setShellError(null)} /> : null}
-        <PageRouter page={activePage} user={session.user} setPage={setActivePage} />
+        <PageRouter
+          page={activePage}
+          user={session.user}
+          setPage={setActivePage}
+          auditPreset={auditPreset}
+          openAudit={(query) => {
+            setAuditPreset({ ...query, nonce: Date.now() });
+            setActivePage("audit");
+          }}
+        />
       </main>
       {notificationsOpen ? <NotificationsDrawer onClose={() => setNotificationsOpen(false)} /> : null}
       {passwordOpen ? (
@@ -168,7 +180,19 @@ export default function App() {
   );
 }
 
-export function PageRouter({ page, user, setPage }: { page: PageKey; user: UserSummary; setPage: (page: PageKey) => void }) {
+export function PageRouter({
+  page,
+  user,
+  setPage,
+  auditPreset = null,
+  openAudit = () => undefined
+}: {
+  page: PageKey;
+  user: UserSummary;
+  setPage: (page: PageKey) => void;
+  auditPreset?: AuditQueryPreset | null;
+  openAudit?: (query: Partial<AuditQueryState>) => void;
+}) {
   if ((page === "updates" || page === "settings") && user.role !== "SYSTEM_ADMIN") {
     return <PermissionState title="无权访问" message="客户端更新和系统设置仅系统管理员可见。" />;
   }
@@ -178,11 +202,11 @@ export function PageRouter({ page, user, setPage }: { page: PageKey; user: UserS
     case "reviews":
       return <ReviewsPage />;
     case "extensions":
-      return <ExtensionsPage />;
+      return <ExtensionsPage openAudit={openAudit} />;
     case "organization":
       return <OrganizationPage />;
     case "audit":
-      return <AuditPage setPage={setPage} />;
+      return <AuditPage setPage={setPage} preset={auditPreset} />;
     case "devices":
       return <DevicesPage />;
     case "updates":
@@ -573,15 +597,30 @@ export function ReviewDecisionButtons({
   );
 }
 
-function ExtensionsPage() {
+function ExtensionsPage({ openAudit }: { openAudit: (query: Partial<AuditQueryState>) => void }) {
   const [keyword, setKeyword] = useState("");
   const [type, setType] = useState("");
   const [status, setStatus] = useState("");
+  const [visibilityMode, setVisibilityMode] = useState("");
+  const [ownerDepartmentId, setOwnerDepartmentId] = useState("");
+  const [includeChildren, setIncludeChildren] = useState(false);
+  const [maintainerId, setMaintainerId] = useState("");
+  const [riskLevel, setRiskLevel] = useState("");
   const [selected, setSelected] = useState<ApiRecord | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const resource = useResource(
-    () => adminApi.extensions.list({ keyword, type, status, pageSize: 20 }),
-    [keyword, type, status, refreshKey]
+    () => adminApi.extensions.list({
+      keyword,
+      type,
+      status,
+      visibilityMode,
+      ownerDepartmentId,
+      includeChildren,
+      maintainerId,
+      riskLevel,
+      pageSize: 20
+    }),
+    [keyword, type, status, visibilityMode, ownerDepartmentId, includeChildren, maintainerId, riskLevel, refreshKey]
   );
 
   return (
@@ -590,9 +629,17 @@ function ExtensionsPage() {
         title="扩展管理"
         actions={
           <div className="filter-row">
-            <input className="compact-input" placeholder="搜索" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
-            <Select value={type} onChange={setType} options={["", "SKILL", "MCP_SERVER", "PLUGIN"]} />
-            <Select value={status} onChange={setStatus} options={["", "PUBLISHED", "DELISTED", "SECURITY_DELISTED", "ARCHIVED"]} />
+            <input className="compact-input" aria-label="扩展关键词搜索" placeholder="Extension ID / 名称 / 人员" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
+            <Select value={type} onChange={setType} options={["", "SKILL", "MCP_SERVER", "PLUGIN"]} ariaLabel="扩展类型筛选" />
+            <Select value={status} onChange={setStatus} options={["", "PUBLISHED", "DELISTED", "SECURITY_DELISTED", "ARCHIVED"]} ariaLabel="扩展状态筛选" />
+            <Select value={visibilityMode} onChange={setVisibilityMode} options={["", "PUBLIC_TO_ALL_LOGGED_IN", "AUTHORIZED_ONLY"]} ariaLabel="扩展可见性筛选" />
+            <Select value={riskLevel} onChange={setRiskLevel} options={["", "LOW", "MEDIUM", "HIGH"]} ariaLabel="扩展风险等级筛选" />
+            <input className="compact-input" aria-label="归属部门 ID 筛选" placeholder="归属部门 ID" value={ownerDepartmentId} onChange={(event) => setOwnerDepartmentId(event.target.value)} />
+            <label className="check-row compact-check">
+              <input type="checkbox" checked={includeChildren} onChange={(event) => setIncludeChildren(event.target.checked)} />
+              含下级
+            </label>
+            <input className="compact-input" aria-label="维护人 ID 筛选" placeholder="维护人 ID" value={maintainerId} onChange={(event) => setMaintainerId(event.target.value)} />
           </div>
         }
       >
@@ -606,8 +653,13 @@ function ExtensionsPage() {
                 columns={[
                   { label: "名称", render: (row) => safeString(read(row, "name", "extensionName", "extensionId")) },
                   { label: "类型", render: (row) => safeString(read(row, "type", "extensionType")) },
+                  { label: "版本", render: (row) => safeString(read(row, "currentVersion", "version")) },
+                  { label: "状态", render: (row) => <Badge value={safeString(read(row, "status"))} /> },
                   { label: "可见性", render: (row) => safeString(read(row, "visibilityMode")) },
-                  { label: "状态", render: (row) => <Badge value={safeString(read(row, "status"))} /> }
+                  { label: "维护人", render: (row) => safeString(read(row, "maintainer.name", "maintainerName", "maintainerId")) },
+                  { label: "归属部门", render: (row) => safeString(read(row, "ownerDepartment.name", "ownerDepartmentName", "ownerDepartmentId")) },
+                  { label: "风险", render: (row) => <Badge value={safeString(read(row, "riskLevel"))} /> },
+                  { label: "统计", render: (row) => extensionMetricSummary(row) }
                 ]}
                 onSelect={setSelected}
               />
@@ -615,12 +667,20 @@ function ExtensionsPage() {
           }
         </ResourceState>
       </Panel>
-      <ExtensionDetailPanel selected={selected} onChanged={() => setRefreshKey((value) => value + 1)} />
+      <ExtensionDetailPanel selected={selected} onChanged={() => setRefreshKey((value) => value + 1)} openAudit={openAudit} />
     </div>
   );
 }
 
-function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | null; onChanged: () => void }) {
+function ExtensionDetailPanel({
+  selected,
+  onChanged,
+  openAudit
+}: {
+  selected: ApiRecord | null;
+  onChanged: () => void;
+  openAudit: (query: Partial<AuditQueryState>) => void;
+}) {
   const extensionId = selected ? safeString(read(selected, "extensionId", "id")) : "";
   const detailResource = useResource(
     () => (extensionId ? adminApi.extensions.detail(extensionId) : Promise.resolve(null)),
@@ -633,6 +693,8 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
   const [reason, setReason] = useState("");
   const [targetVisibilityMode, setTargetVisibilityMode] = useState("AUTHORIZED_ONLY");
   const [targetScope, setTargetScope] = useState(defaultGovernanceTargetScopeJson);
+  const [targetMaintainerId, setTargetMaintainerId] = useState("");
+  const [targetOwnerDepartmentId, setTargetOwnerDepartmentId] = useState("");
   const [securityReason, setSecurityReason] = useState("");
   const [impactSummary, setImpactSummary] = useState("");
   const [handlingAdvice, setHandlingAdvice] = useState("");
@@ -650,6 +712,10 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
       setError({ message: "治理动作必须填写原因；安全下架请填写安全原因、影响范围和处置建议。" });
       return;
     }
+    if (action === "ownership-transfer" && !targetMaintainerId.trim() && !targetOwnerDepartmentId.trim()) {
+      setError({ message: "转移维护人或归属部门至少填写一个目标 ID。" });
+      return;
+    }
     if (action === "archive" && typeof window !== "undefined" && !window.confirm("归档为终态，确认归档该扩展？")) {
       return;
     }
@@ -662,6 +728,8 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
         reason,
         targetVisibilityMode,
         targetScopeJson: targetScope,
+        targetMaintainerId,
+        targetOwnerDepartmentId,
         securityReason,
         impactSummary,
         handlingAdvice
@@ -693,6 +761,18 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
                 detail={detail}
                 versions={versionsResource.status === "success" ? versionsResource.data : undefined}
               />
+              <div className="button-row wrap">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => openAudit({
+                    objectType: "extension",
+                    objectId: safeString(read(detail, "audit.objectId", "id", "extensionId"))
+                  })}
+                >
+                  查看扩展审计
+                </button>
+              </div>
               <ResourceState resource={versionsResource} compact>
                 {(versions) => (
                   <DetailSection title="版本历史">
@@ -715,6 +795,18 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
                 目标授权范围 JSON
                 <textarea value={targetScope} onChange={(event) => setTargetScope(event.target.value)} />
               </label>
+              <DetailSection title="维护人/归属部门转移">
+                <div className="form-grid-two">
+                  <label>
+                    目标维护人 ID
+                    <input value={targetMaintainerId} onChange={(event) => setTargetMaintainerId(event.target.value)} />
+                  </label>
+                  <label>
+                    目标归属部门 ID
+                    <input value={targetOwnerDepartmentId} onChange={(event) => setTargetOwnerDepartmentId(event.target.value)} />
+                  </label>
+                </div>
+              </DetailSection>
               <DetailSection title="安全下架信息">
                 <label>
                   安全原因
@@ -734,6 +826,7 @@ function ExtensionDetailPanel({ selected, onChanged }: { selected: ApiRecord | n
               <ExtensionGovernanceButtons
                 reason={reason}
                 securityDelistReady={[securityReason, impactSummary, handlingAdvice].every((value) => value.trim().length > 0)}
+                ownershipTransferReady={!!targetMaintainerId.trim() || !!targetOwnerDepartmentId.trim()}
                 busyAction={busyAction}
                 onGovern={govern}
               />
@@ -769,9 +862,23 @@ export function ExtensionDetailSections({ detail, versions }: { detail: ApiRecor
             field("类型", extensionType),
             field("状态", read(detail, "status")),
             field("当前版本", read(detail, "version", "currentVersion", "latestVersion.version") ?? read(latestVersion, "version")),
-            field("作者", read(detail, "authorName", "author", "publisherName")),
-            field("所属部门", read(detail, "ownerDepartmentName", "departmentName", "publisherDepartmentName")),
+            field("作者", read(detail, "authorSnapshot.name", "authorName", "author", "publisherName")),
+            field("维护人", read(detail, "maintainer.name", "maintainerName", "maintainerId")),
+            field("归属部门", read(detail, "ownerDepartment.name", "ownerDepartmentName", "departmentName", "publisherDepartmentName")),
             field("更新时间", formatDate(read(detail, "updatedAt", "publishedAt", "createdAt")))
+          ]}
+        />
+      </DetailSection>
+
+      <DetailSection title="维护人与归属部门">
+        <FieldGrid
+          fields={[
+            field("作者 ID", read(detail, "authorId", "authorSnapshot.id")),
+            field("维护人 ID", read(detail, "maintainerId", "maintainer.id")),
+            field("维护人名称", read(detail, "maintainer.name", "maintainerName")),
+            field("归属部门 ID", read(detail, "ownerDepartmentId", "ownerDepartment.id")),
+            field("归属部门名称", read(detail, "ownerDepartment.name", "ownerDepartmentName")),
+            field("归属部门状态", read(detail, "ownerDepartment.status"))
           ]}
         />
       </DetailSection>
@@ -780,6 +887,7 @@ export function ExtensionDetailSections({ detail, versions }: { detail: ApiRecor
         <FieldGrid
           fields={[
             field("可见性", read(detail, "visibilityMode")),
+            field("授权类型", read(detail, "scope.scopeType", "authorizedScope.scopeType")),
             field("授权范围", read(detail, "scope", "authorizedScope")),
             field("可见部门", read(detail, "visibleDepartments", "departmentScope")),
             field("可用用户数", read(detail, "authorizedUserCount", "visibleUserCount")),
@@ -803,22 +911,49 @@ export function ExtensionDetailSections({ detail, versions }: { detail: ApiRecor
       <DetailSection title="使用统计与风险">
         <FieldGrid
           fields={[
-            field("安装量", read(detail, "installCount", "installationCount")),
-            field("调用次数", read(detail, "usageCount", "invocationCount")),
-            field("活跃用户", read(detail, "activeUserCount")),
-            field("异常事件", read(detail, "abnormalEventCount", "exceptionCount")),
+            field("Star 数", read(detail, "metrics.stars", "starCount")),
+            field("下载用户数", read(detail, "metrics.downloads", "installCount", "installationCount")),
+            field("近 7 天下载用户", read(detail, "metrics.weeklyDownloads")),
+            field("MCP 使用用户", read(detail, "metrics.mcpUsageUsers", "usageCount", "invocationCount")),
+            field("MCP 连接检测失败", read(detail, "metrics.mcpConnectionFailures")),
+            field("Plugin 安装用户", read(detail, "metrics.pluginInstallUsers")),
+            field("Plugin 卸载失败", read(detail, "metrics.pluginUninstallFailures")),
+            field("本地事件失败", read(detail, "metrics.localEventFailures", "abnormalEventCount", "exceptionCount")),
+            field("活跃用户", read(detail, "metrics.activeUsers", "activeUserCount")),
             field("风险等级", read(detail, "riskLevel", "aiPrecheck.riskLevel", "precheck.riskLevel")),
             field("风险摘要", read(detail, "riskSummary", "aiPrecheck.summary", "precheck.summary"))
           ]}
         />
+        <JsonOrEmpty value={read(detail, "metrics.metricAggregates")} />
       </DetailSection>
 
       <DetailSection title={`${reviewTypeLabel(extensionType)}内容详情`}>
         <TypedContentPreview detail={detail} extensionType={extensionType} value={typedPreview} />
       </DetailSection>
 
+      <DetailSection title="审核与 AI 预审历史">
+        <HistorySummary value={read(detail, "reviewHistory", "reviews", "reviewRecords")} />
+        <JsonOrEmpty value={read(detail, "aiPrecheckHistory", "prechecks", "aiPrechecks")} />
+      </DetailSection>
+
+      <DetailSection title="审计入口与最近审计">
+        <FieldGrid
+          fields={[
+            field("对象类型", read(detail, "audit.objectType")),
+            field("对象 ID", read(detail, "audit.objectId", "id")),
+            field("对象名称", read(detail, "audit.objectNameSnapshot", "extensionId")),
+            field("审计动作", read(detail, "audit.actions"))
+          ]}
+        />
+        <HistorySummary value={read(detail, "recentAudits", "audits", "auditLogs")} />
+      </DetailSection>
+
       <DetailSection title="本地事件与异常">
         <JsonOrEmpty value={read(detail, "localEvents", "deviceExceptions", "exceptionEvents", "recentEvents")} />
+      </DetailSection>
+
+      <DetailSection title="维护/归属转移历史">
+        <HistorySummary value={read(detail, "ownershipHistory", "ownershipTransfers")} />
       </DetailSection>
     </>
   );
@@ -827,11 +962,13 @@ export function ExtensionDetailSections({ detail, versions }: { detail: ApiRecor
 export function ExtensionGovernanceButtons({
   reason,
   securityDelistReady = true,
+  ownershipTransferReady = true,
   busyAction = null,
   onGovern
 }: {
   reason: string;
   securityDelistReady?: boolean;
+  ownershipTransferReady?: boolean;
   busyAction?: GovernanceAction | null;
   onGovern: (action: GovernanceAction) => void;
 }) {
@@ -845,6 +982,7 @@ export function ExtensionGovernanceButtons({
       <button type="button" className="secondary-button" disabled={busy || reasonMissing} onClick={() => onGovern("scope/reduce")}>收缩授权</button>
       <button type="button" className="secondary-button" disabled={busy || reasonMissing} onClick={() => onGovern("visibility/reduce")}>收缩可见性</button>
       <button type="button" className="ghost-button" disabled={busy || reasonMissing} onClick={() => onGovern("archive")}>归档</button>
+      <button type="button" className="secondary-button" disabled={busy || reasonMissing || !ownershipTransferReady} onClick={() => onGovern("ownership-transfer")}>转移维护/部门</button>
     </div>
   );
 }
@@ -1020,15 +1158,29 @@ function UsersPanel() {
   );
 }
 
-function AuditPage({ setPage }: { setPage: (page: PageKey) => void }) {
-  const [query, setQuery] = useState({ action: "", result: "", objectType: "" });
+function AuditPage({ setPage, preset }: { setPage: (page: PageKey) => void; preset: AuditQueryPreset | null }) {
+  const [query, setQuery] = useState<AuditQueryState>({ action: "", result: "", objectType: "", objectId: "" });
   const [selected, setSelected] = useState<ApiRecord | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [csv, setCsv] = useState("");
   const [error, setError] = useState<ViewError | null>(null);
+  useEffect(() => {
+    if (!preset) {
+      return;
+    }
+    setQuery((current) => ({
+      ...current,
+      action: preset.action ?? current.action,
+      result: preset.result ?? current.result,
+      objectType: preset.objectType ?? current.objectType,
+      objectId: preset.objectId ?? current.objectId
+    }));
+    setSelected(null);
+    setRefreshKey((value) => value + 1);
+  }, [preset]);
   const resource = useResource(
     () => adminApi.audit.list({ ...query, pageSize: 20 }),
-    [query.action, query.result, query.objectType, refreshKey]
+    [query.action, query.result, query.objectType, query.objectId, refreshKey]
   );
 
   async function exportCsv() {
@@ -1048,6 +1200,7 @@ function AuditPage({ setPage }: { setPage: (page: PageKey) => void }) {
           <div className="filter-row">
             <input className="compact-input" placeholder="动作" value={query.action} onChange={(event) => setQuery({ ...query, action: event.target.value })} />
             <input className="compact-input" placeholder="对象类型" value={query.objectType} onChange={(event) => setQuery({ ...query, objectType: event.target.value })} />
+            <input className="compact-input" placeholder="对象 ID" value={query.objectId} onChange={(event) => setQuery({ ...query, objectId: event.target.value })} />
             <Select value={query.result} onChange={(result) => setQuery({ ...query, result })} options={["", "SUCCESS", "FAILURE"]} />
             <button type="button" className="secondary-button" onClick={() => setRefreshKey((value) => value + 1)}>刷新</button>
             <button type="button" className="secondary-button" onClick={exportCsv}>导出</button>
@@ -1655,6 +1808,20 @@ function selectLabel(option: string): string {
   return option || "全部";
 }
 
+function extensionMetricSummary(row: ApiRecord): string {
+  const metrics = asRecord(read(row, "metrics"));
+  if (!metrics) {
+    return `${safeString(read(row, "starCount")) || "0"} Star`;
+  }
+  const pieces = [
+    `${safeString(read(metrics, "stars")) || "0"} Star`,
+    `${safeString(read(metrics, "downloads")) || "0"} 下载`,
+    `${safeString(read(metrics, "activeUsers")) || "0"} 活跃`
+  ];
+  const failures = safeString(read(metrics, "localEventFailures"));
+  return failures && failures !== "0" ? [...pieces, `${failures} 异常`].join(" · ") : pieces.join(" · ");
+}
+
 function Select({ value, onChange, options, ariaLabel }: { value: string; onChange: (value: string) => void; options: string[]; ariaLabel?: string }) {
   return (
     <select value={value} aria-label={ariaLabel} onChange={(event) => onChange(event.target.value)}>
@@ -2090,7 +2257,12 @@ function reviewActionRequiresReason(action: ReviewAction): boolean {
 }
 
 function governanceActionRequiresReason(action: GovernanceAction): boolean {
-  return action === "delist" || action === "relist" || action === "scope/reduce" || action === "visibility/reduce" || action === "archive";
+  return action === "delist"
+    || action === "relist"
+    || action === "scope/reduce"
+    || action === "visibility/reduce"
+    || action === "archive"
+    || action === "ownership-transfer";
 }
 
 export function buildExtensionGovernancePayload(
@@ -2099,6 +2271,8 @@ export function buildExtensionGovernancePayload(
     reason: string;
     targetVisibilityMode: string;
     targetScopeJson: string;
+    targetMaintainerId: string;
+    targetOwnerDepartmentId: string;
     securityReason: string;
     impactSummary: string;
     handlingAdvice: string;
@@ -2127,6 +2301,19 @@ export function buildExtensionGovernancePayload(
   }
   if (action === "scope/reduce") {
     payload.targetScope = normalizeGovernanceTargetScope(JSON.parse(input.targetScopeJson));
+  }
+  if (action === "ownership-transfer") {
+    const targetMaintainerId = input.targetMaintainerId.trim();
+    const targetOwnerDepartmentId = input.targetOwnerDepartmentId.trim();
+    if (!targetMaintainerId && !targetOwnerDepartmentId) {
+      throw new Error("转移维护人或归属部门至少填写一个目标 ID。");
+    }
+    if (targetMaintainerId) {
+      payload.targetMaintainerId = targetMaintainerId;
+    }
+    if (targetOwnerDepartmentId) {
+      payload.targetOwnerDepartmentId = targetOwnerDepartmentId;
+    }
   }
   return payload;
 }

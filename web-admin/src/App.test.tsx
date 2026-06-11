@@ -400,32 +400,53 @@ describe("Web Admin renderer", () => {
           status: "PUBLISHED",
           version: "2.0.1",
           authorName: "Platform Team",
-          ownerDepartmentName: "平台部",
+          maintainer: { id: "user-2", name: "李四" },
+          ownerDepartment: { id: "dept-2", name: "平台部", status: "ACTIVE" },
           visibilityMode: "AUTHORIZED_ONLY",
           scope: { departmentIds: ["dept-1"] },
           reviewStatus: "APPROVED",
           aiPrecheckStatus: "PASS",
-          installCount: 10,
-          usageCount: 328,
+          metrics: {
+            stars: 7,
+            downloads: 10,
+            weeklyDownloads: 3,
+            mcpUsageUsers: 0,
+            pluginInstallUsers: 8,
+            localEventFailures: 1,
+            activeUsers: 6
+          },
           riskLevel: "LOW",
           manifest: { commands: ["sync"] },
-          localEvents: [{ type: "DEVICE_EXCEPTION", count: 1 }]
+          localEvents: [{ type: "DEVICE_EXCEPTION", count: 1 }],
+          reviewHistory: [{ status: "APPROVED", submitterName: "Alice" }],
+          aiPrecheckHistory: [{ aiStatus: "PASSED", aiResultSummary: { summary: "低风险" } }],
+          audit: { objectType: "extension", objectId: "ext-pk-1", actions: ["extension.ownership.transfer"] },
+          recentAudits: [{ action: "extension.ownership.transfer", requestId: "req-transfer" }],
+          ownershipHistory: [{ afterMaintainerName: "李四", reason: "职责移交" }]
         }}
       />
     );
 
     for (const label of [
       "基础信息",
+      "维护人与归属部门",
       "授权与可见范围",
       "发布与审核状态",
       "使用统计与风险",
       "Plugin内容详情",
-      "本地事件与异常"
+      "审核与 AI 预审历史",
+      "审计入口与最近审计",
+      "本地事件与异常",
+      "维护/归属转移历史"
     ]) {
       expect(html).toContain(label);
     }
     expect(html).toContain("GitHub 同步插件");
     expect(html).toContain("Platform Team");
+    expect(html).toContain("李四");
+    expect(html).toContain("7");
+    expect(html).toContain("extension.ownership.transfer");
+    expect(html).toContain("req-transfer");
     expect(html).toContain("DEVICE_EXCEPTION");
   });
 
@@ -489,7 +510,7 @@ describe("Web Admin renderer", () => {
     const governanceWithoutReason = renderToStaticMarkup(
       <ExtensionGovernanceButtons reason="" onGovern={() => undefined} />
     );
-    expect(disabledCount(governanceWithoutReason)).toBe(5);
+    expect(disabledCount(governanceWithoutReason)).toBe(6);
 
     const governanceWithReason = renderToStaticMarkup(
       <ExtensionGovernanceButtons reason="维护下架" onGovern={() => undefined} />
@@ -504,7 +525,12 @@ describe("Web Admin renderer", () => {
     const governanceBusy = renderToStaticMarkup(
       <ExtensionGovernanceButtons reason="维护下架" busyAction="scope/reduce" onGovern={() => undefined} />
     );
-    expect(disabledCount(governanceBusy)).toBe(6);
+    expect(disabledCount(governanceBusy)).toBe(7);
+
+    const transferMissingTarget = renderToStaticMarkup(
+      <ExtensionGovernanceButtons reason="职责调整" ownershipTransferReady={false} onGovern={() => undefined} />
+    );
+    expect(disabledCount(transferMissingTarget)).toBe(1);
   });
 
   it("builds server-shaped governance request payloads", () => {
@@ -515,6 +541,8 @@ describe("Web Admin renderer", () => {
         scopeType: "DEPARTMENT",
         departmentIds: ["dept-1"]
       }),
+      targetMaintainerId: "",
+      targetOwnerDepartmentId: "",
       securityReason: "",
       impactSummary: "",
       handlingAdvice: ""
@@ -539,6 +567,8 @@ describe("Web Admin renderer", () => {
       reason: "紧急处置",
       targetVisibilityMode: "AUTHORIZED_ONLY",
       targetScopeJson: "{}",
+      targetMaintainerId: "",
+      targetOwnerDepartmentId: "",
       securityReason: "疑似泄露敏感配置",
       impactSummary: "12 个用户已接入",
       handlingAdvice: "建议卸载或等待修复版本"
@@ -557,10 +587,42 @@ describe("Web Admin renderer", () => {
       reason: "紧急处置",
       targetVisibilityMode: "AUTHORIZED_ONLY",
       targetScopeJson: "{}",
+      targetMaintainerId: "",
+      targetOwnerDepartmentId: "",
       securityReason: "疑似泄露敏感配置",
       impactSummary: "",
       handlingAdvice: "建议卸载"
     })).toThrow("安全下架必须填写安全原因、影响范围和处置建议。");
+
+    const transferPayload = buildExtensionGovernancePayload("ownership-transfer", {
+      reason: "职责移交",
+      targetVisibilityMode: "AUTHORIZED_ONLY",
+      targetScopeJson: "{}",
+      targetMaintainerId: "user-2",
+      targetOwnerDepartmentId: "dept-2",
+      securityReason: "",
+      impactSummary: "",
+      handlingAdvice: ""
+    });
+
+    expect(transferPayload).toMatchObject({
+      reason: "职责移交",
+      reasonType: "ownership-transfer",
+      reasonDetail: "职责移交",
+      targetMaintainerId: "user-2",
+      targetOwnerDepartmentId: "dept-2"
+    });
+
+    expect(() => buildExtensionGovernancePayload("ownership-transfer", {
+      reason: "职责移交",
+      targetVisibilityMode: "AUTHORIZED_ONLY",
+      targetScopeJson: "{}",
+      targetMaintainerId: "",
+      targetOwnerDepartmentId: "",
+      securityReason: "",
+      impactSummary: "",
+      handlingAdvice: ""
+    })).toThrow("转移维护人或归属部门至少填写一个目标 ID。");
   });
 });
 

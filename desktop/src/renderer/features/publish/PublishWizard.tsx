@@ -210,7 +210,6 @@ function PolicyStep({ draft, update }: { draft: PublishDraft; update: (patch: Pa
         <select className="select" value={draft.authorizationScope} aria-label="授权范围" onChange={(event) => update({ authorizationScope: event.target.value })}>
           <option value="DEPARTMENT">本部门</option>
           <option value="DEPARTMENT_TREE">本部门及下级</option>
-          <option value="SELECTED_DEPARTMENTS">指定部门</option>
           <option value="ALL_EMPLOYEES">全体员工</option>
         </select>
       </label>
@@ -302,6 +301,9 @@ function validationMessage(step: number, draft: PublishDraft, inspectionBusy: bo
     if (!draft.version.trim()) return '请填写版本号。';
     if (!draft.name.trim()) return '请填写名称，或从 SKILL.md 自动带出。';
     if (!draft.summary.trim()) return '请填写简介，或从 SKILL.md description 自动带出。';
+  }
+  if (step === 2 && draft.authorizationScope === 'SELECTED_DEPARTMENTS') {
+    return '当前桌面端尚未提供指定部门选择，请改用本部门、本部门及下级或全体员工。';
   }
   return undefined;
 }

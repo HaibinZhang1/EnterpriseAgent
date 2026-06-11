@@ -1,13 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { EnterpriseAgentAppView, initialView, normalizeActionResult, resolveTheme, shouldUseLocalDetailFallback, type EnterpriseAgentActions, type EnterpriseAgentViewModel } from '../src/renderer/App';
+import { EnterpriseAgentAppView, createEnterpriseAgentActions, initialView, normalizeActionResult, resolveTheme, shouldUseLocalDetailFallback, type EnterpriseAgentActions, type EnterpriseAgentViewModel } from '../src/renderer/App';
 import { ExtensionActionModal } from '../src/renderer/features/extension/ExtensionActionModal';
 import { ExtensionDetailDrawer } from '../src/renderer/features/extension/ExtensionDetailDrawer';
-import { PublishWizard } from '../src/renderer/features/publish/PublishWizard';
+import { PublishWizard, type PublishDraft } from '../src/renderer/features/publish/PublishWizard';
 import { SettingsModal } from '../src/renderer/features/settings/SettingsModal';
 import { UpdateModal } from '../src/renderer/features/update/UpdateModal';
 import { readableErrorMessage } from '../src/renderer/lib/errors';
 import type { ExtensionKind, ExtensionSummary } from '../src/renderer/types/desktop';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe('renderer app view', () => {
   it('shows login entry before auth and Agent home after auth with fixed desktop tabs', () => {
@@ -249,6 +254,57 @@ describe('renderer app view', () => {
     expect(failed).toContain('req-publish-1');
   });
 
+  it('submits publish authorization scope from the current session department', async () => {
+    const submittedPayloads: unknown[] = [];
+    vi.stubGlobal('crypto', { randomUUID: () => 'publish-uuid' });
+    vi.stubGlobal('FileReader', TestFileReader);
+    vi.stubGlobal('window', {
+      enterpriseAgent: {
+        publish: {
+          uploadPackage: vi.fn(async () => ({
+            success: true,
+            data: { tempUploadId: 'temp-upload-1', sha256: 'sha-1', uploadType: 'SKILL_PACKAGE' },
+            requestID: 'req-upload'
+          })),
+          createSubmission: vi.fn(async (payload: unknown) => {
+            submittedPayloads.push(payload);
+            return {
+              success: true,
+              data: { submissionId: 'sub-1', revisionId: 'rev-1', status: 'SUBMITTED' },
+              requestID: 'req-create'
+            };
+          })
+        }
+      }
+    });
+
+    let model: EnterpriseAgentViewModel = {
+      ...initialView(),
+      user: { username: 'alice', displayName: 'Alice', departmentId: 'dept-current' }
+    };
+    const setView: Parameters<typeof createEnterpriseAgentActions>[0]['setView'] = (updater) => {
+      model = typeof updater === 'function' ? updater(model) : updater;
+    };
+    const actions = createEnterpriseAgentActions({
+      view: model,
+      setView,
+      loadCommunity: async () => undefined,
+      loadLocal: async () => undefined,
+      loadNotifications: async () => undefined,
+      refreshSubmissions: async () => undefined
+    });
+
+    await (actions.submitPublish(validPublishDraft()) as unknown as Promise<void>);
+
+    expect(model.publishBusy).toBe(false);
+    expect(model.publishError).toBeUndefined();
+    expect(submittedPayloads).toHaveLength(1);
+    expect((submittedPayloads[0] as { request: { authorizationScope: unknown } }).request.authorizationScope).toEqual({
+      scopeType: 'DEPARTMENT_TREE',
+      departments: [{ departmentId: 'dept-current', includeChildren: true }]
+    });
+  });
+
   it('renders update modal controls and update failure requestId', () => {
     const available = renderToStaticMarkup(<UpdateModal update={{ state: 'available', version: '2.0.0' }} busy={false} onClose={() => undefined} onCheck={() => undefined} onDownload={() => undefined} onCancel={() => undefined} onInstall={() => undefined} />);
     expect(available).toContain('下载');
@@ -310,6 +366,31 @@ function actions(): EnterpriseAgentActions {
     markNotificationRead: () => undefined,
     requestCleanup: () => undefined,
     confirmCleanup: () => undefined
+  };
+}
+
+class TestFileReader {
+  result: string | ArrayBuffer | null = null;
+  onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+  onerror: ((event: ProgressEvent<FileReader>) => void) | null = null;
+
+  readAsDataURL(_file: Blob): void {
+    this.result = 'data:application/zip;base64,U0tJTEw=';
+    this.onload?.({} as ProgressEvent<FileReader>);
+  }
+}
+
+function validPublishDraft(): PublishDraft {
+  return {
+    extensionType: 'skill',
+    extensionId: 'dept-skill',
+    version: '1.0.0',
+    name: 'Dept Skill',
+    summary: 'Dept scoped skill',
+    visibilityMode: 'AUTHORIZED_ONLY',
+    authorizationScope: 'DEPARTMENT_TREE',
+    riskStatement: 'Reviewed risk statement.',
+    file: { name: 'dept-skill.zip', type: 'application/zip' } as File
   };
 }
 

@@ -2,6 +2,7 @@ package com.enterpriseagent.hub.extension;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Function;
 
 import org.springframework.web.bind.annotation.GetMapping;
@@ -38,10 +39,15 @@ public class ExtensionAdminController {
     @GetMapping
     public ApiResponse<PageResult<Map<String, Object>>> list(@RequestParam(required = false) String keyword,
             @RequestParam(required = false) ExtensionType type, @RequestParam(required = false) ExtensionStatus status,
-            @RequestParam(required = false) VisibilityMode visibilityMode, @RequestParam(defaultValue = "1") int page,
+            @RequestParam(required = false) VisibilityMode visibilityMode,
+            @RequestParam(required = false) UUID ownerDepartmentId,
+            @RequestParam(defaultValue = "false") boolean includeChildren,
+            @RequestParam(required = false) UUID maintainerId,
+            @RequestParam(required = false) String riskLevel,
+            @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int pageSize) {
         return ApiResponse.success(service.adminList(currentUserProvider.requireCurrentUser(), keyword, type, status,
-                visibilityMode, page, pageSize));
+                visibilityMode, ownerDepartmentId, includeChildren, maintainerId, riskLevel, page, pageSize));
     }
 
     @GetMapping("/{extensionId}")

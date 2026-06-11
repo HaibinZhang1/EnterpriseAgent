@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ClientLogger } from '../src/main/logging/client-logger';
@@ -49,6 +49,52 @@ describe('redaction and SecureStore', () => {
       expect(logText).not.toContain('raw-token');
       expect(logText).not.toContain('ticket-123');
       expect(logText).toContain('req_1');
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('fails closed on corrupted or unavailable safe storage instead of returning an empty store', async () => {
+    const temp = await tempRoot();
+    try {
+      const filePath = path.join(temp.root, 'secure-store.json');
+      const missingStore = new SafeStorageSecureStore(filePath, fakeSafeStorage);
+      await expect(missingStore.get('session.token')).resolves.toBeUndefined();
+
+      await writeFile(filePath, '{not-json', 'utf8');
+      await expect(missingStore.get('session.token')).rejects.toMatchObject({
+        desktopError: { code: 'secure_store_corrupted' }
+      });
+      await expect(missingStore.set('session.token', 'new-token')).rejects.toMatchObject({
+        desktopError: { code: 'secure_store_corrupted' }
+      });
+      await expect(readFile(filePath, 'utf8')).resolves.toBe('{not-json');
+
+      await writeFile(filePath, JSON.stringify({
+        entries: {
+          'session.token': {
+            encrypted: fakeSafeStorage.encryptString('file-token').toString('base64'),
+            updatedAt: new Date().toISOString()
+          }
+        }
+      }), 'utf8');
+      const unavailableStore = new SafeStorageSecureStore(filePath, {
+        ...fakeSafeStorage,
+        isEncryptionAvailable: () => false
+      });
+      await expect(unavailableStore.get('session.token')).rejects.toMatchObject({
+        desktopError: { code: 'secure_store_unavailable' }
+      });
+
+      const corruptedCipherStore = new SafeStorageSecureStore(filePath, {
+        ...fakeSafeStorage,
+        decryptString: () => {
+          throw new Error('decrypt failed');
+        }
+      });
+      await expect(corruptedCipherStore.get('session.token')).rejects.toMatchObject({
+        desktopError: { code: 'secure_store_corrupted' }
+      });
     } finally {
       await temp.cleanup();
     }

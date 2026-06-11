@@ -1,5 +1,7 @@
 package com.enterpriseagent.hub.submission;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -45,14 +47,60 @@ public class RulePrecheckService {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "版本号必须为 SemVer");
         }
         validateExtensionState(request, currentSubmissionId);
-        if (request.authorizationScope() != null && request.authorizationScope().get("scopeType") != null) {
-            try {
-                ScopeType.valueOf(String.valueOf(request.authorizationScope().get("scopeType")));
-            } catch (IllegalArgumentException exception) {
-                throw new BusinessException(ErrorCode.VALIDATION_FAILED, "授权范围类型不合法");
-            }
+        validateAuthorizationScope(request.authorizationScope());
+        if (request.visibilityMode() == null) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "可见性模式必须显式指定");
         }
         return Map.of("status", "PASSED", "summary", "规则预审通过");
+    }
+
+    private void validateAuthorizationScope(Map<String, Object> authorizationScope) {
+        if (authorizationScope == null) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "授权范围必须显式指定");
+        }
+        ScopeType scopeType = parseScopeType(authorizationScope.get("scopeType"));
+        if (scopeType == ScopeType.ALL_EMPLOYEES) {
+            return;
+        }
+        List<UUID> departmentIds = departmentIds(authorizationScope.get("departments"));
+        if (departmentIds.isEmpty()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "部门授权范围必须指定部门");
+        }
+        for (UUID departmentId : departmentIds) {
+            if (!exists("select exists(select 1 from departments where id = ?)", departmentId)) {
+                throw new BusinessException(ErrorCode.VALIDATION_FAILED, "授权部门不存在");
+            }
+        }
+    }
+
+    private ScopeType parseScopeType(Object value) {
+        if (value == null || !StringUtils.hasText(String.valueOf(value))) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "授权范围类型必须显式指定");
+        }
+        try {
+            return ScopeType.valueOf(String.valueOf(value));
+        } catch (IllegalArgumentException exception) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "授权范围类型不合法");
+        }
+    }
+
+    private List<UUID> departmentIds(Object departments) {
+        if (!(departments instanceof Iterable<?> iterable)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "部门授权范围必须指定部门列表");
+        }
+        List<UUID> ids = new ArrayList<>();
+        for (Object item : iterable) {
+            if (!(item instanceof Map<?, ?> map) || map.get("departmentId") == null
+                    || !StringUtils.hasText(String.valueOf(map.get("departmentId")))) {
+                throw new BusinessException(ErrorCode.VALIDATION_FAILED, "部门授权范围包含无效部门");
+            }
+            try {
+                ids.add(UUID.fromString(String.valueOf(map.get("departmentId"))));
+            } catch (IllegalArgumentException exception) {
+                throw new BusinessException(ErrorCode.VALIDATION_FAILED, "部门授权范围包含无效部门");
+            }
+        }
+        return ids;
     }
 
     private void validateExtensionState(SubmissionRequest request, UUID currentSubmissionId) {
@@ -104,6 +152,11 @@ public class RulePrecheckService {
 
     private boolean exists(String sql, String extensionId, String version) {
         Boolean exists = jdbc.queryForObject(sql, Boolean.class, extensionId, version);
+        return Boolean.TRUE.equals(exists);
+    }
+
+    private boolean exists(String sql, UUID id) {
+        Boolean exists = jdbc.queryForObject(sql, Boolean.class, id);
         return Boolean.TRUE.equals(exists);
     }
 

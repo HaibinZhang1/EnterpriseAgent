@@ -116,7 +116,7 @@ class PackageSubmissionDownloadApiTests extends PostgresIntegrationTestBase {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsByteArray();
         assertThat(downloaded).isEqualTo(zip);
-        assertThat(jdbc.queryForObject("select count(*) from activity_events where event_type = 'EXTENSION_DOWNLOAD'", Long.class))
+        assertThat(jdbc.queryForObject("select count(*) from activity_events where event_type = 'DOWNLOAD_STARTED'", Long.class))
                 .isGreaterThanOrEqualTo(1L);
 
         mockMvc.perform(get("/api/packages/download").param("ticket", ticket)
@@ -179,6 +179,85 @@ class PackageSubmissionDownloadApiTests extends PostgresIntegrationTestBase {
                                 "\",\"purpose\":\"INSTALL\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.ticket").isString());
+    }
+
+    @Test
+    void approvalFailsWhenPackageSnapshotCannotBindPackageObject() throws Exception {
+        User user = createUser("136" + uniqueDigits(), Role.NORMAL_USER);
+        String userToken = login(user.getPhone(), "Temp#123456", "DESKTOP");
+        String adminToken = login("13800000000", "Admin#123456", "ADMIN_WEB");
+
+        String invalidPackageIdExtension = "invalid-package-id-" + uniqueDigits();
+        String invalidUpload = uploadSkill(userToken, invalidPackageIdExtension);
+        String invalidCreate = mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + userToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody(invalidPackageIdExtension, extract(invalidUpload, "tempUploadId"),
+                                extract(invalidUpload, "sha256"))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String invalidRevisionId = extract(invalidCreate, "revisionId");
+        jdbc.update("""
+                update submission_revisions
+                   set package_snapshot = jsonb_set(package_snapshot, '{data,packageId}', '"not-a-uuid"'::jsonb)
+                 where id = ?
+                """, UUID.fromString(invalidRevisionId));
+        mockMvc.perform(post("/api/reviews/tasks/" + extract(invalidCreate, "submissionId") + "/approve")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"revisionId\":\"" + invalidRevisionId + "\",\"comment\":\"ok\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("validation_failed"));
+
+        String missingPackageIdExtension = "missing-package-id-" + uniqueDigits();
+        String missingUpload = uploadSkill(userToken, missingPackageIdExtension);
+        String missingCreate = mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + userToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody(missingPackageIdExtension, extract(missingUpload, "tempUploadId"),
+                                extract(missingUpload, "sha256"))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String missingRevisionId = extract(missingCreate, "revisionId");
+        jdbc.update("""
+                update submission_revisions
+                   set package_snapshot = jsonb_set(package_snapshot, '{data}', (package_snapshot->'data') - 'packageId')
+                 where id = ?
+                """, UUID.fromString(missingRevisionId));
+        mockMvc.perform(post("/api/reviews/tasks/" + extract(missingCreate, "submissionId") + "/approve")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"revisionId\":\"" + missingRevisionId + "\",\"comment\":\"ok\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("validation_failed"));
+
+        String nonexistentPackageExtension = "nonexistent-package-id-" + uniqueDigits();
+        String nonexistentUpload = uploadSkill(userToken, nonexistentPackageExtension);
+        String nonexistentCreate = mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + userToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody(nonexistentPackageExtension, extract(nonexistentUpload, "tempUploadId"),
+                                extract(nonexistentUpload, "sha256"))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String nonexistentRevisionId = extract(nonexistentCreate, "revisionId");
+        jdbc.update("""
+                update submission_revisions
+                   set package_snapshot = jsonb_set(package_snapshot, '{data,packageId}', to_jsonb(?::text))
+                 where id = ?
+                """, UUID.randomUUID().toString(), UUID.fromString(nonexistentRevisionId));
+        mockMvc.perform(post("/api/reviews/tasks/" + extract(nonexistentCreate, "submissionId") + "/approve")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"revisionId\":\"" + nonexistentRevisionId + "\",\"comment\":\"ok\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("validation_failed"));
     }
 
     @Test
@@ -318,8 +397,95 @@ class PackageSubmissionDownloadApiTests extends PostgresIntegrationTestBase {
                 .andExpect(jsonPath("$.data.manualInstallDoc").value("Install manually"));
     }
 
+    @Test
+    void approvalFailsWhenUploadedDefinitionsLoseRequiredFields() throws Exception {
+        User user = createUser("136" + uniqueDigits(), Role.NORMAL_USER);
+        String userToken = login(user.getPhone(), "Temp#123456", "DESKTOP");
+        String adminToken = login("13800000000", "Admin#123456", "ADMIN_WEB");
+
+        String mcpMissingAccessUpload = uploadMcp(userToken);
+        String mcpMissingAccessCreate = mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + userToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody("mcp-missing-access-" + uniqueDigits(), "MCP_SERVER",
+                                extract(mcpMissingAccessUpload, "tempUploadId"), extract(mcpMissingAccessUpload, "sha256"))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        removeDefinitionField(extract(mcpMissingAccessCreate, "revisionId"), "accessType");
+        approveExpectBadRequest(adminToken, extract(mcpMissingAccessCreate, "submissionId"),
+                extract(mcpMissingAccessCreate, "revisionId"));
+
+        String mcpMissingTransportUpload = uploadMcp(userToken);
+        String mcpMissingTransportCreate = mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + userToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody("mcp-missing-transport-" + uniqueDigits(), "MCP_SERVER",
+                                extract(mcpMissingTransportUpload, "tempUploadId"), extract(mcpMissingTransportUpload, "sha256"))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        removeDefinitionField(extract(mcpMissingTransportCreate, "revisionId"), "transport");
+        approveExpectBadRequest(adminToken, extract(mcpMissingTransportCreate, "submissionId"),
+                extract(mcpMissingTransportCreate, "revisionId"));
+
+        String pluginMissingInstallModeUpload = uploadPlugin(userToken);
+        String pluginMissingInstallModeCreate = mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + userToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody("plugin-missing-install-mode-" + uniqueDigits(), "PLUGIN",
+                                extract(pluginMissingInstallModeUpload, "tempUploadId"), extract(pluginMissingInstallModeUpload, "sha256"))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        removeDefinitionField(extract(pluginMissingInstallModeCreate, "revisionId"), "installMode");
+        approveExpectBadRequest(adminToken, extract(pluginMissingInstallModeCreate, "submissionId"),
+                extract(pluginMissingInstallModeCreate, "revisionId"));
+    }
+
     private String submissionBody(String extensionId, String tempUploadId, String sha256) {
         return submissionBody(extensionId, "SKILL", tempUploadId, sha256);
+    }
+
+    private String uploadSkill(String token, String name) throws Exception {
+        return mockMvc.perform(multipart("/api/uploads/package")
+                        .file(new MockMultipartFile("file", name + ".zip", "application/zip",
+                                zip(entry("SKILL.md", "---\nname: " + name + "\n---\n# " + name))))
+                        .param("uploadType", "SKILL_PACKAGE")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+    }
+
+    private String uploadMcp(String token) throws Exception {
+        return mockMvc.perform(multipart("/api/uploads/package")
+                        .file(new MockMultipartFile("file", "mcp.zip", "application/zip", zip(entry("mcp.json", """
+                                {"serverName":"finance","version":"1.0.0","accessType":"remote-http","transport":"http","endpoint":"https://example.invalid/mcp"}
+                                """))))
+                        .param("uploadType", "MCP_MANIFEST")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+    }
+
+    private String uploadPlugin(String token) throws Exception {
+        return mockMvc.perform(multipart("/api/uploads/package")
+                        .file(new MockMultipartFile("file", "plugin.zip", "application/zip", zip(entry("plugin.json", """
+                                {"pluginName":"demo-plugin","version":"1.0.0","installMode":"config-plugin","targetTools":["codex"]}
+                                """))))
+                        .param("uploadType", "PLUGIN_MANIFEST")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+    }
+
+    private void removeDefinitionField(String revisionId, String field) {
+        jdbc.update("""
+                update submission_revisions
+                   set package_snapshot = jsonb_set(package_snapshot, '{data,precheck,definition}',
+                         (package_snapshot #> '{data,precheck,definition}') - ?)
+                 where id = ?
+                """, field, UUID.fromString(revisionId));
     }
 
     private String submissionBody(String extensionId, String extensionType, String tempUploadId, String sha256) {
@@ -400,6 +566,16 @@ class PackageSubmissionDownloadApiTests extends PostgresIntegrationTestBase {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"revisionId\":\"" + revisionId + "\",\"comment\":\"ok\"}"))
                 .andExpect(status().isOk());
+    }
+
+    private void approveExpectBadRequest(String adminToken, String submissionId, String revisionId) throws Exception {
+        mockMvc.perform(post("/api/reviews/tasks/" + submissionId + "/approve")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"revisionId\":\"" + revisionId + "\",\"comment\":\"ok\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("validation_failed"));
     }
 
     private String uniqueDigits() {

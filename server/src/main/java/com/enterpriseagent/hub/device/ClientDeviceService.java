@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -29,6 +30,8 @@ import com.enterpriseagent.hub.organization.ManagementScopeService;
 @Service
 public class ClientDeviceService {
     private static final int MAX_PAGE_SIZE = 100;
+    private static final Pattern EVENT_TYPE_PATTERN = Pattern.compile("[A-Z0-9_.:-]{1,64}");
+    private static final Set<String> EVENT_RESULTS = Set.of("SUCCESS", "FAILURE", "CANCELLED", "PARTIAL_SUCCESS");
 
     private final JdbcTemplate jdbc;
     private final ExtensionJson json;
@@ -121,16 +124,32 @@ public class ClientDeviceService {
                 continue;
             }
             String key = string(event.get("idempotencyKey"));
-            String type = string(event.get("eventType"));
-            if (!StringUtils.hasText(key) || !StringUtils.hasText(type)) {
+            if (!StringUtils.hasText(key)) {
                 results.add(Map.of("idempotencyKey", nullToEmpty(key), "status", "REJECTED", "errorCode", "invalid_event"));
                 continue;
             }
-            int inserted = insertDeviceEvent(actor, deviceId, type, defaultString(event.get("result"), "SUCCESS"),
-                    string(event.get("errorCode")), payload(event.get("payloadSummary")), key,
-                    parseTime(event.get("occurredAt")));
-            results.add(Map.of("idempotencyKey", key, "status", inserted == 1 ? "ACCEPTED" : "IGNORED"));
-            if (inserted == 1 && shouldAuditDeviceEvent(type, string(event.get("errorCode")))) {
+            String type;
+            String errorCode = string(event.get("errorCode"));
+            String result;
+            OffsetDateTime occurredAt;
+            try {
+                type = normalizeEventType(event.get("eventType"));
+                result = normalizeResult(event.get("result"), errorCode);
+                occurredAt = parseOccurredAt(event.get("occurredAt"));
+            } catch (EventRejectedException exception) {
+                results.add(rejectedDeviceEvent(key, exception));
+                continue;
+            }
+            InsertedDeviceEvent inserted = insertDeviceEvent(actor, deviceId, type, result,
+                    errorCode, payload(event.get("payloadSummary")), key, occurredAt);
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("idempotencyKey", key);
+            item.put("status", inserted.inserted() ? "ACCEPTED" : "IGNORED");
+            item.put("result", result);
+            item.put("errorCode", errorCode);
+            item.put("serverEventId", inserted.inserted() ? inserted.id().toString() : null);
+            results.add(item);
+            if (inserted.inserted() && shouldAuditDeviceEvent(type, errorCode)) {
                 auditService.recordFailure(AuditRecord.builder()
                         .actorId(actor.id())
                         .actorSnapshot(userSnapshot(actor))
@@ -248,16 +267,18 @@ public class ClientDeviceService {
         return detail;
     }
 
-    private int insertDeviceEvent(CurrentUser actor, String deviceId, String type, String result, String errorCode,
+    private InsertedDeviceEvent insertDeviceEvent(CurrentUser actor, String deviceId, String type, String result, String errorCode,
             Map<String, Object> payload, String idempotencyKey, OffsetDateTime occurredAt) {
         String key = StringUtils.hasText(idempotencyKey) ? idempotencyKey : deviceId + ":" + type + ":" + RequestContext.requireRequestId();
-        return jdbc.update("""
+        UUID eventId = UUID.randomUUID();
+        int inserted = jdbc.update("""
                 insert into client_device_events (id, device_id, user_id, department_id, idempotency_key, event_type,
                   result, error_code, request_id, local_event_id, payload_summary, occurred_at)
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?)
                 on conflict (device_id, idempotency_key) do nothing
-                """, UUID.randomUUID(), deviceId, actor.id(), actor.departmentId(), key, type, result, errorCode,
+                """, eventId, deviceId, actor.id(), actor.departmentId(), key, type, result, errorCode,
                 RequestContext.requireRequestId(), string(payload.get("localEventId")), json.write(payload), occurredAt);
+        return new InsertedDeviceEvent(eventId, inserted == 1);
     }
 
     private boolean shouldAuditDeviceEvent(String type, String errorCode) {
@@ -409,12 +430,77 @@ public class ClientDeviceService {
         return value == null ? null : String.valueOf(value);
     }
 
-    private OffsetDateTime parseTime(Object value) {
-        if (value == null) return OffsetDateTime.now();
-        try {
-            return OffsetDateTime.parse(String.valueOf(value));
-        } catch (Exception ignored) {
+    private String normalizeEventType(Object value) {
+        String type = string(value);
+        if (!StringUtils.hasText(type)) {
+            throw new EventRejectedException("invalid_event_type", null);
+        }
+        String normalized = type.trim().toUpperCase(java.util.Locale.ROOT);
+        if (!EVENT_TYPE_PATTERN.matcher(normalized).matches()) {
+            throw new EventRejectedException("invalid_event_type", null);
+        }
+        return normalized;
+    }
+
+    private String normalizeResult(Object value, String errorCode) {
+        String result = string(value);
+        if (!StringUtils.hasText(result) && StringUtils.hasText(errorCode)) {
+            return "FAILURE";
+        }
+        if (!StringUtils.hasText(result)) {
+            throw new EventRejectedException("invalid_result", null);
+        }
+        String normalized = result.trim().toUpperCase(java.util.Locale.ROOT);
+        if (!EVENT_RESULTS.contains(normalized)) {
+            throw new EventRejectedException("invalid_result", normalized);
+        }
+        if ("SUCCESS".equals(normalized) && StringUtils.hasText(errorCode)) {
+            throw new EventRejectedException("invalid_result", normalized);
+        }
+        return normalized;
+    }
+
+    private OffsetDateTime parseOccurredAt(Object value) {
+        String occurredAt = string(value);
+        if (!StringUtils.hasText(occurredAt)) {
             return OffsetDateTime.now();
+        }
+        try {
+            return OffsetDateTime.parse(occurredAt);
+        } catch (RuntimeException exception) {
+            throw new EventRejectedException("invalid_occurred_at", null);
+        }
+    }
+
+    private Map<String, Object> rejectedDeviceEvent(String idempotencyKey, EventRejectedException exception) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("idempotencyKey", nullToEmpty(idempotencyKey));
+        response.put("status", "REJECTED");
+        response.put("result", exception.result());
+        response.put("errorCode", exception.errorCode());
+        response.put("serverEventId", null);
+        return response;
+    }
+
+    private record InsertedDeviceEvent(UUID id, boolean inserted) {
+    }
+
+    private static final class EventRejectedException extends RuntimeException {
+        private final String errorCode;
+        private final String result;
+
+        private EventRejectedException(String errorCode, String result) {
+            super(errorCode);
+            this.errorCode = errorCode;
+            this.result = result;
+        }
+
+        private String errorCode() {
+            return errorCode;
+        }
+
+        private String result() {
+            return result;
         }
     }
 }

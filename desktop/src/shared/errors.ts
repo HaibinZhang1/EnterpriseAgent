@@ -8,6 +8,7 @@ export type DesktopErrorCode =
   | 'io_error'
   | 'db_error'
   | 'secure_store_unavailable'
+  | 'secure_store_corrupted'
   | 'unauthenticated'
   | 'server_unavailable'
   | 'api_error'

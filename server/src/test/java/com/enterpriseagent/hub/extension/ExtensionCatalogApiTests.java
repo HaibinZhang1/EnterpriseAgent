@@ -134,6 +134,90 @@ class ExtensionCatalogApiTests extends PostgresIntegrationTestBase {
     }
 
     @Test
+    void adminExtensionFiltersAndDetailExposeGovernanceContext() throws Exception {
+        String adminToken = login("13800000000", "Admin#123456", "ADMIN_WEB");
+        Department ownerDepartment = departmentRepository.save(new Department("治理部" + uniqueDigits(), ROOT_DEPARTMENT_ID));
+        User maintainer = createUser("137" + uniqueDigits(), ownerDepartment.getId(), Role.NORMAL_USER);
+        String extensionId = "admin-context-" + uniqueDigits();
+        createPublished(extensionId, ExtensionType.PLUGIN, "治理上下文插件",
+                VisibilityMode.AUTHORIZED_ONLY, ownerDepartment.getId(), maintainer.getId(), ScopeType.DEPARTMENT);
+        UUID extensionPk = extensionPk(extensionId);
+        UUID submissionId = UUID.randomUUID();
+        UUID revisionId = UUID.randomUUID();
+        jdbc.update("""
+                insert into activity_events (id, event_type, user_id, extension_pk, idempotency_key, payload)
+                values (?, 'DOWNLOAD_STARTED', ?, ?, ?, '{}'::jsonb)
+                """, UUID.randomUUID(), maintainer.getId(), extensionPk, "download-" + uniqueDigits());
+        jdbc.update("""
+                insert into local_events (id, user_id, device_id, extension_pk, extension_business_id, version,
+                  event_type, idempotency_key, result, error_code, payload_summary, occurred_at)
+                values (?, ?, 'dev-admin-context', ?, ?, '1.0.0', 'PLUGIN_INSTALL', ?, 'SUCCESS', null,
+                  '{"target":"codex"}'::jsonb, now())
+                """, UUID.randomUUID(), maintainer.getId(), extensionPk, extensionId, "plugin-install-" + uniqueDigits());
+        jdbc.update("""
+                insert into local_events (id, user_id, device_id, extension_pk, extension_business_id, version,
+                  event_type, idempotency_key, result, error_code, payload_summary, occurred_at)
+                values (?, ?, 'dev-admin-context', ?, ?, '1.0.0', 'MCP_CONNECTION_TEST', ?, 'FAILURE', 'timeout',
+                  '{"nextStep":"检查内网端点"}'::jsonb, now())
+                """, UUID.randomUUID(), maintainer.getId(), extensionPk, extensionId, "mcp-failure-" + uniqueDigits());
+        jdbc.update("""
+                insert into submissions (id, type, extension_type, target_extension_id, submitter_id,
+                  submitter_department_id, status, review_owner_type, current_revision_id, effective_revision_id, decided_at)
+                values (?, 'VERSION_UPDATE', 'PLUGIN', ?, ?, ?, 'APPROVED', 'SYSTEM_ADMIN', ?, ?, now())
+                """, submissionId, extensionId, maintainer.getId(), ownerDepartment.getId(), revisionId, revisionId);
+        jdbc.update("""
+                insert into submission_revisions (id, submission_id, revision_no, payload_snapshot, package_snapshot, submitted_by)
+                values (?, ?, 1, '{"schemaVersion":1,"data":{"extensionId":"%s","extensionType":"PLUGIN"}}'::jsonb,
+                  '{"schemaVersion":1,"data":{"precheck":{"definition":{"installMode":"CONFIG_PLUGIN"}}}}'::jsonb, ?)
+                """.formatted(extensionId), revisionId, submissionId, maintainer.getId());
+        jdbc.update("""
+                insert into system_prechecks (id, submission_id, revision_id, rule_status, rule_result,
+                  ai_status, ai_result_summary, ai_model, ai_prompt_version)
+                values (?, ?, ?, 'PASSED', '{"status":"PASSED"}'::jsonb, 'PASSED',
+                  '{"summary":"低风险"}'::jsonb, 'local-ai', 'v1')
+                """, UUID.randomUUID(), submissionId, revisionId);
+        jdbc.update("""
+                insert into reviews (id, submission_id, revision_id, reviewer_id, reviewer_snapshot,
+                  decision, comment, reason_codes)
+                values (?, ?, ?, ?, '{"name":"Admin"}'::jsonb, 'APPROVE', '通过', '["MANUAL_REVIEW"]'::jsonb)
+                """, UUID.randomUUID(), submissionId, revisionId, adminId());
+        jdbc.update("""
+                insert into audit_logs (id, request_id, actor_id, object_type, object_id, object_name_snapshot,
+                  action, result, reason, before_summary, after_summary)
+                values (?, 'req-admin-context', ?, 'extension', ?, ?, 'extension.ownership.transfer',
+                  'SUCCESS', '职责移交', '{"maintainer":"old"}'::jsonb, '{"maintainer":"new"}'::jsonb)
+                """, UUID.randomUUID(), adminId(), extensionPk.toString(), extensionId);
+
+        mockMvc.perform(get("/api/admin/extensions")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .param("keyword", "治理上下文")
+                        .param("type", "PLUGIN")
+                        .param("status", "PUBLISHED")
+                        .param("visibilityMode", "AUTHORIZED_ONLY")
+                        .param("ownerDepartmentId", ownerDepartment.getId().toString())
+                        .param("maintainerId", maintainer.getId().toString())
+                        .param("riskLevel", "LOW"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].extensionId").value(extensionId))
+                .andExpect(jsonPath("$.data.items[0].maintainer.name").value(maintainer.getName()))
+                .andExpect(jsonPath("$.data.items[0].ownerDepartment.name").value(ownerDepartment.getName()))
+                .andExpect(jsonPath("$.data.items[0].metrics.downloads").value(1));
+
+        mockMvc.perform(get("/api/admin/extensions/" + extensionId)
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.scope.scopeType").value("DEPARTMENT"))
+                .andExpect(jsonPath("$.data.metrics.downloads").value(1))
+                .andExpect(jsonPath("$.data.metrics.pluginInstallUsers").value(1))
+                .andExpect(jsonPath("$.data.metrics.mcpConnectionFailures").value(1))
+                .andExpect(jsonPath("$.data.reviewHistory[0].decision").value("APPROVE"))
+                .andExpect(jsonPath("$.data.aiPrecheckHistory[0].aiStatus").value("PASSED"))
+                .andExpect(jsonPath("$.data.recentAudits[0].requestId").value("req-admin-context"))
+                .andExpect(jsonPath("$.data.localEvents[0].eventType").exists())
+                .andExpect(jsonPath("$.data.audit.objectType").value("extension"));
+    }
+
+    @Test
     void departmentScopeStaysExactAndSelectedDepartmentsMayIncludeChildren() throws Exception {
         Department parent = departmentRepository.save(new Department("parent" + uniqueDigits(), ROOT_DEPARTMENT_ID));
         Department child = departmentRepository.save(new Department("child" + uniqueDigits(), parent.getId()));
@@ -471,6 +555,10 @@ class ExtensionCatalogApiTests extends PostgresIntegrationTestBase {
 
     private String uniqueDigits() {
         return UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+    }
+
+    private UUID extensionPk(String extensionId) {
+        return jdbc.queryForObject("select id from extensions where extension_id = ?", UUID.class, extensionId);
     }
 
     private String newIdempotencyKey() {

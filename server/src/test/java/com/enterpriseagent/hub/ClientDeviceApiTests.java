@@ -113,4 +113,51 @@ class ClientDeviceApiTests extends PostgresIntegrationTestBase {
         assertThat(jdbc.queryForObject("select count(*) from audit_logs where action = 'client_device.register' and device_id = ?",
                 Long.class, deviceId)).isEqualTo(1L);
     }
+
+    @Test
+    void deviceEventsRejectInvalidOccurredAtAndNormalizeFailureResult() throws Exception {
+        User user = M8TestSupport.createUser(userRepository, M8TestSupport.uniquePhone("136"), Role.NORMAL_USER);
+        String deviceId = "m8-device-event-" + java.util.UUID.randomUUID();
+        String token = M8TestSupport.login(mockMvc, user.getPhone(), "Temp#123456", "DESKTOP", deviceId);
+        String adminToken = M8TestSupport.login(mockMvc, "13800000000", "Admin#123456", "ADMIN_WEB", "admin-device-events");
+
+        mockMvc.perform(post("/api/client-devices/register")
+                        .header("Authorization", "Bearer " + token)
+                        .header("X-Client-Version", "1.0.0")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"deviceId\":\"" + deviceId + "\",\"clientVersion\":\"1.0.0\",\"arch\":\"X64\",\"installChannel\":\"STABLE\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/client-devices/events")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"deviceId":"%s","events":[
+                                  {"idempotencyKey":"bad-time","eventType":"UPDATE_HASH_FAILED","result":"FAILURE","errorCode":"hash_mismatch","occurredAt":"not-a-time"},
+                                  {"idempotencyKey":"failure-default","eventType":"UPDATE_DOWNLOAD_FAILED","errorCode":"download_failed"},
+                                  {"idempotencyKey":"blank-time","eventType":"USER_CANCELLED","result":"cancelled"}
+                                ]}
+                                """.formatted(deviceId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.results[0].status").value("REJECTED"))
+                .andExpect(jsonPath("$.data.results[0].errorCode").value("invalid_occurred_at"))
+                .andExpect(jsonPath("$.data.results[1].status").value("ACCEPTED"))
+                .andExpect(jsonPath("$.data.results[1].result").value("FAILURE"))
+                .andExpect(jsonPath("$.data.results[1].serverEventId").isString())
+                .andExpect(jsonPath("$.data.results[2].status").value("ACCEPTED"))
+                .andExpect(jsonPath("$.data.results[2].result").value("CANCELLED"));
+
+        mockMvc.perform(get("/api/admin/client-devices/" + deviceId)
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.events[0].result").exists());
+        assertThat(jdbc.queryForObject("""
+                select count(*) from client_device_events
+                 where device_id = ? and idempotency_key = 'bad-time'
+                """, Long.class, deviceId)).isZero();
+        assertThat(jdbc.queryForObject("""
+                select result from client_device_events
+                 where device_id = ? and idempotency_key = 'failure-default'
+                """, String.class, deviceId)).isEqualTo("FAILURE");
+    }
 }

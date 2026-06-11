@@ -17,6 +17,7 @@ export interface SessionUser {
   username?: string;
   displayName?: string;
   role?: string;
+  departmentId?: string;
   mustChangePassword?: boolean;
 }
 

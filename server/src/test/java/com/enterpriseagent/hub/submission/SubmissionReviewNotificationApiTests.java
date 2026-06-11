@@ -149,6 +149,177 @@ class SubmissionReviewNotificationApiTests extends PostgresIntegrationTestBase {
     }
 
     @Test
+    void submissionCreationRequiresExplicitAuthorizationScopeAndVisibility() throws Exception {
+        User submitter = createUser("136" + uniqueDigits(), Role.NORMAL_USER);
+        String token = login(submitter.getPhone(), "Temp#123456", "DESKTOP");
+        String extensionId = "fail-closed-scope-" + uniqueDigits();
+        String uploadRefs = uploadRefs(token, extensionId);
+
+        mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + token)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody(extensionId, "{}", uploadRefs)
+                                .replace("  \"authorizationScope\":{\"scopeType\":\"ALL_EMPLOYEES\",\"departments\":[]},\n", "")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("validation_failed"));
+
+        mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + token)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody(extensionId + "-missing-type", "{}", uploadRefs(token, extensionId + "-missing-type"))
+                                .replace("{\"scopeType\":\"ALL_EMPLOYEES\",\"departments\":[]}", "{\"departments\":[]}")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("validation_failed"));
+
+        mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + token)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody(extensionId + "-missing-visibility", "{}", uploadRefs(token, extensionId + "-missing-visibility"))
+                                .replace("  \"visibilityMode\":\"PUBLIC_TO_ALL_LOGGED_IN\",\n", "")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("validation_failed"));
+
+        mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + token)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody(extensionId + "-bad-dept", "{}", uploadRefs(token, extensionId + "-bad-dept"))
+                                .replace("{\"scopeType\":\"ALL_EMPLOYEES\",\"departments\":[]}",
+                                        "{\"scopeType\":\"SELECTED_DEPARTMENTS\",\"departments\":[]}")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("validation_failed"));
+    }
+
+    @Test
+    void approvalFailsForHistoricalRevisionMissingScopeOrVisibility() throws Exception {
+        User submitter = createUser("136" + uniqueDigits(), Role.NORMAL_USER);
+        String submitterToken = login(submitter.getPhone(), "Temp#123456", "DESKTOP");
+        String adminToken = login("13800000000", "Admin#123456", "ADMIN_WEB");
+
+        String missingScopeCreate = mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + submitterToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody("legacy-missing-scope-" + uniqueDigits(), "{}",
+                                uploadRefs(submitterToken, "legacy-missing-scope-" + uniqueDigits()))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String missingScopeSubmissionId = extract(missingScopeCreate, "submissionId");
+        String missingScopeRevisionId = extract(missingScopeCreate, "revisionId");
+        jdbc.update("""
+                update submission_revisions
+                   set payload_snapshot = jsonb_set(payload_snapshot, '{data}', (payload_snapshot->'data') - 'authorizationScope')
+                 where id = ?
+                """, UUID.fromString(missingScopeRevisionId));
+        mockMvc.perform(post("/api/reviews/tasks/" + missingScopeSubmissionId + "/decision")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"revisionId\":\"" + missingScopeRevisionId + "\",\"decision\":\"APPROVE\",\"comment\":\"legacy\",\"reasonCodes\":[]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("validation_failed"));
+
+        String missingVisibilityExtensionId = "legacy-missing-visibility-" + uniqueDigits();
+        String missingVisibilityCreate = mockMvc.perform(post("/api/submissions")
+                        .header("Authorization", "Bearer " + submitterToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(submissionBody(missingVisibilityExtensionId, "{}",
+                                uploadRefs(submitterToken, missingVisibilityExtensionId))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String missingVisibilitySubmissionId = extract(missingVisibilityCreate, "submissionId");
+        String missingVisibilityRevisionId = extract(missingVisibilityCreate, "revisionId");
+        jdbc.update("""
+                update submission_revisions
+                   set payload_snapshot = jsonb_set(payload_snapshot, '{data}', (payload_snapshot->'data') - 'visibilityMode')
+                 where id = ?
+                """, UUID.fromString(missingVisibilityRevisionId));
+        mockMvc.perform(post("/api/reviews/tasks/" + missingVisibilitySubmissionId + "/decision")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"revisionId\":\"" + missingVisibilityRevisionId + "\",\"decision\":\"APPROVE\",\"comment\":\"legacy\",\"reasonCodes\":[]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("validation_failed"));
+    }
+
+    @Test
+    void aiPrecheckFailurePolicyIsVisibleAndFailClosed() throws Exception {
+        User submitter = createUser("136" + uniqueDigits(), Role.NORMAL_USER);
+        String token = login(submitter.getPhone(), "Temp#123456", "DESKTOP");
+        try {
+            jdbc.update("delete from settings where key = 'ai.precheck'");
+            jdbc.update("insert into settings (key, value, version) values ('ai.precheck', '\"broken\"'::jsonb, 1)");
+            mockMvc.perform(post("/api/submissions")
+                            .header("Authorization", "Bearer " + token)
+                            .header("Idempotency-Key", UUID.randomUUID().toString())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(submissionBody("ai-config-broken-" + uniqueDigits(), "{}",
+                                    uploadRefs(token, "ai-config-broken-" + uniqueDigits()))))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("validation_failed"));
+
+            jdbc.update("delete from settings where key = 'ai.precheck'");
+            jdbc.update("insert into settings (key, value, version) values ('ai.precheck', '{\"enabled\":true}'::jsonb, 1)");
+            mockMvc.perform(post("/api/submissions")
+                            .header("Authorization", "Bearer " + token)
+                            .header("Idempotency-Key", UUID.randomUUID().toString())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(submissionBody("ai-config-missing-policy-" + uniqueDigits(), "{}",
+                                    uploadRefs(token, "ai-config-missing-policy-" + uniqueDigits()))))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("validation_failed"));
+
+            jdbc.update("delete from settings where key = 'ai.precheck'");
+            jdbc.update("""
+                    insert into settings (key, value, version)
+                    values ('ai.precheck', '{"enabled":true,"failurePolicy":"FAIL_CLOSED","promptVersion":"test"}'::jsonb, 1)
+                    """);
+            mockMvc.perform(post("/api/submissions")
+                            .header("Authorization", "Bearer " + token)
+                            .header("Idempotency-Key", UUID.randomUUID().toString())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(submissionBody("ai-fail-closed-" + uniqueDigits(), "{}",
+                                    uploadRefs(token, "ai-fail-closed-" + uniqueDigits()))))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("validation_failed"));
+
+            jdbc.update("delete from settings where key = 'ai.precheck'");
+            jdbc.update("""
+                    insert into settings (key, value, version)
+                    values ('ai.precheck', '{"enabled":true,"failurePolicy":"CONTINUE_WITH_UNAVAILABLE","promptVersion":"test"}'::jsonb, 1)
+                    """);
+            String extensionId = "ai-unavailable-" + uniqueDigits();
+            String create = mockMvc.perform(post("/api/submissions")
+                            .header("Authorization", "Bearer " + token)
+                            .header("Idempotency-Key", UUID.randomUUID().toString())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(submissionBody(extensionId, "{}", uploadRefs(token, extensionId))))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+            assertThat(jdbc.queryForObject("""
+                    select ai_status from system_prechecks where submission_id = ?
+                    """, String.class, UUID.fromString(extract(create, "submissionId")))).isEqualTo("UNAVAILABLE");
+
+            jdbc.update("delete from settings where key = 'ai.precheck'");
+            mockMvc.perform(post("/api/submissions")
+                            .header("Authorization", "Bearer " + token)
+                            .header("Idempotency-Key", UUID.randomUUID().toString())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(submissionBody("ai-config-missing-row-" + uniqueDigits(), "{}",
+                                    uploadRefs(token, "ai-config-missing-row-" + uniqueDigits()))))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("validation_failed"));
+        } finally {
+            restoreDefaultAiPrecheckSettings();
+        }
+    }
+
+    @Test
     void reviewDecisionWritesAuditOutboxMaterializesExtensionAndCreatesOwnedNotification() throws Exception {
         User submitter = createUser("136" + uniqueDigits(), Role.NORMAL_USER);
         String submitterToken = login(submitter.getPhone(), "Temp#123456", "DESKTOP");
@@ -233,6 +404,49 @@ class SubmissionReviewNotificationApiTests extends PostgresIntegrationTestBase {
     }
 
     @Test
+    void notificationOutboxRequiresCorePayloadFields() {
+        UUID eventId = UUID.randomUUID();
+        jdbc.update("""
+                insert into outbox_events (id, event_type, aggregate_type, aggregate_id, payload, status, retry_count)
+                values (?, 'NOTIFICATION_REQUESTED', 'submission', ?, ?::jsonb, 'NEW', 0)
+                """, eventId, UUID.randomUUID(), """
+                {"schemaVersion":1,"capturedAt":"2026-05-08T00:00:00Z","source":"notification","data":{"userId":"00000000-0000-0000-0000-000000000001","type":"REVIEW_DECISION"}}
+                """);
+
+        outboxConsumer.processPending();
+
+        assertThat(jdbc.queryForObject("select status from outbox_events where id = ?", String.class, eventId))
+                .isEqualTo("FAILED");
+        assertThat(jdbc.queryForObject("select last_error from outbox_events where id = ?", String.class, eventId))
+                .contains("notification payload");
+        assertThat(jdbc.queryForObject("select count(*) from notifications where user_id = ?",
+                Long.class, UUID.fromString("00000000-0000-0000-0000-000000000001"))).isZero();
+    }
+
+    @Test
+    void notificationOutboxDeadLettersPoisonPayloadAfterRetryLimit() {
+        UUID eventId = UUID.randomUUID();
+        UUID userId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        jdbc.update("""
+                insert into outbox_events (id, event_type, aggregate_type, aggregate_id, payload, status, retry_count, next_retry_at)
+                values (?, 'NOTIFICATION_REQUESTED', 'submission', ?, ?::jsonb, 'FAILED', 2, now() - interval '1 minute')
+                """, eventId, UUID.randomUUID(), """
+                {"schemaVersion":1,"capturedAt":"2026-05-08T00:00:00Z","source":"notification","data":{"userId":"00000000-0000-0000-0000-000000000001","type":"REVIEW_DECISION"}}
+                """);
+
+        outboxConsumer.processPending();
+
+        assertThat(jdbc.queryForObject("select status from outbox_events where id = ?", String.class, eventId))
+                .isEqualTo("DEAD_LETTER");
+        assertThat(jdbc.queryForObject("select retry_count from outbox_events where id = ?", Integer.class, eventId))
+                .isEqualTo(3);
+        assertThat(jdbc.queryForObject("select next_retry_at from outbox_events where id = ?", Object.class, eventId))
+                .isNull();
+        assertThat(jdbc.queryForObject("select count(*) from notifications where user_id = ?", Long.class, userId))
+                .isZero();
+    }
+
+    @Test
     void departmentAdminCanOnlyReadSubmissionsInManagementScope() throws Exception {
         Department ownerDepartment = departmentRepository.save(new Department("owner" + uniqueDigits(), ROOT_DEPARTMENT_ID));
         Department otherDepartment = departmentRepository.save(new Department("other" + uniqueDigits(), ROOT_DEPARTMENT_ID));
@@ -243,8 +457,11 @@ class SubmissionReviewNotificationApiTests extends PostgresIntegrationTestBase {
         String ownerAdminToken = login(ownerAdmin.getPhone(), "Temp#123456", "ADMIN_WEB");
         String otherAdminToken = login(otherAdmin.getPhone(), "Temp#123456", "ADMIN_WEB");
         String scopeExtensionId = "scope-skill-" + uniqueDigits();
+        String ownerScope = """
+                {"scopeType":"DEPARTMENT","departments":[{"departmentId":"%s","includeChildren":true}]}
+                """.formatted(ownerDepartment.getId());
         String body = submissionBody(scopeExtensionId, "{}", uploadRefs(submitterToken, scopeExtensionId))
-                .replace("\"scopeType\":\"ALL_EMPLOYEES\"", "\"scopeType\":\"DEPARTMENT\"");
+                .replace("{\"scopeType\":\"ALL_EMPLOYEES\",\"departments\":[]}", ownerScope);
         String create = mockMvc.perform(post("/api/submissions")
                         .header("Authorization", "Bearer " + submitterToken)
                         .header("Idempotency-Key", UUID.randomUUID().toString())
@@ -505,6 +722,16 @@ class SubmissionReviewNotificationApiTests extends PostgresIntegrationTestBase {
             return items.get(0).path(field).asText();
         }
         throw new IllegalArgumentException("Field not found in response: " + field);
+    }
+
+    private void restoreDefaultAiPrecheckSettings() {
+        jdbc.update("""
+                insert into settings (key, value, version)
+                values ('ai.precheck',
+                  '{"enabled":false,"failurePolicy":"CONTINUE_WITH_UNAVAILABLE","timeoutMs":30000,"promptVersion":"m4-default"}'::jsonb,
+                  1)
+                on conflict (key) do update set value = excluded.value, version = settings.version + 1
+                """);
     }
 
     private String uniqueDigits() {
