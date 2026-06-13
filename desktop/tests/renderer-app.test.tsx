@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { EnterpriseAgentAppView, createEnterpriseAgentActions, initialView, normalizeActionResult, resolveTheme, shouldUseLocalDetailFallback, type EnterpriseAgentActions, type EnterpriseAgentViewModel } from '../src/renderer/App';
+import { EnterpriseAgentAppView, createEnterpriseAgentActions, initialView, normalizeActionResult, resolveTheme, shouldUseLocalDetailFallback, waitForStartupReady, type EnterpriseAgentActions, type EnterpriseAgentViewModel } from '../src/renderer/App';
 import { ExtensionActionModal } from '../src/renderer/features/extension/ExtensionActionModal';
 import { ExtensionDetailDrawer } from '../src/renderer/features/extension/ExtensionDetailDrawer';
+import { MySubmissionsDrawer } from '../src/renderer/features/publish/MySubmissionsDrawer';
 import { PublishWizard, type PublishDraft } from '../src/renderer/features/publish/PublishWizard';
 import { SettingsModal } from '../src/renderer/features/settings/SettingsModal';
 import { UpdateModal } from '../src/renderer/features/update/UpdateModal';
@@ -60,6 +61,42 @@ describe('renderer app view', () => {
     expect(html).toContain('本地仓库管理');
     expect(html).not.toContain('客户端初始化失败');
     expect(html).not.toContain('req-auth-boot');
+  });
+
+  it('shows startup recovery actions for unrecoverable local service boot failures', () => {
+    const html = renderView({
+      user: undefined,
+      bootState: 'error',
+      modal: 'login',
+      bootError: { code: 'startup_failed', message: '客户端本地服务初始化超时，卡在 local-database-initialize。', requestID: 'req-startup' }
+    });
+    expect(html).toContain('客户端初始化失败');
+    expect(html).toContain('客户端恢复');
+    expect(html).toContain('清除会话');
+    expect(html).toContain('重建本地库');
+    expect(html).toContain('重新初始化');
+    expect(html).toContain('登录 Enterprise Agent Hub');
+  });
+
+  it('waits for desktop startup readiness before normal boot IPC', async () => {
+    const states = [{ status: 'starting' }, { status: 'ready', root: '/tmp/app' }];
+    const calls: unknown[] = [];
+    const ready = await waitForStartupReady(async () => {
+      const value = states.shift() ?? { status: 'ready' };
+      calls.push(value);
+      return value;
+    }, { timeoutMs: 100, intervalMs: 0 });
+    expect(calls).toHaveLength(2);
+    expect(ready).toMatchObject({ status: 'ready', root: '/tmp/app' });
+  });
+
+  it('surfaces failed desktop startup status as a recovery error', async () => {
+    await expect(waitForStartupReady(async () => ({
+      status: 'failed',
+      error: { code: 'startup_failed', message: 'local db failed', requestID: 'req-startup' }
+    }), { timeoutMs: 100, intervalMs: 0 })).rejects.toMatchObject({
+      uiError: { code: 'startup_failed', message: 'local db failed', requestID: 'req-startup' }
+    });
   });
 
   it('normalizes unauthenticated raw messages', () => {
@@ -137,13 +174,14 @@ describe('renderer app view', () => {
       />
     );
     expect(localFallback).toContain('本地记录');
-    expect(localFallback).toContain('当前显示本地扫描缓存');
+    expect(localFallback).toContain('仅本地记录，未入库');
     expect(localFallback).not.toContain('启用 Skill');
     expect(localFallback).not.toContain('取消 Star');
   });
 
-  it('falls back to local details only for local unauthenticated records', () => {
+  it('falls back to local details for local-only auth and not-found records', () => {
     expect(shouldUseLocalDetailFallback({ ...extension('local-skill', 'skill'), status: 'installed' }, { code: 'unauthenticated', message: '登录已失效，请重新登录。' })).toBe(true);
+    expect(shouldUseLocalDetailFallback({ ...extension('local-skill', 'skill'), status: 'scanned' }, { code: 'resource_not_found', message: '扩展不存在' })).toBe(true);
     expect(shouldUseLocalDetailFallback(extension('community-skill', 'skill'), { code: 'unauthenticated', message: '登录已失效，请重新登录。' })).toBe(false);
     expect(shouldUseLocalDetailFallback({ ...extension('local-skill', 'skill'), status: 'installed' }, { code: 'server_unavailable', message: '无法连接服务端，请检查网络或服务状态。' })).toBe(false);
   });
@@ -252,6 +290,27 @@ describe('renderer app view', () => {
 
     const failed = renderToStaticMarkup(<PublishWizard busy={false} error={{ message: '提交失败', requestID: 'req-publish-1' }} onClose={() => undefined} onSubmit={() => undefined} />);
     expect(failed).toContain('req-publish-1');
+  });
+
+  it('shows extension identity in my submissions', () => {
+    const html = renderToStaticMarkup(
+      <MySubmissionsDrawer
+        state="ready"
+        items={[{
+          submissionId: 'sub-1',
+          extensionType: 'SKILL',
+          status: 'PENDING_REVIEW',
+          createdAt: '2026-06-11T00:00:00Z',
+          targetExtensionId: 'skill.target',
+          extensionName: 'Target Skill'
+        }]}
+        onClose={() => undefined}
+        onRefresh={() => undefined}
+        onWithdraw={() => undefined}
+      />
+    );
+    expect(html).toContain('Target Skill (skill.target)');
+    expect(html).toContain('sub-1');
   });
 
   it('submits publish authorization scope from the current session department', async () => {

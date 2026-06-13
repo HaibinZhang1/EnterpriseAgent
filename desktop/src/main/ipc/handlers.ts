@@ -82,7 +82,11 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
     return services.apiClient.logout(context.requestID);
   });
 
-  router.register(IPC_CHANNELS.authGetSession, async () => ({ hasSession: Boolean(await services.secureStore.get('session.token')) }));
+  router.register(IPC_CHANNELS.authGetSession, async () => (
+    services.secureStore.getStartupSessionState
+      ? services.secureStore.getStartupSessionState()
+      : { hasSession: Boolean(await services.secureStore.get('session.token')) }
+  ));
   router.register(IPC_CHANNELS.authMe, (_payload, context) => services.apiClient.me(context.requestID));
   router.register(IPC_CHANNELS.authChangePassword, async (payload, context) => {
     const record = assertRecord(payload, context.requestID);

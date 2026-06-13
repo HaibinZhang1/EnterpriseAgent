@@ -47,9 +47,10 @@ describe('IPC router and preload API', () => {
 
   it('preload exposes only whitelisted grouped methods, never raw ipcRenderer or Node objects', () => {
     const api = createPreloadApi(async <T>(channel: any, _payload?: unknown, requestID?: string) => ({ success: true, data: channel as T, requestID: requestID ?? 'req' }));
-    expect(Object.keys(api).sort()).toEqual(['auth', 'catalog', 'clientUpdate', 'device', 'extension', 'local', 'logs', 'mcp', 'notifications', 'plugin', 'publish', 'settings']);
+    expect(Object.keys(api).sort()).toEqual(['auth', 'catalog', 'clientUpdate', 'device', 'extension', 'local', 'logs', 'mcp', 'notifications', 'plugin', 'publish', 'settings', 'startup']);
     expect(Object.keys(api.clientUpdate).sort()).toEqual(['cancel', 'check', 'confirmDownload', 'confirmInstall', 'getPending']);
     expect(Object.keys(api.local).sort()).toEqual(['cleanup', 'enqueueEvent', 'getOfflineState', 'getStatus', 'listLifecycle', 'listPendingEvents', 'scanInventory', 'syncPending']);
+    expect(Object.keys(api.startup).sort()).toEqual(['clearSession', 'getStatus', 'rebuildLocalDatabase', 'retry']);
     expect(JSON.stringify(api)).not.toContain('ipcRenderer');
     expect('fs' in api).toBe(false);
     expect('process' in api).toBe(false);

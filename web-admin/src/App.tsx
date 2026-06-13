@@ -393,9 +393,10 @@ function ReviewsPage() {
 
 function ReviewDetailPanel({ selected, onChanged }: { selected: ApiRecord | null; onChanged: () => void }) {
   const submissionId = selected ? safeString(read(selected, "submissionId", "id")) : "";
+  const [detailRefreshKey, setDetailRefreshKey] = useState(0);
   const resource = useResource(
     () => (submissionId ? adminApi.reviews.detail(submissionId) : Promise.resolve(null)),
-    [submissionId]
+    [submissionId, detailRefreshKey]
   );
   const [comment, setComment] = useState("");
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -410,16 +411,25 @@ function ReviewDetailPanel({ selected, onChanged }: { selected: ApiRecord | null
     setBusyAction(action);
     setError(null);
     try {
-      const revisionId = safeString(read(detail, "revisionId", "currentRevisionId", "revision.id"));
-      await adminApi.reviews.decision(submissionId, action, {
-        revisionId: revisionId || undefined,
-        comment: normalizedComment,
-        reasonCodes: normalizedComment ? ["MANUAL_REVIEW"] : []
-      });
+      await adminApi.reviews.decision(
+        submissionId,
+        action,
+        await buildFreshReviewDecisionPayload(submissionId, detail, normalizedComment)
+      );
       setComment("");
+      setDetailRefreshKey((value) => value + 1);
       onChanged();
     } catch (err) {
-      setError(normalizeError(err));
+      if (isReviewStateConflict(err)) {
+        setDetailRefreshKey((value) => value + 1);
+        onChanged();
+        setError({
+          ...normalizeError(err),
+          message: "审核状态或版本已变化，已自动刷新详情，请确认最新内容后重试。"
+        });
+      } else {
+        setError(normalizeError(err));
+      }
     } finally {
       setBusyAction(null);
     }
@@ -451,6 +461,29 @@ function ReviewDetailPanel({ selected, onChanged }: { selected: ApiRecord | null
       </ResourceState>
     </Panel>
   );
+}
+
+export function buildReviewDecisionPayload(detail: ApiRecord, comment: string): ApiRecord {
+  const revisionId = safeString(read(detail, "currentRevisionId", "revisionId", "latestRevision.id", "revision.id"));
+  return {
+    revisionId: revisionId || undefined,
+    comment,
+    reasonCodes: comment ? ["MANUAL_REVIEW"] : []
+  };
+}
+
+export async function buildFreshReviewDecisionPayload(
+  submissionId: string,
+  fallbackDetail: ApiRecord,
+  comment: string,
+  detailLoader: (submissionId: string) => Promise<ApiRecord | null> = adminApi.reviews.detail
+): Promise<ApiRecord> {
+  const latestDetail = submissionId ? await detailLoader(submissionId) : null;
+  return buildReviewDecisionPayload(latestDetail || fallbackDetail, comment);
+}
+
+export function isReviewStateConflict(error: unknown): boolean {
+  return error instanceof AdminApiError && error.code === "state_conflict";
 }
 
 export function ReviewDetailSections({ detail }: { detail: ApiRecord }) {
@@ -1022,7 +1055,7 @@ function DepartmentsPanel() {
     }
   }
 
-  async function departmentAction(departmentId: string, action: "enable" | "disable") {
+  async function departmentAction(departmentId: string, action: "enable" | "disable" | "delete") {
     try {
       await adminApi.departments.action(departmentId, action, { reason: form.reason || action });
       setRefreshKey((value) => value + 1);
@@ -1123,6 +1156,7 @@ function UsersPanel() {
                           <button type="button" onClick={() => userAction(userId, "freeze")}>冻结</button>
                           <button type="button" onClick={() => userAction(userId, "unfreeze")}>解冻</button>
                           <button type="button" onClick={() => userAction(userId, "reset")}>重置</button>
+                          <button type="button" onClick={() => userAction(userId, "delete")}>删除</button>
                         </div>
                       );
                     }
@@ -1834,7 +1868,7 @@ function Select({ value, onChange, options, ariaLabel }: { value: string; onChan
   );
 }
 
-function TreeList({ items, onAction }: { items: ApiRecord[]; onAction: (id: string, action: "enable" | "disable") => void }) {
+function TreeList({ items, onAction }: { items: ApiRecord[]; onAction: (id: string, action: "enable" | "disable" | "delete") => void }) {
   return (
     <ul className="tree-list">
       {items.map((item) => {
@@ -1847,6 +1881,7 @@ function TreeList({ items, onAction }: { items: ApiRecord[]; onAction: (id: stri
               <span>{safeString(read(item, "userCount"))} 人</span>
               <button type="button" onClick={() => onAction(id, "enable")}>启用</button>
               <button type="button" onClick={() => onAction(id, "disable")}>停用</button>
+              <button type="button" onClick={() => onAction(id, "delete")}>删除</button>
             </div>
             {Array.isArray(read(item, "children")) ? (
               <TreeList items={read(item, "children") as ApiRecord[]} onAction={onAction} />

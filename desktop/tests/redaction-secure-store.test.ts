@@ -35,12 +35,19 @@ describe('redaction and SecureStore', () => {
       const memory = new MemorySecureStore();
       await memory.set('session.token', 'memory-token');
       expect(await memory.get('session.token')).toBe('memory-token');
+      expect(await memory.getStartupSessionState()).toEqual({ hasSession: true });
       await memory.delete('session.token');
       expect(await memory.get('session.token')).toBeUndefined();
+      expect(await memory.getStartupSessionState()).toEqual({ hasSession: false });
 
       const fileStore = new SafeStorageSecureStore(path.join(temp.root, 'secure-store.json'), fakeSafeStorage);
       await fileStore.set('session.token', 'file-token');
       expect(await fileStore.get('session.token')).toBe('file-token');
+      await expect(fileStore.getStartupSessionState()).resolves.toMatchObject({
+        hasSession: false,
+        hasStoredSession: true,
+        message: expect.stringContaining('重新登录')
+      });
       expect(await readFile(path.join(temp.root, 'secure-store.json'), 'utf8')).not.toContain('file-token');
 
       const logger = new ClientLogger(path.join(temp.root, 'logs', 'desktop.log'));
@@ -81,6 +88,11 @@ describe('redaction and SecureStore', () => {
       const unavailableStore = new SafeStorageSecureStore(filePath, {
         ...fakeSafeStorage,
         isEncryptionAvailable: () => false
+      });
+      await expect(unavailableStore.getStartupSessionState()).resolves.toMatchObject({
+        hasSession: false,
+        hasStoredSession: true,
+        message: expect.stringContaining('重新登录')
       });
       await expect(unavailableStore.get('session.token')).rejects.toMatchObject({
         desktopError: { code: 'secure_store_unavailable' }

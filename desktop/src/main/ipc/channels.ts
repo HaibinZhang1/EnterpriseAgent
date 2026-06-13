@@ -40,7 +40,11 @@ export const IPC_CHANNELS = {
   clientUpdateGetPending: 'clientUpdate.getPending',
   clientUpdateConfirmDownload: 'clientUpdate.confirmDownload',
   clientUpdateCancel: 'clientUpdate.cancel',
-  clientUpdateConfirmInstall: 'clientUpdate.confirmInstall'
+  clientUpdateConfirmInstall: 'clientUpdate.confirmInstall',
+  startupGetStatus: 'startup.getStatus',
+  startupClearSession: 'startup.clearSession',
+  startupRebuildLocalDatabase: 'startup.rebuildLocalDatabase',
+  startupRetry: 'startup.retry'
 } as const;
 
 export type IpcChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS];

@@ -33,6 +33,7 @@ export function MySubmissionsDrawer({
           <thead>
             <tr>
               <th>提交</th>
+              <th>扩展</th>
               <th>类型</th>
               <th>状态</th>
               <th>时间</th>
@@ -42,9 +43,11 @@ export function MySubmissionsDrawer({
           <tbody>
             {items.map((item, index) => {
               const id = asText(item.submissionId ?? item.submissionID ?? item.id, String(index));
+              const extensionLabel = submissionExtensionLabel(item);
               return (
                 <tr key={id}>
                   <td>{id}</td>
+                  <td>{extensionLabel}</td>
                   <td>{asText(item.extensionType ?? item.type)}</td>
                   <td><StatusBadge tone={riskTone(String(item.status ?? ''))}>{statusLabel(asText(item.status))}</StatusBadge></td>
                   <td>{compactDate(asText(item.createdAt ?? item.createdTime, ''))}</td>
@@ -57,4 +60,25 @@ export function MySubmissionsDrawer({
       ) : null}
     </Drawer>
   );
+}
+
+function submissionExtensionLabel(item: Record<string, unknown>): string {
+  const request = isRecord(item.request) ? item.request : undefined;
+  const metadata = isRecord(item.metadata) ? item.metadata : isRecord(request?.metadata) ? request.metadata : undefined;
+  const name = asText(item.extensionName ?? item.name ?? metadata?.name, '');
+  const id = asText(
+    item.targetExtensionId
+      ?? item.targetExtensionID
+      ?? item.extensionId
+      ?? item.extensionID
+      ?? request?.extensionId
+      ?? request?.extensionID,
+    ''
+  );
+  if (name && id && name !== id) return `${name} (${id})`;
+  return name || id || '-';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }

@@ -8,9 +8,12 @@ import App, {
   PageRouter,
   ReviewDecisionButtons,
   ReviewDetailSections,
-  buildExtensionGovernancePayload
+  buildExtensionGovernancePayload,
+  buildFreshReviewDecisionPayload,
+  buildReviewDecisionPayload,
+  isReviewStateConflict
 } from "./App";
-import { Role, UserSummary } from "./api";
+import { AdminApiError, Role, UserSummary } from "./api";
 
 const baseUser: UserSummary = {
   id: "user-1",
@@ -134,6 +137,32 @@ describe("Web Admin renderer", () => {
     expect(html).toContain("stdio");
     expect(html).toContain("local-command");
     expect(html).toContain("42");
+  });
+
+  it("uses the latest currentRevisionId for review decisions and detects stale state conflicts", () => {
+    expect(buildReviewDecisionPayload({
+      revisionId: "rev-old",
+      currentRevisionId: "rev-new"
+    }, "需要修改")).toMatchObject({
+      revisionId: "rev-new",
+      comment: "需要修改",
+      reasonCodes: ["MANUAL_REVIEW"]
+    });
+    expect(isReviewStateConflict(new AdminApiError("revision changed", { code: "state_conflict" }))).toBe(true);
+    expect(isReviewStateConflict(new AdminApiError("other", { code: "validation_failed" }))).toBe(false);
+  });
+
+  it("refreshes review detail before building a decision payload", async () => {
+    const loader = vi.fn(async (submissionId: string) => ({
+      submissionId,
+      revisionId: "rev-old",
+      currentRevisionId: "rev-new"
+    }));
+    await expect(buildFreshReviewDecisionPayload("sub-1", { revisionId: "rev-stale" }, "同意", loader)).resolves.toMatchObject({
+      revisionId: "rev-new",
+      comment: "同意"
+    });
+    expect(loader).toHaveBeenCalledWith("sub-1");
   });
 
   it("keeps unavailable AI precheck and failed system checks visible", () => {

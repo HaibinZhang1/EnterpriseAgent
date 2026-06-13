@@ -70,6 +70,12 @@ export function createPreloadApi(invoke: PreloadInvoke) {
       confirmDownload: (requestID?: string) => invoke(IPC_CHANNELS.clientUpdateConfirmDownload, undefined, requestID),
       cancel: (reason?: string, requestID?: string) => invoke(IPC_CHANNELS.clientUpdateCancel, reason ? { reason } : undefined, requestID),
       confirmInstall: (requestID?: string) => invoke(IPC_CHANNELS.clientUpdateConfirmInstall, undefined, requestID)
+    },
+    startup: {
+      getStatus: (requestID?: string) => invoke(IPC_CHANNELS.startupGetStatus, undefined, requestID),
+      clearSession: (requestID?: string) => invoke(IPC_CHANNELS.startupClearSession, undefined, requestID),
+      rebuildLocalDatabase: (requestID?: string) => invoke(IPC_CHANNELS.startupRebuildLocalDatabase, undefined, requestID),
+      retry: (requestID?: string) => invoke(IPC_CHANNELS.startupRetry, undefined, requestID)
     }
   };
 }

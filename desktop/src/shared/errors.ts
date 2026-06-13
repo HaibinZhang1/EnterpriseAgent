@@ -9,6 +9,7 @@ export type DesktopErrorCode =
   | 'db_error'
   | 'secure_store_unavailable'
   | 'secure_store_corrupted'
+  | 'startup_failed'
   | 'unauthenticated'
   | 'server_unavailable'
   | 'api_error'
@@ -122,5 +123,5 @@ export function withRetryable(error: DesktopError, retryable: boolean): DesktopE
 }
 
 function retryableByDefault(code: DesktopErrorCode): boolean {
-  return ['server_unavailable', 'download_failed', 'plugin_download_source_failed', 'temp_store_not_writable'].includes(code);
+  return ['server_unavailable', 'startup_failed', 'download_failed', 'plugin_download_source_failed', 'temp_store_not_writable'].includes(code);
 }

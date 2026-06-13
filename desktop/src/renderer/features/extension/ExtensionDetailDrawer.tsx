@@ -40,7 +40,7 @@ export function ExtensionDetailDrawer({
             </div>
             <p>{item.description ?? item.summary ?? '暂无详情描述。'}</p>
             {item.authorizationMessage ? <ErrorState title="权限提示" error={{ message: item.authorizationMessage }} /> : null}
-            {isLocalFallback ? <p className="muted">当前显示本地扫描缓存；登录后可查看社区详情、版本历史和 Star 状态。</p> : (
+            {isLocalFallback ? <p className="muted">当前显示本地扫描缓存；仅本地记录，未入库，远端社区详情不可用。</p> : (
               <div className="card-action-row">
                 <Button tone="primary" disabled={item.authorized === false} onClick={() => onPrimaryAction(item)}>
                   {primaryActionLabel(item)}

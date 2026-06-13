@@ -21,7 +21,7 @@ import { ErrorState } from './components/ErrorState';
 import { LoadingState } from './components/LoadingState';
 import { Modal } from './components/Modal';
 import { desktopApi } from './lib/api';
-import { toUiError } from './lib/errors';
+import { toUiError, UiApiError } from './lib/errors';
 import { normalizeCatalogHome, normalizeExtension, normalizeLifecycle, normalizeNotifications, normalizePendingEvents, normalizePublishResult, normalizeSearchResults, normalizeSessionUser, normalizeUpdateState, normalizeVersions } from './lib/normalize';
 import type { AppTab, CatalogHome, DetailState, DeviceSummary, ExtensionSummary, LoadState, LocalInventoryScanSummary, LocalLifecycleSnapshot, LocalTab, NotificationItem, OfflineState, PendingEvent, PublishResult, SessionUser, UiError, UpdateState, VersionSummary } from './types/desktop';
 
@@ -81,6 +81,8 @@ export interface EnterpriseAgentViewModel {
   passwordError?: UiError;
   updateBusy: boolean;
   updateState?: UpdateState;
+  startupRecoveryBusy?: string;
+  startupRecoveryMessage?: string;
   cleanupBusy: boolean;
   cleanupError?: UiError;
   cleanupResult?: ActionResultView;
@@ -110,6 +112,9 @@ export interface EnterpriseAgentActions {
   downloadUpdate: () => void;
   cancelUpdate: () => void;
   installUpdate: () => void;
+  clearStartupSession: () => void;
+  rebuildStartupDatabase: () => void;
+  retryStartup: () => void;
   submitPublish: (draft: PublishDraft) => void;
   resetPublishState: () => void;
   refreshSubmissions: () => void;
@@ -179,6 +184,8 @@ export function App() {
     async function boot() {
       setView((current) => ({ ...current, bootState: 'loading' }));
       try {
+        await waitForStartupReady();
+        if (!active) return;
         const [session, device, offline, config, pendingUpdate] = await Promise.all([
           desktopApi.auth.getSession(),
           desktopApi.device.info(),
@@ -391,6 +398,46 @@ export function createEnterpriseAgentActions({
         setView((current) => ({ ...current, updateBusy: false, updateState: { ...current.updateState, error: toUiError(error) } }));
       }
     },
+    clearStartupSession: async () => {
+      setView((current) => ({ ...current, startupRecoveryBusy: 'clear-session', startupRecoveryMessage: undefined }));
+      try {
+        const result = await desktopApi.startup.clearSession();
+        const message = isRecord(result) && typeof result.message === 'string'
+          ? result.message
+          : '已清除本地会话，请重新登录。';
+        setView((current) => ({
+          ...current,
+          startupRecoveryBusy: undefined,
+          startupRecoveryMessage: message,
+          bootState: 'ready',
+          bootError: undefined,
+          user: undefined,
+          modal: 'login'
+        }));
+      } catch (error) {
+        setView((current) => ({ ...current, startupRecoveryBusy: undefined, bootError: toUiError(error), modal: 'login' }));
+      }
+    },
+    rebuildStartupDatabase: async () => {
+      setView((current) => ({ ...current, startupRecoveryBusy: 'rebuild-db', startupRecoveryMessage: undefined }));
+      try {
+        await desktopApi.startup.rebuildLocalDatabase();
+        await desktopApi.startup.retry();
+        setView((current) => ({ ...current, startupRecoveryBusy: undefined, startupRecoveryMessage: '已重建本地库，正在重新初始化客户端。', bootState: 'loading' }));
+        reloadRendererSoon();
+      } catch (error) {
+        setView((current) => ({ ...current, startupRecoveryBusy: undefined, bootError: toUiError(error) }));
+      }
+    },
+    retryStartup: async () => {
+      setView((current) => ({ ...current, startupRecoveryBusy: 'retry', startupRecoveryMessage: undefined, bootState: 'loading' }));
+      try {
+        await desktopApi.startup.retry();
+        reloadRendererSoon();
+      } catch (error) {
+        setView((current) => ({ ...current, startupRecoveryBusy: undefined, bootError: toUiError(error) }));
+      }
+    },
     submitPublish: async (draft) => {
       setView((current) => ({ ...current, publishBusy: true, publishError: undefined, publishResult: undefined }));
       try {
@@ -494,7 +541,18 @@ export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAg
       onToggleTheme={handleToggleTheme}
     >
       {model.bootState === 'loading' && !model.user ? <main className="page"><LoadingState label="正在初始化客户端" /></main> : null}
-      {showFatalBootError ? <main className="page"><ErrorState error={model.bootError} title="客户端初始化失败" /></main> : null}
+      {showFatalBootError ? (
+        <main className="page">
+          <ErrorState error={model.bootError} title="客户端初始化失败" />
+          <StartupRecoveryPanel
+            busy={model.startupRecoveryBusy}
+            message={model.startupRecoveryMessage}
+            onClearSession={actions.clearStartupSession}
+            onRebuildDatabase={actions.rebuildStartupDatabase}
+            onRetry={actions.retryStartup}
+          />
+        </main>
+      ) : null}
       {model.activeTab === 'agent' ? (
         <AgentHomePage
           user={model.user}
@@ -641,6 +699,42 @@ function AccountMenu({
   );
 }
 
+function StartupRecoveryPanel({
+  busy,
+  message,
+  onClearSession,
+  onRebuildDatabase,
+  onRetry
+}: {
+  busy?: string;
+  message?: string;
+  onClearSession: () => void;
+  onRebuildDatabase: () => void;
+  onRetry: () => void;
+}) {
+  return (
+    <section className="panel" aria-label="客户端恢复">
+      <header className="section-header">
+        <h2>客户端恢复</h2>
+        <span className="meta">本地服务未就绪</span>
+      </header>
+      <p className="muted">可先清除旧会话后重新登录；若本地库异常，可重建本地库并重新初始化。</p>
+      {message ? <p className="success-text">{message}</p> : null}
+      <div className="card-action-row">
+        <Button onClick={onClearSession} disabled={!!busy}>
+          {busy === 'clear-session' ? '处理中' : '清除会话'}
+        </Button>
+        <Button onClick={onRebuildDatabase} disabled={!!busy}>
+          {busy === 'rebuild-db' ? '处理中' : '重建本地库'}
+        </Button>
+        <Button tone="primary" onClick={onRetry} disabled={!!busy}>
+          {busy === 'retry' ? '处理中' : '重新初始化'}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 export function initialView(): EnterpriseAgentViewModel {
   return {
     bootState: 'idle',
@@ -692,6 +786,40 @@ export function resolveTheme(preference: unknown, systemPrefersLight: boolean): 
   if (normalized === 'glass-light') return 'glass-light';
   if (normalized === 'system' && systemPrefersLight) return 'glass-light';
   return 'glass-dark';
+}
+
+export async function waitForStartupReady(
+  statusLoader: () => Promise<unknown> = desktopApi.startup.status,
+  options: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<Record<string, unknown>> {
+  const timeoutMs = options.timeoutMs ?? 9000;
+  const intervalMs = options.intervalMs ?? 150;
+  const startedAt = Date.now();
+  let lastStatus: Record<string, unknown> | undefined;
+  while (Date.now() - startedAt <= timeoutMs) {
+    const status = await statusLoader();
+    const record = isRecord(status) ? status : {};
+    lastStatus = record;
+    const state = str(record.status);
+    if (state === 'ready') return record;
+    if (state === 'failed') throw startupStatusError(record);
+    await delay(intervalMs);
+  }
+  throw new UiApiError({
+    code: 'startup_failed',
+    message: '客户端本地服务初始化超时，请稍后重试。',
+    details: lastStatus
+  });
+}
+
+function startupStatusError(record: Record<string, unknown>): UiApiError {
+  const error = isRecord(record.error) ? record.error : {};
+  return new UiApiError({
+    code: str(error.code) ?? 'startup_failed',
+    message: str(error.message) ?? '客户端本地服务初始化失败。',
+    requestID: str(error.requestID),
+    details: error.details ?? record
+  });
 }
 
 function normalizeTheme(value: unknown): 'glass-dark' | 'glass-light' | 'system' {
@@ -850,8 +978,17 @@ export function isRecoverableBootError(error?: UiError): boolean {
 }
 
 export function shouldUseLocalDetailFallback(item: ExtensionSummary, error?: UiError): boolean {
-  if (error?.code !== 'unauthenticated') return false;
+  if (error?.code !== 'unauthenticated' && error?.code !== 'resource_not_found') return false;
   return isLocalOnlyStatus(item.status);
+}
+
+function reloadRendererSoon(): void {
+  if (typeof window === 'undefined') return;
+  window.setTimeout(() => window.location.reload(), 150);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
 }
 
 function localFallbackVersions(item: ExtensionSummary): VersionSummary[] {

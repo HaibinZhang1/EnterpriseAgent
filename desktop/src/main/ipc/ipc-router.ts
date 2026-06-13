@@ -34,7 +34,7 @@ export class IpcRouter {
   }
 }
 
-export function registerElectronIpc(ipcMain: Pick<IpcMain, 'handle'>, router: IpcRouter): void {
+export function registerElectronIpc(ipcMain: Pick<IpcMain, 'handle'>, router: Pick<IpcRouter, 'invoke'>): void {
   ipcMain.handle('enterprise-agent:invoke', (_event, request: IpcBridgeRequest) => {
     return router.invoke(request.channel, request.payload, { requestID: request.requestID });
   });

@@ -60,6 +60,12 @@ export const desktopApi = {
     download: () => call('updateDownload', window.enterpriseAgent.clientUpdate.confirmDownload(createRequestId('updateDownload'))),
     cancel: (reason?: string) => call('updateCancel', window.enterpriseAgent.clientUpdate.cancel(reason, createRequestId('updateCancel'))),
     install: () => call('updateInstall', window.enterpriseAgent.clientUpdate.confirmInstall(createRequestId('updateInstall')))
+  },
+  startup: {
+    status: () => call('startupStatus', window.enterpriseAgent.startup.getStatus(createRequestId('startupStatus'))),
+    clearSession: () => call('startupClearSession', window.enterpriseAgent.startup.clearSession(createRequestId('startupClearSession'))),
+    rebuildLocalDatabase: () => call('startupRebuildLocalDatabase', window.enterpriseAgent.startup.rebuildLocalDatabase(createRequestId('startupRebuildLocalDatabase'))),
+    retry: () => call('startupRetry', window.enterpriseAgent.startup.retry(createRequestId('startupRetry')))
   }
 };
 

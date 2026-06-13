@@ -8,6 +8,7 @@ export interface SecureStore {
   get(key: SecureStoreKey): Promise<string | undefined>;
   set(key: SecureStoreKey, value: string): Promise<void>;
   delete(key: SecureStoreKey): Promise<void>;
+  getStartupSessionState?(): Promise<{ hasSession: boolean; hasStoredSession?: boolean; message?: string }>;
 }
 
 export class MemorySecureStore implements SecureStore {
@@ -23,6 +24,10 @@ export class MemorySecureStore implements SecureStore {
 
   async delete(key: SecureStoreKey): Promise<void> {
     this.values.delete(key);
+  }
+
+  async getStartupSessionState(): Promise<{ hasSession: boolean }> {
+    return { hasSession: this.values.has('session.token') };
   }
 }
 
@@ -66,6 +71,16 @@ export class SafeStorageSecureStore implements SecureStore {
     const file = await this.readFile();
     delete file.entries[key];
     await this.writeFile(file);
+  }
+
+  async getStartupSessionState(): Promise<{ hasSession: false; hasStoredSession: boolean; message?: string }> {
+    const file = await this.readFile();
+    const hasStoredSession = Boolean(file.entries['session.token']);
+    return {
+      hasSession: false,
+      hasStoredSession,
+      message: hasStoredSession ? '已跳过旧本地会话自动恢复，请重新登录。' : undefined
+    };
   }
 
   private assertAvailable(): void {

@@ -37,6 +37,13 @@ export interface CreateDesktopServicesOptions {
   signatureVerifier?: SignatureVerifier;
   updateLauncher?: ClientUpdateLauncher;
   heartbeatIntervalMs?: number;
+  startupReporter?: (event: StartupStepEvent) => void;
+}
+
+export interface StartupStepEvent {
+  step: string;
+  status: 'start' | 'complete' | 'failed';
+  error?: unknown;
 }
 
 export interface DesktopServices {
@@ -65,17 +72,17 @@ export interface DesktopServices {
 }
 
 export async function createDesktopServices(options: CreateDesktopServicesOptions = {}): Promise<DesktopServices> {
-  const root = resolveDefaultAppRoot({ app: options.app, rootOverride: options.rootOverride });
-  const paths = await initializeAppDataLayout(root);
+  const root = runStartupStepSync('resolve-app-root', options.startupReporter, () => resolveDefaultAppRoot({ app: options.app, rootOverride: options.rootOverride }));
+  const paths = await runStartupStep('initialize-app-data-layout', options.startupReporter, () => initializeAppDataLayout(root));
   const deviceStore = new DeviceIdStore(paths, options.clientVersion ?? '0.1.0-m6');
-  const deviceInfo = await deviceStore.getOrCreate();
+  const deviceInfo = await runStartupStep('device-id-store', options.startupReporter, () => deviceStore.getOrCreate());
   const db = new LocalDatabase(paths.localDbFile);
-  await db.initialize();
-  const logger = new ClientLogger(path.join(paths.logsDir, 'desktop.log'));
-  const localConfig = await readLocalConfig(paths.configFile, logger);
-  const secureStore = options.safeStorage
+  await runStartupStep('local-database-initialize', options.startupReporter, () => db.initialize());
+  const logger = runStartupStepSync('client-logger-create', options.startupReporter, () => new ClientLogger(path.join(paths.logsDir, 'desktop.log')));
+  const localConfig = await runStartupStep('read-local-config', options.startupReporter, () => readLocalConfig(paths.configFile, logger));
+  const secureStore = runStartupStepSync('secure-store-create', options.startupReporter, () => options.safeStorage
     ? new SafeStorageSecureStore(path.join(paths.root, 'secure-store.json'), options.safeStorage)
-    : new MemorySecureStore();
+    : new MemorySecureStore());
   const apiClient = new ApiClient({
     baseURL: options.baseURL ?? localConfig.baseURL ?? 'http://localhost:8080',
     getSessionToken: () => secureStore.get('session.token'),
@@ -159,6 +166,30 @@ export async function createDesktopServices(options: CreateDesktopServicesOption
     secureStore,
     skillService
   };
+}
+
+async function runStartupStep<T>(step: string, reporter: CreateDesktopServicesOptions['startupReporter'], action: () => Promise<T>): Promise<T> {
+  reporter?.({ step, status: 'start' });
+  try {
+    const value = await action();
+    reporter?.({ step, status: 'complete' });
+    return value;
+  } catch (error) {
+    reporter?.({ step, status: 'failed', error });
+    throw error;
+  }
+}
+
+function runStartupStepSync<T>(step: string, reporter: CreateDesktopServicesOptions['startupReporter'], action: () => T): T {
+  reporter?.({ step, status: 'start' });
+  try {
+    const value = action();
+    reporter?.({ step, status: 'complete' });
+    return value;
+  } catch (error) {
+    reporter?.({ step, status: 'failed', error });
+    throw error;
+  }
 }
 
 async function readLocalConfig(file: string, logger: ClientLogger): Promise<{ baseURL?: string }> {
