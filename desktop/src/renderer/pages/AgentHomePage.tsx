@@ -2,13 +2,12 @@ import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { StatusBadge } from '../components/StatusBadge';
 import { asText } from '../lib/formatting';
-import type { AppTab, DeviceSummary, OfflineState, PendingEvent, SessionUser, UpdateState } from '../types/desktop';
+import type { AppTab, DeviceSummary, OfflineState, SessionUser, UpdateState } from '../types/desktop';
 
 export function AgentHomePage({
   user,
   device,
   offline,
-  pendingEvents,
   updateState,
   onGo,
   onOpenSettings,
@@ -17,7 +16,6 @@ export function AgentHomePage({
   user?: SessionUser;
   device?: DeviceSummary;
   offline?: OfflineState;
-  pendingEvents: PendingEvent[];
   updateState?: UpdateState;
   onGo: (tab: AppTab) => void;
   onOpenSettings: () => void;
@@ -53,11 +51,11 @@ export function AgentHomePage({
 
         <Card>
           <div className="section-header">
-            <h3>本地事件队列</h3>
-            <StatusBadge tone={pendingEvents.length > 0 ? 'warn' : 'ok'}>{pendingEvents.length}</StatusBadge>
+            <h3>本地管理</h3>
+            <StatusBadge tone="info">本机</StatusBadge>
           </div>
-          <p className="muted">待同步事件会在网络恢复后由 Desktop Backend 同步到服务端。</p>
-          <Button onClick={() => onGo('local')}>查看事件</Button>
+          <p className="muted">查看本机已安装扩展、工具和项目配置。</p>
+          <Button onClick={() => onGo('local')}>查看本地</Button>
         </Card>
 
         <Card>

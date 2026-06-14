@@ -22,8 +22,8 @@ import { LoadingState } from './components/LoadingState';
 import { Modal } from './components/Modal';
 import { desktopApi } from './lib/api';
 import { toUiError, UiApiError } from './lib/errors';
-import { normalizeCatalogHome, normalizeExtension, normalizeLifecycle, normalizeNotifications, normalizePendingEvents, normalizePublishResult, normalizeSearchResults, normalizeSessionUser, normalizeUpdateState, normalizeVersions } from './lib/normalize';
-import type { AppTab, CatalogHome, DetailState, DeviceSummary, ExtensionSummary, LoadState, LocalInventoryScanSummary, LocalLifecycleSnapshot, LocalTab, NotificationItem, OfflineState, PendingEvent, PublishResult, RememberedLoginState, SessionUser, UiError, UpdateState, VersionSummary } from './types/desktop';
+import { normalizeCatalogHome, normalizeExtension, normalizeLifecycle, normalizeNotifications, normalizePublishResult, normalizeSearchResults, normalizeSessionUser, normalizeUpdateState, normalizeVersions } from './lib/normalize';
+import type { AppTab, CatalogHome, DetailState, DeviceSummary, ExtensionSummary, LoadState, LocalInventoryScanSummary, LocalLifecycleSnapshot, LocalTab, NotificationItem, OfflineState, PublishResult, RememberedLoginState, SessionUser, UiError, UpdateState, VersionSummary } from './types/desktop';
 
 const emptyHome: CatalogHome = { skills: [], mcps: [], plugins: [], hot: [], stars: [], downloads: [] };
 const emptyLifecycle: LocalLifecycleSnapshot = { extensions: [], versions: [], targets: [], tools: [], projects: [], mcpInstallations: [], pluginInstallations: [] };
@@ -58,7 +58,6 @@ export interface EnterpriseAgentViewModel {
   user?: SessionUser;
   device?: DeviceSummary;
   offline?: OfflineState;
-  pendingEvents: PendingEvent[];
   lifecycle: LocalLifecycleSnapshot;
   localScanState: LoadState;
   localScanSummary?: LocalInventoryScanSummary;
@@ -151,13 +150,14 @@ export function App() {
     } catch (error) {
       scanError = toUiError(error);
     }
-    const [events, lifecycle] = await Promise.allSettled([desktopApi.local.events(), desktopApi.local.lifecycle()]);
+    const lifecycle = await desktopApi.local.lifecycle()
+      .then((value) => ({ status: 'fulfilled' as const, value }))
+      .catch(() => ({ status: 'rejected' as const }));
     setView((current) => ({
       ...current,
       localScanState: scanError ? 'error' : 'ready',
       localScanSummary: scanSummary ?? current.localScanSummary,
       localScanError: scanError,
-      pendingEvents: events.status === 'fulfilled' ? normalizePendingEvents(events.value) : current.pendingEvents,
       lifecycle: lifecycle.status === 'fulfilled' ? normalizeLifecycle(lifecycle.value) : current.lifecycle
     }));
   }, []);
@@ -583,7 +583,6 @@ export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAg
           user={model.user}
           device={model.device}
           offline={model.offline}
-          pendingEvents={model.pendingEvents}
           updateState={model.updateState}
           onGo={actions.changeTab}
           onOpenSettings={() => actions.openModal('settings')}
@@ -621,7 +620,6 @@ export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAg
         <main className="page" aria-label="本地" style={{ padding: 0, height: '100%', overflow: 'hidden' }}>
           <LocalExtensionsPage
             snapshot={model.lifecycle}
-            pendingEvents={model.pendingEvents}
             offline={model.offline?.online === false}
             onCleanup={actions.requestCleanup}
             onOpenDetail={actions.openDetail}
@@ -792,7 +790,6 @@ export function initialView(): EnterpriseAgentViewModel {
     catalogState: 'idle',
     catalogHome: emptyHome,
     rememberedLogin: { remembered: false, autoLogin: false },
-    pendingEvents: [],
     lifecycle: emptyLifecycle,
     localScanState: 'idle',
     actionBusy: false,
@@ -937,7 +934,6 @@ export function normalizeActionResult(value: unknown): ActionResultView {
     planTitle: typeof summary.title === 'string' ? summary.title : typeof plan.operation === 'string' ? plan.operation : undefined,
     artifactPath: str(packageInfo.packagePath ?? copyStep?.targetPath ?? linkStep?.sourcePath),
     targetPath: str(linkStep?.targetPath),
-    syncStatus: result.status === 'success' ? '本地记录已更新；如事件仍排队，可在本地页查看同步状态。' : undefined,
     warnings,
     manualInstructions: manual.instructions,
     manualInstructionsUrl: manual.instructionsUrl,

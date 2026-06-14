@@ -113,17 +113,6 @@ export interface LocalInventoryScanSummary {
   };
 }
 
-export interface PendingEvent {
-  id?: string;
-  idempotencyKey?: string;
-  extensionID?: string;
-  eventType?: string;
-  result?: string;
-  status?: string;
-  errorCode?: string;
-  createdAt?: string;
-}
-
 export interface NotificationItem {
   id: string;
   title: string;

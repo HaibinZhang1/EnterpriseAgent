@@ -11,7 +11,6 @@ export interface ActionResultView {
   planTitle?: string;
   artifactPath?: string;
   targetPath?: string;
-  syncStatus?: string;
   warnings: string[];
   steps: Array<{ stepId?: string; action?: string; status?: string; message?: string }>;
   manualInstructions?: string;
@@ -132,11 +131,10 @@ function ActionResult({ result, onOpenLocal }: { result: ActionResultView; onOpe
         <StatusBadge tone={result.status === 'success' ? 'ok' : result.status === 'dry_run' ? 'info' : 'warn'}>{result.status ?? 'planned'}</StatusBadge>
       </header>
       {result.warnings.length > 0 ? <p className="muted">{result.warnings.join('；')}</p> : null}
-      {(result.artifactPath || result.targetPath || result.syncStatus) ? (
+      {(result.artifactPath || result.targetPath) ? (
         <dl className="key-value-list">
           {result.artifactPath ? <><dt>artifact</dt><dd>{result.artifactPath}</dd></> : null}
           {result.targetPath ? <><dt>目标路径</dt><dd>{result.targetPath}</dd></> : null}
-          {result.syncStatus ? <><dt>同步状态</dt><dd>{result.syncStatus}</dd></> : null}
         </dl>
       ) : null}
       {(result.artifactPath || result.targetPath || onOpenLocal) ? (

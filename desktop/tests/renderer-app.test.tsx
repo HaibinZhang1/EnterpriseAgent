@@ -212,11 +212,10 @@ describe('renderer app view', () => {
     expect(shouldUseLocalDetailFallback({ ...extension('local-skill', 'skill'), status: 'installed' }, { code: 'server_unavailable', message: '无法连接服务端，请检查网络或服务状态。' })).toBe(false);
   });
 
-  it('shows local pending events, offline server-action warning, and cleanup for scope-reduced entries', () => {
+  it('keeps local event sync hidden while showing offline warning and cleanup for scope-reduced entries', () => {
     const html = renderView({
       activeTab: 'local',
       offline: { online: false },
-      pendingEvents: [{ eventType: 'SKILL_ENABLE', extensionID: 'skill-one', status: 'queued' }],
       lifecycle: {
         extensions: [{ extensionId: 'skill-one', name: 'Skill One', status: 'scope_reduced', updatedAt: '2026-05-25T00:00:00Z' }],
         versions: [],
@@ -229,7 +228,9 @@ describe('renderer app view', () => {
     });
     expect(html).toContain('当前离线');
     expect(html).toContain('重新扫描');
-    expect(html).toContain('SKILL_ENABLE');
+    expect(html).not.toContain('事件同步队列');
+    expect(html).not.toContain('待同步事件');
+    expect(html).not.toContain('SKILL_ENABLE');
     expect(html).toContain('授权收缩');
     expect(html).toContain('本地清理');
   });
@@ -281,7 +282,6 @@ describe('renderer app view', () => {
           planTitle: 'Enable Skill',
           artifactPath: '/tmp/skill-one.package',
           targetPath: '/Users/alice/.codex/skills/skill-one',
-          syncStatus: '本地记录已更新；如事件仍排队，可在本地页查看同步状态。',
           warnings: [],
           steps: []
         }}
@@ -295,6 +295,7 @@ describe('renderer app view', () => {
     expect(html).toContain('current.json 负责指向当前版本');
     expect(html).toContain('复制目标路径');
     expect(html).toContain('查看本地');
+    expect(html).not.toContain('同步状态');
   });
 
   it('renders publish wizard steps, fixed form labels, success IDs, and failure errors', () => {

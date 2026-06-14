@@ -5,15 +5,14 @@ import { StatusBadge } from '../components/StatusBadge';
 import { ErrorState } from '../components/ErrorState';
 import { asText, compactDate, riskTone, statusLabel, extensionKindLabel } from '../lib/formatting';
 import { formatLocalDetailDescription } from '../lib/localDetail';
-import type { LocalLifecycleSnapshot, PendingEvent, ExtensionSummary, LoadState, LocalInventoryScanSummary, UiError } from '../types/desktop';
+import type { LocalLifecycleSnapshot, ExtensionSummary, LoadState, LocalInventoryScanSummary, UiError } from '../types/desktop';
 import { LocalProjectsPage } from './LocalProjectsPage';
 import { LocalToolsPage } from './LocalToolsPage';
 
-type LocalPageTab = 'skill' | 'mcp' | 'plugin' | 'project' | 'event';
+type LocalPageTab = 'skill' | 'mcp' | 'plugin' | 'project';
 
 export function LocalExtensionsPage({
   snapshot,
-  pendingEvents,
   offline,
   onCleanup,
   onOpenDetail,
@@ -23,7 +22,6 @@ export function LocalExtensionsPage({
   onRefreshLocal
 }: {
   snapshot: LocalLifecycleSnapshot;
-  pendingEvents: PendingEvent[];
   offline: boolean;
   onCleanup: (row: Record<string, unknown>) => void;
   onOpenDetail?: (item: ExtensionSummary) => void;
@@ -122,12 +120,6 @@ export function LocalExtensionsPage({
         }
       }
 
-      const relatedEvents = pendingEvents.filter(e => String(e.extensionID) === extensionId);
-      const failedEvent = relatedEvents.find(e => e.status === 'failed' || e.errorCode);
-      if (failedEvent && !errorSummary) {
-        errorSummary = `事件同步失败: ${failedEvent.errorCode || failedEvent.status}`;
-      }
-
       const name = asText(baseExt?.name || relatedTargets[0]?.name || relatedMcps[0]?.name || relatedPlugins[0]?.name || extensionId);
       const summary = asText(baseExt?.summary || relatedTargets[0]?.summary || relatedMcps[0]?.summary || relatedPlugins[0]?.summary || '本地导入的扩展实例');
 
@@ -148,7 +140,7 @@ export function LocalExtensionsPage({
         relatedPlugins
       };
     });
-  }, [snapshot, pendingEvents]);
+  }, [snapshot]);
 
   // Step 1: Filter by SaaS left Sidebar active tab
   const tabEntries = useMemo(() => {
@@ -209,11 +201,10 @@ export function LocalExtensionsPage({
     { id: 'skill', label: 'Skills 技能', icon: '⚡', count: allLocalEntries.filter(e => e.kind === 'skill').length },
     { id: 'mcp', label: 'MCP 服务', icon: '🔌', count: allLocalEntries.filter(e => e.kind === 'mcp').length },
     { id: 'plugin', label: '插件 Plugins', icon: '⚙️', count: allLocalEntries.filter(e => e.kind === 'plugin').length },
-    { id: 'project', label: '本地项目', icon: '📁', count: snapshot.projects?.length ?? 0 },
-    { id: 'event', label: '事件同步队列', icon: '📊', count: pendingEvents?.length ?? 0 }
+    { id: 'project', label: '本地项目', icon: '📁', count: snapshot.projects?.length ?? 0 }
   ];
 
-  const activeLabel = activeTab === 'skill' ? 'Skill 技能' : activeTab === 'mcp' ? 'MCP 服务' : activeTab === 'plugin' ? 'Plugin 原生插件' : activeTab === 'project' ? '关联项目' : '同步事件';
+  const activeLabel = activeTab === 'skill' ? 'Skill 技能' : activeTab === 'mcp' ? 'MCP 服务' : activeTab === 'plugin' ? 'Plugin 原生插件' : '关联项目';
   const isExtensionTab = activeTab === 'skill' || activeTab === 'mcp' || activeTab === 'plugin';
   const scanSummaryText = formatScanSummary(localScanSummary);
 
@@ -257,10 +248,6 @@ export function LocalExtensionsPage({
         {activeTab === 'project' ? (
           <div style={{ flex: 1, overflowY: 'auto' }}>
             <LocalProjectsPage snapshot={snapshot} />
-          </div>
-        ) : activeTab === 'event' ? (
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            <PendingEventsPanel events={pendingEvents} />
           </div>
         ) : (
           /* Main Extensions (Skills, MCPs, Plugins) view */
@@ -318,17 +305,9 @@ export function LocalExtensionsPage({
             </div>
 
             {(localScanState === 'loading' || scanSummaryText) ? (
-              <div className="pending-event-summary" aria-live="polite" data-testid="local-scan-summary">
+              <div className="local-scan-summary" aria-live="polite" data-testid="local-scan-summary">
                 <span className="filter-label">扫描状态</span>
                 <span className="meta">{localScanState === 'loading' ? '正在扫描本地目录' : scanSummaryText}</span>
-              </div>
-            ) : null}
-
-            {pendingEvents.length > 0 ? (
-              <div className="pending-event-summary">
-                <span className="filter-label">待同步事件</span>
-                <span className="meta">{pendingEvents.length} 条</span>
-                <code>{pendingEvents.map(event => event.eventType ?? 'UNKNOWN_EVENT').join(' / ')}</code>
               </div>
             ) : null}
 
@@ -576,43 +555,6 @@ export function LocalExtensionsPage({
           </>
         )}
       </div>
-    </div>
-  );
-}
-
-function PendingEventsPanel({ events }: { events: PendingEvent[] }) {
-  return (
-    <div className="panel" style={{ margin: 0, padding: '16px' }}>
-      <header className="section-header" style={{ marginBottom: '16px' }}>
-        <h2>本地事件同步队列</h2>
-        <span className="meta">{events.length} 条待同步记录</span>
-      </header>
-      {events.length === 0 ? <EmptyState title="同步队列已清空" message="所有本地操作事件均已安全同步至云端。" /> : (
-        <table className="table" style={{ fontSize: '13px' }}>
-          <thead>
-            <tr>
-              <th>事件动作</th>
-              <th>关联扩展ID</th>
-              <th>同步状态</th>
-              <th>网络错误/返回摘要</th>
-            </tr>
-          </thead>
-          <tbody>
-            {events.map((event, index) => (
-              <tr key={event.id ?? event.idempotencyKey ?? index}>
-                <td><strong>{event.eventType ?? '-'}</strong></td>
-                <td><code>{event.extensionID ?? '-'}</code></td>
-                <td>
-                  <StatusBadge tone={riskTone(event.status ?? event.result)}>
-                    {event.status ?? event.result ?? '待同步'}
-                  </StatusBadge>
-                </td>
-                <td style={{ color: 'var(--color-danger)' }}>{event.errorCode ?? '-'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
     </div>
   );
 }

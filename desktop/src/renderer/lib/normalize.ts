@@ -1,4 +1,4 @@
-import type { CatalogHome, ExtensionKind, ExtensionSummary, LocalLifecycleSnapshot, NotificationItem, PendingEvent, PublishResult, SessionUser, UpdateState, VersionSummary } from '../types/desktop';
+import type { CatalogHome, ExtensionKind, ExtensionSummary, LocalLifecycleSnapshot, NotificationItem, PublishResult, SessionUser, UpdateState, VersionSummary } from '../types/desktop';
 
 export function normalizeSessionUser(value: unknown): SessionUser | undefined {
   if (!isRecord(value)) return undefined;
@@ -86,23 +86,6 @@ export function normalizeLifecycle(value: unknown): LocalLifecycleSnapshot {
     mcpInstallations: records(record.mcpInstallations),
     pluginInstallations: records(record.pluginInstallations)
   };
-}
-
-export function normalizePendingEvents(value: unknown): PendingEvent[] {
-  const raw = Array.isArray(value) ? value : [];
-  return raw.map((item) => {
-    const record = isRecord(item) ? item : {};
-    return {
-      id: str(record.id),
-      idempotencyKey: str(record.idempotencyKey),
-      extensionID: str(record.extensionID ?? record.extensionId),
-      eventType: str(record.eventType),
-      result: str(record.result),
-      status: str(record.status),
-      errorCode: str(record.errorCode),
-      createdAt: str(record.createdAt ?? record.created_at)
-    };
-  });
 }
 
 export function normalizeNotifications(value: unknown): NotificationItem[] {

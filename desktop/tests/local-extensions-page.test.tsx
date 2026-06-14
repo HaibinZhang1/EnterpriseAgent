@@ -1,14 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { LocalExtensionsPage } from '../src/renderer/pages/LocalExtensionsPage';
-import type { LocalLifecycleSnapshot, PendingEvent } from '../src/renderer/types/desktop';
+import type { LocalLifecycleSnapshot } from '../src/renderer/types/desktop';
 
 describe('local extensions page', () => {
   it('renders stable local skill controls without hover-only actions', () => {
     const html = renderToStaticMarkup(
       <LocalExtensionsPage
         snapshot={snapshot()}
-        pendingEvents={pendingEvents()}
         offline={false}
         localScanState="ready"
         localScanSummary={{
@@ -23,6 +22,9 @@ describe('local extensions page', () => {
 
     expect(html).toContain('aria-label="打开本地分类：Skills 技能"');
     expect(html).toContain('aria-label="筛选本地Skill 技能：异常"');
+    expect(html).not.toContain('事件同步队列');
+    expect(html).not.toContain('待同步事件');
+    expect(html).not.toContain('SKILL_ENABLE');
     expect(html).toContain('data-testid="local-rescan"');
     expect(html).toContain('data-testid="local-scan-summary"');
     expect(html).toContain('Skill 1');
@@ -39,7 +41,6 @@ describe('local extensions page', () => {
     const html = renderToStaticMarkup(
       <LocalExtensionsPage
         snapshot={{ extensions: [], versions: [], targets: [], tools: [], projects: [], mcpInstallations: [], pluginInstallations: [] }}
-        pendingEvents={[]}
         offline={false}
         localScanState="ready"
         localScanSummary={{ scannedAt: '2026-06-06T07:00:00Z', discovered: { total: 0 } }}
@@ -67,8 +68,4 @@ function snapshot(): LocalLifecycleSnapshot {
     mcpInstallations: [],
     pluginInstallations: []
   };
-}
-
-function pendingEvents(): PendingEvent[] {
-  return [{ eventType: 'SKILL_ENABLE', extensionID: 'skill-one', status: 'queued' }];
 }

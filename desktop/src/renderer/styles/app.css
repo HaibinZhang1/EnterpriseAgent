@@ -1230,7 +1230,7 @@ html[data-theme="glass-light"] .drawer::before {
   min-width: 60px;
 }
 
-.pending-event-summary {
+.local-scan-summary {
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -1241,7 +1241,7 @@ html[data-theme="glass-light"] .drawer::before {
   border: 1px solid var(--glass-border-soft);
 }
 
-.pending-event-summary code {
+.local-scan-summary code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
