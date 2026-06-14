@@ -8,6 +8,7 @@ export function SettingsModal({
   config,
   error,
   busy,
+  canChangePassword = true,
   onClose,
   onSave,
   onChangePassword,
@@ -16,6 +17,7 @@ export function SettingsModal({
   config: Record<string, unknown>;
   error?: UiError;
   busy: boolean;
+  canChangePassword?: boolean;
   onClose: () => void;
   onSave: (payload: Record<string, unknown>) => void;
   onChangePassword: () => void;
@@ -52,7 +54,7 @@ export function SettingsModal({
         {error ? <ErrorState error={error} title="保存失败" /> : null}
         <div className="card-action-row">
           <Button tone="primary" disabled={busy} onClick={() => onSave({ baseURL, theme, notificationsEnabled })}>{busy ? '保存中' : '保存设置'}</Button>
-          <Button onClick={onChangePassword}>修改密码</Button>
+          {canChangePassword ? <Button onClick={onChangePassword}>修改密码</Button> : null}
           <Button onClick={onOpenUpdate}>客户端更新</Button>
         </div>
       </section>

@@ -52,7 +52,7 @@ public class ClientDeviceService {
     public Map<String, Object> register(CurrentUser actor, Map<String, Object> request) {
         String deviceId = required(request, "deviceId");
         String clientVersion = string(request.get("clientVersion"));
-        int updated = jdbc.update("""
+        jdbc.update("""
                 insert into client_devices (id, device_id, user_id, department_id, user_snapshot, department_snapshot,
                   hostname_hash, os_version, arch, client_version, install_channel, first_seen_at, last_seen_at, status)
                 values (?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?, ?, now(), now(), 'ACTIVE')
@@ -69,13 +69,9 @@ public class ClientDeviceService {
                   last_seen_at = now(),
                   status = 'ACTIVE',
                   updated_at = now()
-                where client_devices.user_id = excluded.user_id
                 """, UUID.randomUUID(), deviceId, actor.id(), actor.departmentId(), json.write(userSnapshot(actor)),
                 json.write(departmentSnapshot(actor)), string(request.get("hostnameHash")), string(request.get("osVersion")),
                 string(request.get("arch")), clientVersion, string(request.get("installChannel")));
-        if (updated == 0) {
-            throw new BusinessException(ErrorCode.STATE_CONFLICT, "设备已绑定到其他用户");
-        }
         insertDeviceEvent(actor, deviceId, "DEVICE_REGISTERED", "SUCCESS", null,
                 Map.of("clientVersion", nullToEmpty(clientVersion)), null, OffsetDateTime.now());
         auditService.record(AuditRecord.builder()

@@ -29,6 +29,16 @@ import { IPC_CHANNELS } from './channels';
 import { IpcRouter } from './ipc-router';
 import { sanitizeLoginResult } from './sanitize';
 
+const REMEMBERED_LOGIN_VERSION = 1;
+
+interface RememberedLogin {
+  version: number;
+  username: string;
+  password: string;
+  autoLogin: boolean;
+  updatedAt: string;
+}
+
 export interface DesktopIpcServices {
   apiClient: ApiClient;
   db: LocalDatabase;
@@ -59,27 +69,24 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
     const record = assertRecord(payload, context.requestID);
     const username = requiredString(record, 'username', context.requestID);
     const password = requiredString(record, 'password', context.requestID);
-    const device = await services.getDeviceInfo();
-    const result = await services.apiClient.login({
-      phone: username,
-      password,
-      clientType: 'DESKTOP',
-      deviceId: device.deviceID,
-      clientVersion: device.clientVersion
-    }, context.requestID);
-    if (typeof result === 'object' && result && 'token' in result && typeof result.token === 'string') {
-      await services.secureStore.set('session.token', result.token);
-      await services.deviceRegistrationService.register(context.requestID);
-      await services.clientUpdateService.reportStartupVersion(context.requestID).catch((error) => {
-        void services.logger.warn('client_update.startup_report_failed', error, context.requestID);
-      });
+    const rememberPassword = optionalBoolean(record, 'rememberPassword', context.requestID) ?? false;
+    const login = await loginDesktop(services, username, password, context.requestID);
+    if (login.authenticated) {
+      if (rememberPassword) {
+        await saveRememberedLogin(services, username, password);
+      } else {
+        await services.secureStore.delete('auth.remembered-login');
+      }
     }
-    return sanitizeLoginResult(result);
+    return login.result;
   });
 
   router.register(IPC_CHANNELS.authLogout, async (_payload, context) => {
-    await services.secureStore.delete('session.token');
-    return services.apiClient.logout(context.requestID);
+    try {
+      return await services.apiClient.logout(context.requestID);
+    } finally {
+      await services.secureStore.delete('session.token');
+    }
   });
 
   router.register(IPC_CHANNELS.authGetSession, async () => (
@@ -87,6 +94,18 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
       ? services.secureStore.getStartupSessionState()
       : { hasSession: Boolean(await services.secureStore.get('session.token')) }
   ));
+  router.register(IPC_CHANNELS.authGetRememberedLogin, async () => rememberedLoginSummary(await loadRememberedLogin(services)));
+  router.register(IPC_CHANNELS.authClearRememberedLogin, async () => {
+    await services.secureStore.delete('auth.remembered-login');
+    return { remembered: false, autoLogin: false };
+  });
+  router.register(IPC_CHANNELS.authAutoLogin, async (_payload, context) => {
+    const remembered = await loadRememberedLogin(services);
+    if (!remembered?.autoLogin) {
+      throw new DesktopErrorException(makeDesktopError('remembered_login_missing', 'No remembered login is available', context.requestID));
+    }
+    return (await loginDesktop(services, remembered.username, remembered.password, context.requestID)).result;
+  });
   router.register(IPC_CHANNELS.authMe, (_payload, context) => services.apiClient.me(context.requestID));
   router.register(IPC_CHANNELS.authChangePassword, async (payload, context) => {
     const record = assertRecord(payload, context.requestID);
@@ -95,6 +114,7 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
       newPassword: requiredString(record, 'newPassword', context.requestID)
     }, context.requestID);
     await services.secureStore.delete('session.token');
+    await services.secureStore.delete('auth.remembered-login');
     return result;
   });
   router.register(IPC_CHANNELS.authCompleteResetPassword, (payload, context) => {
@@ -415,6 +435,77 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
   });
 
   return router;
+}
+
+async function loginDesktop(services: DesktopIpcServices, username: string, password: string, requestID?: string): Promise<{ result: unknown; authenticated: boolean }> {
+  const device = await services.getDeviceInfo();
+  const result = await services.apiClient.login({
+    phone: username,
+    password,
+    clientType: 'DESKTOP',
+    deviceId: device.deviceID,
+    clientVersion: device.clientVersion
+  }, requestID);
+  const authenticated = hasLoginToken(result);
+  if (authenticated) {
+    await services.secureStore.set('session.token', result.token);
+    await services.deviceRegistrationService.register(requestID);
+    await services.clientUpdateService.reportStartupVersion(requestID).catch((error) => {
+      void services.logger.warn('client_update.startup_report_failed', error, requestID);
+    });
+  }
+  return { result: sanitizeLoginResult(result), authenticated };
+}
+
+function hasLoginToken(result: unknown): result is { token: string } {
+  return typeof result === 'object' && result !== null && 'token' in result && typeof result.token === 'string';
+}
+
+async function saveRememberedLogin(services: DesktopIpcServices, username: string, password: string): Promise<void> {
+  const remembered: RememberedLogin = {
+    version: REMEMBERED_LOGIN_VERSION,
+    username,
+    password,
+    autoLogin: true,
+    updatedAt: new Date().toISOString()
+  };
+  await services.secureStore.set('auth.remembered-login', JSON.stringify(remembered));
+}
+
+async function loadRememberedLogin(services: DesktopIpcServices): Promise<RememberedLogin | undefined> {
+  const raw = await services.secureStore.get('auth.remembered-login');
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Partial<RememberedLogin>;
+    if (
+      parsed.version === REMEMBERED_LOGIN_VERSION
+      && typeof parsed.username === 'string'
+      && parsed.username
+      && typeof parsed.password === 'string'
+      && parsed.password
+    ) {
+      return {
+        version: REMEMBERED_LOGIN_VERSION,
+        username: parsed.username,
+        password: parsed.password,
+        autoLogin: parsed.autoLogin === true,
+        updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : ''
+      };
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function rememberedLoginSummary(remembered: RememberedLogin | undefined): { remembered: boolean; username?: string; autoLogin: boolean; updatedAt?: string } {
+  if (!remembered) return { remembered: false, autoLogin: false };
+  return {
+    remembered: true,
+    username: remembered.username,
+    autoLogin: remembered.autoLogin,
+    updatedAt: remembered.updatedAt || undefined
+  };
 }
 
 function sanitizeLocalConfig(payload: RecordPayload, requestID?: string): Record<string, unknown> {

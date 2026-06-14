@@ -6,9 +6,12 @@ export type PreloadInvoke = <T>(channel: IpcChannel, payload?: unknown, requestI
 export function createPreloadApi(invoke: PreloadInvoke) {
   return {
     auth: {
-      login: (username: string, password: string, requestID?: string) => invoke(IPC_CHANNELS.authLogin, { username, password }, requestID),
+      login: (username: string, password: string, options?: { rememberPassword?: boolean }, requestID?: string) => invoke(IPC_CHANNELS.authLogin, { username, password, rememberPassword: options?.rememberPassword }, requestID),
       logout: (requestID?: string) => invoke(IPC_CHANNELS.authLogout, undefined, requestID),
       getSession: (requestID?: string) => invoke(IPC_CHANNELS.authGetSession, undefined, requestID),
+      getRememberedLogin: (requestID?: string) => invoke(IPC_CHANNELS.authGetRememberedLogin, undefined, requestID),
+      clearRememberedLogin: (requestID?: string) => invoke(IPC_CHANNELS.authClearRememberedLogin, undefined, requestID),
+      autoLogin: (requestID?: string) => invoke(IPC_CHANNELS.authAutoLogin, undefined, requestID),
       me: (requestID?: string) => invoke(IPC_CHANNELS.authMe, undefined, requestID),
       changePassword: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.authChangePassword, payload, requestID),
       completeResetPassword: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.authCompleteResetPassword, payload, requestID)

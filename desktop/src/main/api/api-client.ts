@@ -394,6 +394,7 @@ function toDesktopErrorCode(code: string): DesktopErrorCode {
     'permission_denied',
     'scope_restricted',
     'resource_not_found',
+    'device_not_found',
     'state_conflict',
     'unauthenticated',
     'hash_mismatch',

@@ -327,6 +327,20 @@ tbody tr:hover {
   font-size: 13px;
 }
 
+.form-stack .checkbox-line {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.form-stack .checkbox-line input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+}
+
 .page-grid {
   grid-template-columns: minmax(0, 1fr);
 }

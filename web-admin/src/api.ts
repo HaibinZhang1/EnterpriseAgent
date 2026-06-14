@@ -71,46 +71,61 @@ const tokenKey = "eah.admin.token";
 const userKey = "eah.admin.user";
 const baseUrlKey = "eah.admin.apiBaseUrl";
 
-function browserStorage(): Storage | null {
+type BrowserStorageKind = "local" | "session";
+
+function browserStorage(kind: BrowserStorageKind = "local"): Storage | null {
   if (typeof window === "undefined") {
     return null;
   }
   try {
-    return window.localStorage;
+    return kind === "local" ? window.localStorage : window.sessionStorage;
   } catch {
     return null;
   }
+}
+
+function sessionStorages(): Storage[] {
+  return [browserStorage("local"), browserStorage("session")].filter((storage): storage is Storage => Boolean(storage));
 }
 
 export function getStoredToken(): string | null {
-  return browserStorage()?.getItem(tokenKey) ?? null;
+  for (const storage of sessionStorages()) {
+    const token = storage.getItem(tokenKey);
+    if (token) return token;
+  }
+  return null;
 }
 
 export function getStoredUser(): UserSummary | null {
-  const raw = browserStorage()?.getItem(userKey);
-  if (!raw) {
-    return null;
+  for (const storage of sessionStorages()) {
+    const raw = storage.getItem(userKey);
+    if (!raw) continue;
+    try {
+      return JSON.parse(raw) as UserSummary;
+    } catch {
+      continue;
+    }
   }
-  try {
-    return JSON.parse(raw) as UserSummary;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
-export function storeSession(response: LoginResponse): void {
-  const storage = browserStorage();
+export function storeSession(response: LoginResponse, keepSignedIn = true): void {
+  const storage = browserStorage(keepSignedIn ? "local" : "session");
+  const fallbackStorage = browserStorage(keepSignedIn ? "session" : "local");
   if (!storage) {
     return;
   }
+  fallbackStorage?.removeItem(tokenKey);
+  fallbackStorage?.removeItem(userKey);
   storage.setItem(tokenKey, response.token);
   storage.setItem(userKey, JSON.stringify(response.user));
 }
 
 export function clearSession(): void {
-  const storage = browserStorage();
-  storage?.removeItem(tokenKey);
-  storage?.removeItem(userKey);
+  for (const storage of sessionStorages()) {
+    storage.removeItem(tokenKey);
+    storage.removeItem(userKey);
+  }
 }
 
 export function getApiBaseUrl(): string {

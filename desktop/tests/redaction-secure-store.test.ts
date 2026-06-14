@@ -42,13 +42,23 @@ describe('redaction and SecureStore', () => {
 
       const fileStore = new SafeStorageSecureStore(path.join(temp.root, 'secure-store.json'), fakeSafeStorage);
       await fileStore.set('session.token', 'file-token');
+      await fileStore.set('auth.remembered-login', JSON.stringify({ version: 1, username: 'alice', password: 'remembered-password', autoLogin: true, updatedAt: '2026-06-14T00:00:00.000Z' }));
       expect(await fileStore.get('session.token')).toBe('file-token');
+      expect(await fileStore.get('auth.remembered-login')).toContain('remembered-password');
       await expect(fileStore.getStartupSessionState()).resolves.toMatchObject({
+        hasSession: true,
+        hasStoredSession: true
+      });
+      const restartedFileStore = new SafeStorageSecureStore(path.join(temp.root, 'secure-store.json'), fakeSafeStorage);
+      await expect(restartedFileStore.get('session.token')).resolves.toBeUndefined();
+      await expect(restartedFileStore.getStartupSessionState()).resolves.toMatchObject({
         hasSession: false,
         hasStoredSession: true,
         message: expect.stringContaining('重新登录')
       });
-      expect(await readFile(path.join(temp.root, 'secure-store.json'), 'utf8')).not.toContain('file-token');
+      const secureStoreText = await readFile(path.join(temp.root, 'secure-store.json'), 'utf8');
+      expect(secureStoreText).not.toContain('file-token');
+      expect(secureStoreText).not.toContain('remembered-password');
 
       const logger = new ClientLogger(path.join(temp.root, 'logs', 'desktop.log'));
       await logger.info('auth token Bearer raw-token', { Authorization: 'Bearer raw-token', ticket: 'ticket-123' }, 'req_1');
@@ -94,9 +104,7 @@ describe('redaction and SecureStore', () => {
         hasStoredSession: true,
         message: expect.stringContaining('重新登录')
       });
-      await expect(unavailableStore.get('session.token')).rejects.toMatchObject({
-        desktopError: { code: 'secure_store_unavailable' }
-      });
+      await expect(unavailableStore.get('session.token')).resolves.toBeUndefined();
 
       const corruptedCipherStore = new SafeStorageSecureStore(filePath, {
         ...fakeSafeStorage,
@@ -104,6 +112,7 @@ describe('redaction and SecureStore', () => {
           throw new Error('decrypt failed');
         }
       });
+      await corruptedCipherStore.set('session.token', 'file-token');
       await expect(corruptedCipherStore.get('session.token')).rejects.toMatchObject({
         desktopError: { code: 'secure_store_corrupted' }
       });

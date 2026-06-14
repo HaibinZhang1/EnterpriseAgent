@@ -19,6 +19,7 @@ describe('renderer app view', () => {
   it('shows login entry before auth and Agent home after auth with fixed desktop tabs', () => {
     const unauthenticated = renderView({ modal: 'login' });
     expect(unauthenticated).toContain('登录 Enterprise Agent Hub');
+    expect(unauthenticated).toContain('记住密码并自动登录');
     expect(unauthenticated).toContain('Agent');
     expect(unauthenticated).toContain('社区');
     expect(unauthenticated).toContain('本地');
@@ -28,11 +29,36 @@ describe('renderer app view', () => {
     expect(authenticated).toContain('当前账号：Alice');
   });
 
+  it('renders remembered login state and auto-login failure in the login modal', () => {
+    const html = renderView({
+      user: undefined,
+      modal: 'login',
+      bootError: { code: 'unauthenticated', message: '自动登录失败，请重新输入密码。' },
+      rememberedLogin: { remembered: true, username: 'alice', autoLogin: true }
+    });
+    expect(html).toContain('已保存账号：alice');
+    expect(html).toContain('清除');
+    expect(html).toContain('checked=""');
+    expect(html).toContain('自动登录失败，请重新输入密码。');
+  });
+
   it('allows unauthenticated users to dismiss the login modal and keep the shell visible', () => {
     const dismissed = renderView({ user: undefined, modal: 'none', bootState: 'ready' });
     expect(dismissed).not.toContain('<h2>登录 Enterprise Agent Hub</h2>');
     expect(dismissed).toContain('Agent 工作台');
     expect(dismissed).toContain('请登录后使用企业扩展能力');
+  });
+
+  it('keeps unauthenticated account and settings actions out of logged-in flows', () => {
+    const account = renderView({ user: undefined, modal: 'account', bootState: 'ready' });
+    expect(account).toContain('当前账号：<strong>未登录</strong>');
+    expect(account).toContain('登录</button>');
+    expect(account).not.toContain('修改密码');
+    expect(account).not.toContain('退出登录');
+
+    const settings = renderView({ user: undefined, modal: 'settings', bootState: 'ready' });
+    expect(settings).toContain('客户端更新');
+    expect(settings).not.toContain('修改密码');
   });
 
   it('keeps offline startup server failures out of the top-level initialization error', () => {
@@ -374,6 +400,39 @@ describe('renderer app view', () => {
     expect(failed).toContain('req-update-1');
   });
 
+  it('passes remember-password state through login actions and clears remembered login', async () => {
+    const login = vi.fn(async () => ({ success: true, data: { user: { id: 'user-1', username: 'alice', mustChangePassword: false } }, requestID: 'req_login' }));
+    const clearRememberedLogin = vi.fn(async () => ({ success: true, data: { remembered: false, autoLogin: false }, requestID: 'req_clear' }));
+    vi.stubGlobal('window', {
+      enterpriseAgent: {
+        auth: {
+          login,
+          clearRememberedLogin
+        }
+      }
+    });
+    let model: EnterpriseAgentViewModel = initialView();
+    const setView: Parameters<typeof createEnterpriseAgentActions>[0]['setView'] = (updater) => {
+      model = typeof updater === 'function' ? updater(model) : updater;
+    };
+    const actions = createEnterpriseAgentActions({
+      view: model,
+      setView,
+      loadCommunity: async () => undefined,
+      loadLocal: async () => undefined,
+      loadNotifications: async () => undefined,
+      refreshSubmissions: async () => undefined
+    });
+
+    await (actions.login('alice', 'Password#1', true) as unknown as Promise<void>);
+    expect(login).toHaveBeenCalledWith('alice', 'Password#1', { rememberPassword: true }, expect.stringMatching(/^renderer_login_/));
+    expect(model.rememberedLogin).toMatchObject({ remembered: true, username: 'alice', autoLogin: true });
+
+    await (actions.clearRememberedLogin() as unknown as Promise<void>);
+    expect(clearRememberedLogin).toHaveBeenCalled();
+    expect(model.rememberedLogin).toEqual({ remembered: false, autoLogin: false });
+  });
+
   it('offers light theme and resolves system theme from OS preference', () => {
     const settings = renderToStaticMarkup(
       <SettingsModal
@@ -383,6 +442,7 @@ describe('renderer app view', () => {
         onSave={() => undefined}
         onChangePassword={() => undefined}
         onOpenUpdate={() => undefined}
+        canChangePassword
       />
     );
     expect(settings).toContain('玻璃浅色');
@@ -412,6 +472,7 @@ function actions(): EnterpriseAgentActions {
     openModal: () => undefined,
     closeModal: () => undefined,
     login: () => undefined,
+    clearRememberedLogin: () => undefined,
     logout: () => undefined,
     saveSettings: () => undefined,
     changePassword: () => undefined,

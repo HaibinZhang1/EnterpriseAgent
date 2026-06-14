@@ -107,6 +107,37 @@ describe('ClientUpdateService', () => {
     expect(calls).toEqual(['event:UPDATE_AVAILABLE', 'event:USER_CANCELLED']);
   });
 
+  it('registers the device and retries once when update check reports a missing device', async () => {
+    const calls: string[] = [];
+    const apiClient = {
+      checkClientUpdate: async () => {
+        calls.push('check');
+        if (calls.filter((call) => call === 'check').length === 1) {
+          throw new DesktopErrorException(makeDesktopError('device_not_found', '设备不存在或不属于当前用户', 'req_check'));
+        }
+        return { updateAvailable: false };
+      },
+      reportClientUpdateEvents: async () => {
+        calls.push('event');
+        return { accepted: true };
+      }
+    } as unknown as ApiClient;
+    const service = new ClientUpdateService({
+      apiClient,
+      getDeviceInfo: async () => ({ deviceID: 'device_1', clientVersion: '0.1.0-m7', createdAt: 'now', updatedAt: 'now' }),
+      registerDevice: async (requestID) => {
+        calls.push(`register:${requestID}`);
+        return { registered: true };
+      },
+      downloadsDir: '/tmp',
+      signatureVerifier: { verify: async () => undefined },
+      launcher: { launchInstaller: async () => undefined }
+    });
+
+    await expect(service.check('req_check')).resolves.toBeUndefined();
+    expect(calls).toEqual(['check', 'register:req_check_register', 'check']);
+  });
+
   it('reports hash failures and does not run signature or launcher', async () => {
     const temp = await tempRoot();
     try {

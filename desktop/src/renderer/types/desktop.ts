@@ -39,6 +39,13 @@ export interface OfflineState {
   };
 }
 
+export interface RememberedLoginState {
+  remembered: boolean;
+  username?: string;
+  autoLogin?: boolean;
+  updatedAt?: string;
+}
+
 export interface ExtensionSummary {
   id: string;
   type: ExtensionKind;

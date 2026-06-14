@@ -35,6 +35,9 @@ python3 -m json.tool docs/DevelopmentTasks/MANIFEST.json >/dev/null
 
 Use `git diff --check` to catch whitespace issues, and validate JSON manifests after editing file indexes or checksums. Once code exists, add the real build/test commands here rather than relying on ad hoc scripts.
 
+## Local Startup Reference
+When starting the desktop client, admin web UI, or server locally, read `docs/LOCAL_STARTUP.md` first. It records the verified Docker Compose, `tmux`, health-check, and Docker image cleanup workflow for this project.
+
 ## Coding Style & Naming Conventions
 Markdown files use ATX headings, short paragraphs, and numbered prefixes for ordered design documents (for example, `15_测试策略与开发切片.md`). Keep paths and identifiers in backticks. Preserve existing Chinese terminology unless a document is intentionally translated. Avoid committing `.DS_Store`, `.omx/`, secrets, generated packages, or local runtime files.
 

@@ -114,6 +114,7 @@ export async function createDesktopServices(options: CreateDesktopServicesOption
   const clientUpdateService = new ClientUpdateService({
     apiClient,
     getDeviceInfo: async () => deviceInfo,
+    registerDevice: (requestID) => deviceRegistrationService.register(requestID),
     downloadsDir: path.join(paths.root, 'updates'),
     startupStateFile: path.join(paths.root, 'client-update-startup.json'),
     signatureVerifier: options.signatureVerifier ?? new WindowsAuthenticodeSignatureVerifier(),

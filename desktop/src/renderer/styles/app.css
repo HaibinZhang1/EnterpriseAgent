@@ -664,6 +664,30 @@ html[data-theme="glass-light"] .drawer::before {
   background: var(--glass-secondary);
 }
 
+.checkbox-line {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  font-weight: 800;
+}
+
+.checkbox-line input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-primary);
+}
+
+.login-memory-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: var(--text-tertiary);
+  font-size: var(--font-caption);
+}
+
 /* ==================== 13. 徽章与状态 (.badge / .state) ==================== */
 .badge {
   display: inline-flex;

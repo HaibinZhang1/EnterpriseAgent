@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DesktopErrorException, makeDesktopError } from '../../shared/errors';
 
-export type SecureStoreKey = 'session.token' | `mcp.variable.${string}` | `mcp.managed-config.${string}` | `api.secret.${string}`;
+export type SecureStoreKey = 'session.token' | 'auth.remembered-login' | `mcp.variable.${string}` | `mcp.managed-config.${string}` | `api.secret.${string}`;
 
 export interface SecureStore {
   get(key: SecureStoreKey): Promise<string | undefined>;
@@ -42,12 +42,17 @@ interface SecureStoreFile {
 }
 
 export class SafeStorageSecureStore implements SecureStore {
+  private runtimeSessionActive = false;
+
   constructor(private readonly filePath: string, private readonly safeStorage: SafeStorageLike) {}
 
   async get(key: SecureStoreKey): Promise<string | undefined> {
     const file = await this.readFile();
     const entry = file.entries[key];
     if (!entry) return undefined;
+    if (key === 'session.token' && !this.runtimeSessionActive) {
+      return undefined;
+    }
     this.assertAvailable();
     try {
       return this.safeStorage.decryptString(Buffer.from(entry.encrypted, 'base64'));
@@ -64,6 +69,9 @@ export class SafeStorageSecureStore implements SecureStore {
       updatedAt: new Date().toISOString()
     };
     await this.writeFile(file);
+    if (key === 'session.token') {
+      this.runtimeSessionActive = true;
+    }
   }
 
   async delete(key: SecureStoreKey): Promise<void> {
@@ -71,11 +79,20 @@ export class SafeStorageSecureStore implements SecureStore {
     const file = await this.readFile();
     delete file.entries[key];
     await this.writeFile(file);
+    if (key === 'session.token') {
+      this.runtimeSessionActive = false;
+    }
   }
 
-  async getStartupSessionState(): Promise<{ hasSession: false; hasStoredSession: boolean; message?: string }> {
+  async getStartupSessionState(): Promise<{ hasSession: boolean; hasStoredSession: boolean; message?: string }> {
     const file = await this.readFile();
     const hasStoredSession = Boolean(file.entries['session.token']);
+    if (this.runtimeSessionActive) {
+      return {
+        hasSession: true,
+        hasStoredSession
+      };
+    }
     return {
       hasSession: false,
       hasStoredSession,

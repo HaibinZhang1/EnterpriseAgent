@@ -21,6 +21,7 @@ export interface PendingClientUpdate {
 export interface ClientUpdateServiceOptions {
   apiClient: ApiClient;
   getDeviceInfo: () => Promise<DeviceInfo>;
+  registerDevice?: (requestID?: string) => Promise<unknown>;
   downloadsDir: string;
   startupStateFile?: string;
   signatureVerifier: SignatureVerifier;
@@ -71,6 +72,16 @@ export class ClientUpdateService {
 
   async check(requestID?: string): Promise<PendingClientUpdate | undefined> {
     const resolvedRequestID = ensureRequestID(requestID);
+    try {
+      return await this.checkRegisteredDevice(resolvedRequestID);
+    } catch (error) {
+      if (!isDeviceNotFound(error) || !this.options.registerDevice) throw error;
+      await this.options.registerDevice(`${resolvedRequestID}_register`);
+      return this.checkRegisteredDevice(resolvedRequestID);
+    }
+  }
+
+  private async checkRegisteredDevice(resolvedRequestID: string): Promise<PendingClientUpdate | undefined> {
     const device = await this.options.getDeviceInfo();
     const update = await this.options.apiClient.checkClientUpdate({
       deviceId: device.deviceID,
@@ -226,6 +237,13 @@ export class ClientUpdateService {
 
 function errorCode(error: unknown, fallback: string): string {
   return error instanceof DesktopErrorException ? error.desktopError.code : fallback;
+}
+
+function isDeviceNotFound(error: unknown): boolean {
+  if (!(error instanceof DesktopErrorException)) return false;
+  const details = error.desktopError.details;
+  return error.desktopError.code === 'device_not_found'
+    || Boolean(details && typeof details === 'object' && 'code' in details && details.code === 'device_not_found');
 }
 
 export class ShellClientUpdateLauncher implements ClientUpdateLauncher {

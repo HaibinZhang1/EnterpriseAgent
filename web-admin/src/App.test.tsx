@@ -13,7 +13,7 @@ import App, {
   buildReviewDecisionPayload,
   isReviewStateConflict
 } from "./App";
-import { AdminApiError, Role, UserSummary } from "./api";
+import { AdminApiError, LoginResponse, Role, UserSummary, clearSession, getStoredToken, getStoredUser, request, storeSession } from "./api";
 
 const baseUser: UserSummary = {
   id: "user-1",
@@ -35,7 +35,51 @@ describe("Web Admin renderer", () => {
     const html = renderToStaticMarkup(<LoginScreen onLogin={() => undefined} />);
     expect(html).toContain("管理端登录");
     expect(html).toContain("服务端地址");
+    expect(html).toContain("保持登录");
+    expect(html).toContain("checked=\"\"");
     expect(html).toContain("登录");
+  });
+
+  it("stores admin sessions in localStorage only when keep-login is selected", () => {
+    const local = createMockStorage();
+    const session = createMockStorage();
+    vi.stubGlobal("window", { localStorage: local.api, sessionStorage: session.api });
+    const response = loginResponse();
+
+    storeSession(response, true);
+    expect(local.values.get("eah.admin.token")).toBe("admin-token");
+    expect(session.values.get("eah.admin.token")).toBeUndefined();
+    expect(getStoredToken()).toBe("admin-token");
+    expect(getStoredUser()?.id).toBe(baseUser.id);
+
+    storeSession({ ...response, token: "session-token" }, false);
+    expect(local.values.get("eah.admin.token")).toBeUndefined();
+    expect(session.values.get("eah.admin.token")).toBe("session-token");
+    expect(getStoredToken()).toBe("session-token");
+
+    clearSession();
+    expect(local.values.get("eah.admin.token")).toBeUndefined();
+    expect(session.values.get("eah.admin.token")).toBeUndefined();
+  });
+
+  it("reads sessionStorage token for admin request authorization", async () => {
+    const local = createMockStorage();
+    const session = createMockStorage([["eah.admin.token", "session-token"]]);
+    vi.stubGlobal("window", { localStorage: local.api, sessionStorage: session.api });
+    const fetchCalls: RequestInit[] = [];
+    const fetchMock: typeof fetch = async (_input, init) => {
+      fetchCalls.push(init ?? {});
+      return new Response(JSON.stringify({ success: true, data: { ok: true }, requestId: "req_admin" }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    };
+    vi.stubGlobal("fetch", fetchMock);
+
+    await request("/auth/me");
+
+    const headers = fetchCalls[0].headers as Headers;
+    expect(headers.get("Authorization")).toBe("Bearer session-token");
   });
 
   it("renders the shell and keeps system-only navigation hidden from department admins", () => {
@@ -660,15 +704,41 @@ function disabledCount(html: string): number {
 }
 
 function stubSession(user: UserSummary) {
-  const storage = new Map<string, string>([
+  const local = createMockStorage([
     ["eah.admin.token", "token-1"],
     ["eah.admin.user", JSON.stringify(user)]
   ]);
+  const session = createMockStorage();
   vi.stubGlobal("window", {
-    localStorage: {
-      getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, value: string) => storage.set(key, value),
-      removeItem: (key: string) => storage.delete(key)
-    }
+    localStorage: local.api,
+    sessionStorage: session.api
   });
+}
+
+function loginResponse(): LoginResponse {
+  return {
+    token: "admin-token",
+    expiresAt: "2026-06-14T12:00:00Z",
+    user: baseUser,
+    permissionSummary: {
+      canUseAdminWeb: true,
+      canUseDesktop: true
+    }
+  };
+}
+
+function createMockStorage(seed: Array<[string, string]> = []) {
+  const values = new Map<string, string>(seed);
+  return {
+    values,
+    api: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        values.set(key, value);
+      },
+      removeItem: (key: string) => {
+        values.delete(key);
+      }
+    }
+  };
 }

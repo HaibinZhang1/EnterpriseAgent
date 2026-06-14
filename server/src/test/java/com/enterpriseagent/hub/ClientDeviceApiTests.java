@@ -54,20 +54,27 @@ class ClientDeviceApiTests extends PostgresIntegrationTestBase {
                         .content("""
                                 {"deviceId":"%s","clientVersion":"1.0.0","hostnameHash":"other-host","osVersion":"Windows 11","arch":"X64","installChannel":"STABLE"}
                                 """.formatted(deviceId)))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.code").value("state_conflict"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.registered").value(true));
         assertThat(jdbc.queryForObject("select user_id from client_devices where device_id = ?", java.util.UUID.class, deviceId))
-                .isEqualTo(user.getId());
+                .isEqualTo(otherUser.getId());
 
         mockMvc.perform(post("/api/client-devices/heartbeat")
                         .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"deviceId\":\"" + deviceId + "\",\"clientVersion\":\"1.0.0\",\"localEventQueueSize\":0}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("device_not_found"));
+
+        mockMvc.perform(post("/api/client-devices/heartbeat")
+                        .header("Authorization", "Bearer " + otherToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"deviceId\":\"" + deviceId + "\",\"clientVersion\":\"" + heartbeatVersion + "\",\"localEventQueueSize\":2}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.accepted").value(true));
 
         mockMvc.perform(post("/api/client-devices/events")
-                        .header("Authorization", "Bearer " + token)
+                        .header("Authorization", "Bearer " + otherToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"deviceId":"%s","events":[
@@ -109,9 +116,9 @@ class ClientDeviceApiTests extends PostgresIntegrationTestBase {
                 .andExpect(status().isForbidden());
 
         assertThat(jdbc.queryForObject("select count(*) from client_device_events where device_id = ?", Long.class, deviceId))
-                .isEqualTo(3L);
+                .isEqualTo(4L);
         assertThat(jdbc.queryForObject("select count(*) from audit_logs where action = 'client_device.register' and device_id = ?",
-                Long.class, deviceId)).isEqualTo(1L);
+                Long.class, deviceId)).isEqualTo(2L);
     }
 
     @Test

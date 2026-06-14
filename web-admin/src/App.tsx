@@ -222,6 +222,7 @@ export function LoginScreen({ onLogin }: { onLogin: (session: SessionState) => v
   const [apiBase, setApiBase] = useState(getApiBaseUrl());
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
+  const [keepSignedIn, setKeepSignedIn] = useState(true);
   const [error, setError] = useState<ViewError | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -237,7 +238,7 @@ export function LoginScreen({ onLogin }: { onLogin: (session: SessionState) => v
         setError({ message: "当前账号没有进入 Web 管理端的权限。" });
         return;
       }
-      storeSession(response);
+      storeSession(response, keepSignedIn);
       onLogin({ token: response.token, user: response.user });
     } catch (err) {
       setError(normalizeError(err));
@@ -273,6 +274,10 @@ export function LoginScreen({ onLogin }: { onLogin: (session: SessionState) => v
               type="password"
               autoComplete="current-password"
             />
+          </label>
+          <label className="checkbox-line">
+            <input type="checkbox" checked={keepSignedIn} onChange={(event) => setKeepSignedIn(event.target.checked)} />
+            <span>保持登录</span>
           </label>
           {error ? <InlineError error={error} /> : null}
           <button className="primary-button" type="submit" disabled={loading}>

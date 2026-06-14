@@ -23,7 +23,7 @@ import { Modal } from './components/Modal';
 import { desktopApi } from './lib/api';
 import { toUiError, UiApiError } from './lib/errors';
 import { normalizeCatalogHome, normalizeExtension, normalizeLifecycle, normalizeNotifications, normalizePendingEvents, normalizePublishResult, normalizeSearchResults, normalizeSessionUser, normalizeUpdateState, normalizeVersions } from './lib/normalize';
-import type { AppTab, CatalogHome, DetailState, DeviceSummary, ExtensionSummary, LoadState, LocalInventoryScanSummary, LocalLifecycleSnapshot, LocalTab, NotificationItem, OfflineState, PendingEvent, PublishResult, SessionUser, UiError, UpdateState, VersionSummary } from './types/desktop';
+import type { AppTab, CatalogHome, DetailState, DeviceSummary, ExtensionSummary, LoadState, LocalInventoryScanSummary, LocalLifecycleSnapshot, LocalTab, NotificationItem, OfflineState, PendingEvent, PublishResult, RememberedLoginState, SessionUser, UiError, UpdateState, VersionSummary } from './types/desktop';
 
 const emptyHome: CatalogHome = { skills: [], mcps: [], plugins: [], hot: [], stars: [], downloads: [] };
 const emptyLifecycle: LocalLifecycleSnapshot = { extensions: [], versions: [], targets: [], tools: [], projects: [], mcpInstallations: [], pluginInstallations: [] };
@@ -54,6 +54,7 @@ export interface EnterpriseAgentViewModel {
   catalogState: LoadState;
   catalogError?: UiError;
   catalogHome: CatalogHome;
+  rememberedLogin: RememberedLoginState;
   user?: SessionUser;
   device?: DeviceSummary;
   offline?: OfflineState;
@@ -104,7 +105,8 @@ export interface EnterpriseAgentActions {
   runAction: (payload: { targetPath: string; variables: Record<string, string>; installMode?: string; adapterId?: string; operation?: string; dryRun: boolean }) => void;
   openModal: (modal: ModalName) => void;
   closeModal: () => void;
-  login: (username: string, password: string) => void;
+  login: (username: string, password: string, rememberPassword: boolean) => void;
+  clearRememberedLogin: () => void;
   logout: () => void;
   saveSettings: (payload: Record<string, unknown>) => void;
   changePassword: (oldPassword: string, newPassword: string) => void;
@@ -186,15 +188,17 @@ export function App() {
       try {
         await waitForStartupReady();
         if (!active) return;
-        const [session, device, offline, config, pendingUpdate] = await Promise.all([
+        const [session, remembered, device, offline, config, pendingUpdate] = await Promise.all([
           desktopApi.auth.getSession(),
+          desktopApi.auth.getRememberedLogin().catch(() => ({ remembered: false, autoLogin: false })),
           desktopApi.device.info(),
           desktopApi.local.offline(),
           desktopApi.settings.get(),
           desktopApi.clientUpdate.pending().catch(() => undefined)
         ]);
         if (!active) return;
-        const hasSession = Boolean((session as { hasSession?: boolean }).hasSession);
+        let hasSession = Boolean((session as { hasSession?: boolean }).hasSession);
+        const rememberedLogin = normalizeRememberedLogin(remembered);
         let user: SessionUser | undefined;
         let bootError: UiError | undefined;
         if (hasSession) {
@@ -205,12 +209,21 @@ export function App() {
             if (!isRecoverableBootError(uiError)) throw error;
             bootError = uiError;
           }
+        } else if (rememberedLogin.remembered && rememberedLogin.autoLogin) {
+          try {
+            const loginResult = await desktopApi.auth.autoLogin();
+            user = normalizeSessionUser(loginResult) ?? normalizeSessionUser(await desktopApi.auth.me());
+            hasSession = Boolean(user);
+          } catch (error) {
+            bootError = toUiError(error);
+          }
         }
         setView((current) => ({
           ...current,
           bootState: 'ready',
           bootError,
           modal: hasSession ? current.modal : 'login',
+          rememberedLogin,
           user,
           device: device as DeviceSummary,
           offline: offline as OfflineState,
@@ -329,16 +342,28 @@ export function createEnterpriseAgentActions({
       if (modal === 'notifications') void loadNotifications();
     },
     closeModal: () => setView((current) => ({ ...current, modal: 'none', cleanupTarget: undefined, cleanupError: undefined, cleanupResult: undefined })),
-    login: async (username, password) => {
+    login: async (username, password, rememberPassword) => {
       setView((current) => ({ ...current, bootState: 'loading', bootError: undefined }));
       try {
-        const result = await desktopApi.auth.login(username, password);
+        const result = await desktopApi.auth.login(username, password, rememberPassword);
         const user = normalizeSessionUser(result) ?? normalizeSessionUser(await desktopApi.auth.me());
-        setView((current) => ({ ...current, user, modal: user?.mustChangePassword ? 'password' : 'none', bootState: 'ready' }));
+        setView((current) => ({
+          ...current,
+          user,
+          rememberedLogin: rememberPassword
+            ? { remembered: true, username, autoLogin: true }
+            : { remembered: false, autoLogin: false },
+          modal: user?.mustChangePassword ? 'password' : 'none',
+          bootState: 'ready'
+        }));
         await Promise.allSettled([loadCommunity(), loadLocal(), loadNotifications()]);
       } catch (error) {
         setView((current) => ({ ...current, bootState: 'ready', bootError: toUiError(error), modal: 'login' }));
       }
+    },
+    clearRememberedLogin: async () => {
+      await desktopApi.auth.clearRememberedLogin();
+      setView((current) => ({ ...current, rememberedLogin: { remembered: false, autoLogin: false } }));
     },
     logout: async () => {
       await desktopApi.auth.logout().catch(() => undefined);
@@ -357,7 +382,7 @@ export function createEnterpriseAgentActions({
       setView((current) => ({ ...current, passwordBusy: true, passwordError: undefined }));
       try {
         await desktopApi.auth.changePassword({ oldPassword, newPassword });
-        setView((current) => ({ ...current, user: undefined, passwordBusy: false, modal: 'login', notifications: [], submissions: [] }));
+        setView((current) => ({ ...current, user: undefined, rememberedLogin: { remembered: false, autoLogin: false }, passwordBusy: false, modal: 'login', notifications: [], submissions: [] }));
       } catch (error) {
         setView((current) => ({ ...current, passwordBusy: false, passwordError: toUiError(error) }));
       }
@@ -535,7 +560,7 @@ export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAg
       offline={model.offline}
       unreadCount={unreadCount}
       onNotifications={() => actions.openModal('notifications')}
-      onAccount={() => actions.openModal('account')}
+      onAccount={() => actions.openModal(model.user ? 'account' : 'login')}
       onSettings={() => actions.openModal('settings')}
       theme={currentTheme}
       onToggleTheme={handleToggleTheme}
@@ -623,8 +648,17 @@ export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAg
           onRun={actions.runAction}
         />
       ) : null}
-      {showLogin ? <LoginModal busy={model.bootState === 'loading'} error={model.bootError} onClose={actions.closeModal} onLogin={actions.login} /> : null}
-      {model.modal === 'settings' ? <SettingsModal config={model.settingsConfig} busy={model.settingsBusy} error={model.settingsError} onClose={actions.closeModal} onSave={actions.saveSettings} onChangePassword={() => actions.openModal('password')} onOpenUpdate={() => actions.openModal('update')} /> : null}
+      {showLogin ? (
+        <LoginModal
+          busy={model.bootState === 'loading'}
+          error={model.bootError}
+          rememberedLogin={model.rememberedLogin}
+          onClearRememberedLogin={actions.clearRememberedLogin}
+          onClose={actions.closeModal}
+          onLogin={actions.login}
+        />
+      ) : null}
+      {model.modal === 'settings' ? <SettingsModal config={model.settingsConfig} busy={model.settingsBusy} error={model.settingsError} canChangePassword={Boolean(model.user)} onClose={actions.closeModal} onSave={actions.saveSettings} onChangePassword={() => actions.openModal('password')} onOpenUpdate={() => actions.openModal('update')} /> : null}
       {model.modal === 'password' ? <ChangePasswordModal force={model.user?.mustChangePassword} busy={model.passwordBusy} error={model.passwordError} onClose={actions.closeModal} onSubmit={actions.changePassword} /> : null}
       {model.modal === 'notifications' ? <NotificationsPanel items={model.notifications} onClose={actions.closeModal} onRead={actions.markNotificationRead} /> : null}
       {model.modal === 'update' ? <UpdateModal update={model.updateState} busy={model.updateBusy} onClose={actions.closeModal} onCheck={actions.checkUpdate} onDownload={actions.downloadUpdate} onCancel={actions.cancelUpdate} onInstall={actions.installUpdate} /> : null}
@@ -644,6 +678,7 @@ export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAg
           user={model.user}
           onClose={actions.closeModal}
           onChangePassword={() => actions.openModal('password')}
+          onLogin={() => actions.openModal('login')}
           onSettings={() => actions.openModal('settings')}
           onLogout={actions.logout}
           theme={currentTheme}
@@ -663,6 +698,7 @@ function AccountMenu({
   user,
   onClose,
   onChangePassword,
+  onLogin,
   onSettings,
   onLogout,
   theme,
@@ -671,6 +707,7 @@ function AccountMenu({
   user?: SessionUser;
   onClose: () => void;
   onChangePassword: () => void;
+  onLogin: () => void;
   onSettings: () => void;
   onLogout: () => void;
   theme: 'light' | 'dark';
@@ -688,12 +725,20 @@ function AccountMenu({
         <Button onClick={onToggleTheme} style={{ width: '100%', justifyContent: 'center' }}>
           {theme === 'dark' ? '☀️ 切换至浅色模式' : '🌙 切换至深色模式'}
         </Button>
-        <Button onClick={onChangePassword} style={{ width: '100%', justifyContent: 'center' }}>
-          🔑 修改密码
-        </Button>
-        <Button tone="danger" onClick={onLogout} style={{ width: '100%', justifyContent: 'center' }}>
-          🚪 退出登录
-        </Button>
+        {user ? (
+          <>
+            <Button onClick={onChangePassword} style={{ width: '100%', justifyContent: 'center' }}>
+              🔑 修改密码
+            </Button>
+            <Button tone="danger" onClick={onLogout} style={{ width: '100%', justifyContent: 'center' }}>
+              🚪 退出登录
+            </Button>
+          </>
+        ) : (
+          <Button tone="primary" onClick={onLogin} style={{ width: '100%', justifyContent: 'center' }}>
+            登录
+          </Button>
+        )}
       </div>
     </Modal>
   );
@@ -746,6 +791,7 @@ export function initialView(): EnterpriseAgentViewModel {
     searchItems: [],
     catalogState: 'idle',
     catalogHome: emptyHome,
+    rememberedLogin: { remembered: false, autoLogin: false },
     pendingEvents: [],
     lifecycle: emptyLifecycle,
     localScanState: 'idle',
@@ -824,6 +870,17 @@ function startupStatusError(record: Record<string, unknown>): UiApiError {
 
 function normalizeTheme(value: unknown): 'glass-dark' | 'glass-light' | 'system' {
   return value === 'glass-dark' || value === 'glass-light' || value === 'system' ? value : 'system';
+}
+
+function normalizeRememberedLogin(value: unknown): RememberedLoginState {
+  const record = isRecord(value) ? value : {};
+  const remembered = record.remembered === true;
+  return {
+    remembered,
+    username: remembered ? str(record.username) : undefined,
+    autoLogin: record.autoLogin === true,
+    updatedAt: remembered ? str(record.updatedAt) : undefined
+  };
 }
 
 function replaceExtension(model: EnterpriseAgentViewModel, id: string, patch: Partial<ExtensionSummary>): EnterpriseAgentViewModel {

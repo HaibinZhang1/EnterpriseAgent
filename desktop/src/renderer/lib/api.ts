@@ -4,8 +4,11 @@ import { createRequestId } from './requestId';
 export const desktopApi = {
   auth: {
     getSession: () => call('session', window.enterpriseAgent.auth.getSession()),
-    login: (username: string, password: string) => call('login', window.enterpriseAgent.auth.login(username, password, createRequestId('login'))),
+    login: (username: string, password: string, rememberPassword = false) => call('login', window.enterpriseAgent.auth.login(username, password, { rememberPassword }, createRequestId('login'))),
     logout: () => call('logout', window.enterpriseAgent.auth.logout(createRequestId('logout'))),
+    getRememberedLogin: () => call('rememberedLogin', window.enterpriseAgent.auth.getRememberedLogin(createRequestId('rememberedLogin'))),
+    clearRememberedLogin: () => call('clearRememberedLogin', window.enterpriseAgent.auth.clearRememberedLogin(createRequestId('clearRememberedLogin'))),
+    autoLogin: () => call('autoLogin', window.enterpriseAgent.auth.autoLogin(createRequestId('autoLogin'))),
     me: () => call('me', window.enterpriseAgent.auth.me(createRequestId('me'))),
     changePassword: (payload: { oldPassword: string; newPassword: string }) => call('password', window.enterpriseAgent.auth.changePassword(payload, createRequestId('password'))),
     completeResetPassword: (payload: { resetToken: string; newPassword: string }) => call('resetPassword', window.enterpriseAgent.auth.completeResetPassword(payload, createRequestId('resetPassword')))
