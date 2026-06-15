@@ -37,6 +37,9 @@ describe('IPC router and preload API', () => {
       if (!scan.success) throw new Error('local scan should succeed');
       expect(Number((scan.data as { discovered?: { total?: number } }).discovered?.total ?? 0)).toBeGreaterThanOrEqual(0);
 
+      const resources = await services.router.invoke(IPC_CHANNELS.localListResources, undefined, { requestID: 'req_resources' });
+      expect(resources).toMatchObject({ success: true, requestID: 'req_resources', data: { resources: expect.any(Array), rows: expect.any(Array), summary: expect.any(Object) } });
+
       const unknown = await services.router.invoke('raw.ipcRenderer', {}, { requestID: 'req_unknown' });
       expect(unknown).toMatchObject({ success: false, error: { code: 'unknown_ipc_channel' } });
       await services.db.close();
@@ -49,7 +52,7 @@ describe('IPC router and preload API', () => {
     const api = createPreloadApi(async <T>(channel: any, _payload?: unknown, requestID?: string) => ({ success: true, data: channel as T, requestID: requestID ?? 'req' }));
     expect(Object.keys(api).sort()).toEqual(['auth', 'catalog', 'clientUpdate', 'device', 'extension', 'local', 'logs', 'mcp', 'notifications', 'plugin', 'publish', 'settings', 'startup']);
     expect(Object.keys(api.clientUpdate).sort()).toEqual(['cancel', 'check', 'confirmDownload', 'confirmInstall', 'getPending']);
-    expect(Object.keys(api.local).sort()).toEqual(['cleanup', 'enqueueEvent', 'getOfflineState', 'getStatus', 'listLifecycle', 'listPendingEvents', 'scanInventory', 'syncPending']);
+    expect(Object.keys(api.local).sort()).toEqual(['cleanup', 'enqueueEvent', 'getOfflineState', 'getStatus', 'listLifecycle', 'listPendingEvents', 'listResources', 'scanInventory', 'syncPending']);
     expect(Object.keys(api.startup).sort()).toEqual(['clearSession', 'getStatus', 'rebuildLocalDatabase', 'retry']);
     expect(JSON.stringify(api)).not.toContain('ipcRenderer');
     expect('fs' in api).toBe(false);

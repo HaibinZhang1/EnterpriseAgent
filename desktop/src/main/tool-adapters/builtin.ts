@@ -25,7 +25,34 @@ export class DirectoryToolAdapter implements ToolAdapter {
    * carrying tool-specific identity/capability metadata for target selection.
    */
   static forKnownTool(adapterId: string, toolName: string, defaultScanPaths: string[]): DirectoryToolAdapter {
-    return new DirectoryToolAdapter({ adapterId, toolName, defaultScanPaths });
+    return new DirectoryToolAdapter({
+      adapterId,
+      toolName,
+      defaultScanPaths,
+      agentAdapter: {
+        agentId: adapterId,
+        displayName: toolName,
+        adapterVersion: '1.0.0',
+        supportedPlatforms: [process.platform, 'test'],
+        builtIn: true,
+        customProfileSupported: true,
+        capabilities: ['detect', 'global-scope', 'project-scope', 'custom-path', 'settings-read', 'skills', 'mcp', 'plugins', 'permission-extract', 'static-audit', 'backup', 'rollback'],
+        macosPathProfile: {
+          platform: 'macos',
+          detectionRoots: defaultScanPaths,
+          globalResourcePaths: defaultScanPaths,
+          projectResourcePaths: [],
+          sourceLevel: 'DOC_OR_COMMUNITY_VERIFIED'
+        },
+        windowsPathProfile: {
+          platform: 'windows',
+          detectionRoots: [],
+          globalResourcePaths: [],
+          projectResourcePaths: [],
+          sourceLevel: 'USER_CONFIG_REQUIRED'
+        }
+      }
+    });
   }
 
   canHandle(request: AdapterMatchRequest): boolean {

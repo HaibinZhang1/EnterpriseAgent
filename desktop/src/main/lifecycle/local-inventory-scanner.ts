@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AppPaths } from '../config/app-paths';
 import type { LocalLifecycleRepository } from './local-lifecycle-repository';
+import { LocalResourceSourceTypes, LocalResourceTypes, type LocalResourceType } from '../../shared/local-resources';
 
 export interface LocalInventoryScanSummary {
   scannedAt: string;
@@ -22,8 +23,17 @@ export interface LocalInventoryScanSummary {
     mcpConfigs: number;
     tools: number;
     projects: number;
+    failures: number;
     total: number;
   };
+  failures: LocalInventoryScanFailure[];
+}
+
+export interface LocalInventoryScanFailure {
+  path?: string;
+  code: string;
+  message: string;
+  resourceType?: LocalResourceType;
 }
 
 interface ScannedExtensionItem {
@@ -70,13 +80,14 @@ export class LocalInventoryScanner {
   }
 
   async scan(): Promise<LocalInventoryScanSummary> {
+    const failures: LocalInventoryScanFailure[] = [];
     const [managedSkills, plugins, mcps, adapterTools, projects, knownToolInventory] = await Promise.all([
-      scanExtensionDirectory(this.paths.centralStoreSkillsDir, 'skill'),
-      scanExtensionDirectory(this.paths.centralStorePluginsDir, 'plugin'),
-      scanMcpConfigs(this.paths.mcpConfigsDir),
-      scanTools(this.paths.adaptersDir),
-      scanProjects(this.paths.projectsDir),
-      this.detectKnownTools ? scanKnownToolInventory(this.homeDir) : Promise.resolve({ skills: [], tools: [] })
+      scanExtensionDirectory(this.paths.centralStoreSkillsDir, 'skill', failures),
+      scanExtensionDirectory(this.paths.centralStorePluginsDir, 'plugin', failures),
+      scanMcpConfigs(this.paths.mcpConfigsDir, failures),
+      scanTools(this.paths.adaptersDir, failures),
+      scanProjects(this.paths.projectsDir, failures),
+      this.detectKnownTools ? scanKnownToolInventory(this.homeDir, failures) : Promise.resolve({ skills: [], tools: [] })
     ]);
     const skills = [...managedSkills, ...knownToolInventory.skills];
     const tools = [...adapterTools, ...knownToolInventory.tools];
@@ -131,12 +142,21 @@ export class LocalInventoryScanner {
       });
     }
 
+    for (const failure of failures) {
+      await this.lifecycleRepository.recordScanFailure({
+        ...failure,
+        sourceType: LocalResourceSourceTypes.LOCAL_IMPORT,
+        metadata: { phase: 'local_inventory_scan' }
+      });
+    }
+
     const discovered = {
       skills: skills.length,
       plugins: plugins.length,
       mcpConfigs: mcps.length,
       tools: tools.length,
       projects: projects.length,
+      failures: failures.length,
       total: skills.length + plugins.length + mcps.length + tools.length + projects.length
     };
     return {
@@ -149,19 +169,26 @@ export class LocalInventoryScanner {
         adapters: this.paths.adaptersDir,
         projects: this.paths.projectsDir
       },
-      discovered
+      discovered,
+      failures
     };
   }
 }
 
-async function scanExtensionDirectory(directory: string, kind: 'skill' | 'plugin'): Promise<ScannedExtensionItem[]> {
+async function scanExtensionDirectory(directory: string, kind: 'skill' | 'plugin', failures: LocalInventoryScanFailure[]): Promise<ScannedExtensionItem[]> {
   const entries = await safeReadDir(directory);
   const items: ScannedExtensionItem[] = [];
   for (const entry of entries) {
     if (entry.isSymbolicLink()) continue;
     if (!entry.isDirectory() && !isPackageFile(entry.name)) continue;
     const target = path.join(directory, entry.name);
-    const manifest = await readManifest(target, entry.isDirectory());
+    let manifest: Record<string, unknown>;
+    try {
+      manifest = await readManifest(target, entry.isDirectory());
+    } catch (error) {
+      failures.push(scanFailure(error, target, kind === 'skill' ? LocalResourceTypes.SKILL : LocalResourceTypes.PLUGIN));
+      continue;
+    }
     const fallbackName = path.basename(entry.name, path.extname(entry.name));
     const extensionId = stringValue(manifest.extensionId ?? manifest.extensionID ?? manifest.id ?? manifest.name) ?? `${kind}:${fallbackName}`;
     items.push({
@@ -182,14 +209,20 @@ async function scanExtensionDirectory(directory: string, kind: 'skill' | 'plugin
   return items;
 }
 
-async function scanMcpConfigs(directory: string): Promise<ScannedExtensionItem[]> {
+async function scanMcpConfigs(directory: string, failures: LocalInventoryScanFailure[]): Promise<ScannedExtensionItem[]> {
   const entries = await safeReadDir(directory);
   const items: ScannedExtensionItem[] = [];
   for (const entry of entries) {
     if (entry.isSymbolicLink()) continue;
     if (!entry.isFile() || !isConfigFile(entry.name)) continue;
     const target = path.join(directory, entry.name);
-    const manifest = entry.name.endsWith('.json') ? await readJsonFile(target) : {};
+    let manifest: Record<string, unknown>;
+    try {
+      manifest = entry.name.endsWith('.json') ? await readJsonFile(target) : {};
+    } catch (error) {
+      failures.push(scanFailure(error, target, LocalResourceTypes.MCP_SERVER));
+      continue;
+    }
     const fallbackName = path.basename(entry.name, path.extname(entry.name));
     const serverNames = isRecord(manifest.mcpServers) ? Object.keys(manifest.mcpServers) : [];
     const extensionId = stringValue(manifest.extensionId ?? manifest.extensionID ?? manifest.id) ?? `mcp:${serverNames[0] ?? fallbackName}`;
@@ -210,14 +243,20 @@ async function scanMcpConfigs(directory: string): Promise<ScannedExtensionItem[]
   return items;
 }
 
-async function scanTools(directory: string): Promise<ScannedToolItem[]> {
+async function scanTools(directory: string, failures: LocalInventoryScanFailure[]): Promise<ScannedToolItem[]> {
   const entries = await safeReadDir(directory);
   const items: ScannedToolItem[] = [];
   for (const entry of entries) {
     if (entry.isSymbolicLink()) continue;
     if (!entry.isDirectory() && !isPackageFile(entry.name)) continue;
     const target = path.join(directory, entry.name);
-    const manifest = await readManifest(target, entry.isDirectory());
+    let manifest: Record<string, unknown>;
+    try {
+      manifest = await readManifest(target, entry.isDirectory());
+    } catch (error) {
+      failures.push(scanFailure(error, target, LocalResourceTypes.KIT));
+      continue;
+    }
     const fallbackName = path.basename(entry.name, path.extname(entry.name));
     const toolName = stringValue(manifest.toolName ?? manifest.name ?? manifest.id) ?? fallbackName;
     items.push({
@@ -235,13 +274,19 @@ async function scanTools(directory: string): Promise<ScannedToolItem[]> {
   return items;
 }
 
-async function scanProjects(directory: string): Promise<ScannedProjectItem[]> {
+async function scanProjects(directory: string, failures: LocalInventoryScanFailure[]): Promise<ScannedProjectItem[]> {
   const entries = await safeReadDir(directory);
   const items: ScannedProjectItem[] = [];
   for (const entry of entries) {
     if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
     const target = path.join(directory, entry.name);
-    const manifest = await readManifest(target, true);
+    let manifest: Record<string, unknown>;
+    try {
+      manifest = await readManifest(target, true);
+    } catch (error) {
+      failures.push(scanFailure(error, target, LocalResourceTypes.PROJECT));
+      continue;
+    }
     items.push({
       projectId: stringValue(manifest.projectId ?? manifest.id) ?? `project:${entry.name}`,
       name: stringValue(manifest.displayName ?? manifest.name) ?? entry.name,
@@ -257,7 +302,7 @@ async function scanProjects(directory: string): Promise<ScannedProjectItem[]> {
   return items;
 }
 
-async function scanKnownToolInventory(homeDir: string): Promise<{ skills: ScannedExtensionItem[]; tools: ScannedToolItem[] }> {
+async function scanKnownToolInventory(homeDir: string, failures: LocalInventoryScanFailure[]): Promise<{ skills: ScannedExtensionItem[]; tools: ScannedToolItem[] }> {
   const codexRoot = path.join(homeDir, '.codex');
   const hasCodex = await directoryExists(codexRoot);
   if (!hasCodex) return { skills: [], tools: [] };
@@ -266,7 +311,7 @@ async function scanKnownToolInventory(homeDir: string): Promise<{ skills: Scanne
     path.join(codexRoot, 'skills'),
     path.join(codexRoot, 'skills', '.system')
   ];
-  const skills = (await Promise.all(skillRoots.map((root) => scanCodexSkills(root)))).flat();
+  const skills = (await Promise.all(skillRoots.map((root) => scanCodexSkills(root, failures)))).flat();
   return {
     skills,
     tools: [{
@@ -283,14 +328,20 @@ async function scanKnownToolInventory(homeDir: string): Promise<{ skills: Scanne
   };
 }
 
-async function scanCodexSkills(directory: string): Promise<ScannedExtensionItem[]> {
+async function scanCodexSkills(directory: string, failures: LocalInventoryScanFailure[]): Promise<ScannedExtensionItem[]> {
   const entries = await safeReadDir(directory);
   const items: ScannedExtensionItem[] = [];
   for (const entry of entries) {
     if (entry.isSymbolicLink() || !entry.isDirectory() || entry.name === '.system') continue;
     const target = path.join(directory, entry.name);
     const skillFile = path.join(target, 'SKILL.md');
-    const skillMarkdown = await readTextFile(skillFile);
+    let skillMarkdown: string | undefined;
+    try {
+      skillMarkdown = await readTextFile(skillFile);
+    } catch (error) {
+      failures.push(scanFailure(error, skillFile, LocalResourceTypes.SKILL));
+      continue;
+    }
     if (!skillMarkdown) continue;
     const skillId = `codex.skill.${entry.name}`;
     const title = firstHeading(skillMarkdown) ?? entry.name;
@@ -355,9 +406,23 @@ async function readJsonFile(file: string): Promise<Record<string, unknown>> {
     const parsed = JSON.parse(await readFile(file, 'utf8')) as unknown;
     return isRecord(parsed) ? parsed : {};
   } catch (error) {
-    if (isMissingFileError(error) || error instanceof SyntaxError) return {};
+    if (isMissingFileError(error)) return {};
     throw error;
   }
+}
+
+function scanFailure(error: unknown, target: string, resourceType: LocalResourceType): LocalInventoryScanFailure {
+  if (error instanceof SyntaxError) {
+    return {
+      path: target,
+      code: 'manifest_parse_failed',
+      message: `无法解析本地资源配置：${error.message}`,
+      resourceType
+    };
+  }
+  const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'scan_read_failed';
+  const message = error instanceof Error ? error.message : '本地资源读取失败';
+  return { path: target, code, message, resourceType };
 }
 
 function isPackageFile(name: string): boolean {

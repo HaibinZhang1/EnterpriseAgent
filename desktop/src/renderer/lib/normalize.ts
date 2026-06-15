@@ -1,4 +1,4 @@
-import type { CatalogHome, ExtensionKind, ExtensionSummary, LocalLifecycleSnapshot, NotificationItem, PublishResult, SessionUser, UpdateState, VersionSummary } from '../types/desktop';
+import type { CatalogHome, ExtensionKind, ExtensionSummary, LocalLifecycleSnapshot, LocalResourceSnapshot, NotificationItem, PublishResult, SessionUser, UpdateState, VersionSummary } from '../types/desktop';
 
 export function normalizeSessionUser(value: unknown): SessionUser | undefined {
   if (!isRecord(value)) return undefined;
@@ -84,7 +84,30 @@ export function normalizeLifecycle(value: unknown): LocalLifecycleSnapshot {
     tools: records(record.tools),
     projects: records(record.projects),
     mcpInstallations: records(record.mcpInstallations),
-    pluginInstallations: records(record.pluginInstallations)
+    pluginInstallations: records(record.pluginInstallations),
+    resources: isRecord(record.resources) ? normalizeLocalResourceSnapshot(record.resources) : undefined
+  };
+}
+
+export function normalizeLocalResourceSnapshot(value: unknown): LocalResourceSnapshot {
+  const record = isRecord(value) ? value : {};
+  const summary = isRecord(record.summary) ? record.summary : {};
+  return {
+    resources: records(record.resources) as unknown as LocalResourceSnapshot['resources'],
+    bindings: records(record.bindings) as unknown as LocalResourceSnapshot['bindings'],
+    files: records(record.files) as unknown as LocalResourceSnapshot['files'],
+    events: records(record.events) as unknown as LocalResourceSnapshot['events'],
+    rows: records(record.rows) as unknown as LocalResourceSnapshot['rows'],
+    summary: {
+      resourceCount: num(summary.resourceCount) ?? 0,
+      bindingCount: num(summary.bindingCount) ?? 0,
+      fileCount: num(summary.fileCount) ?? 0,
+      eventCount: num(summary.eventCount) ?? 0,
+      pendingSyncEvents: num(summary.pendingSyncEvents) ?? 0,
+      failureCount: num(summary.failureCount) ?? 0,
+      lastScannedAt: str(summary.lastScannedAt),
+      generatedAt: str(summary.generatedAt) ?? new Date(0).toISOString()
+    }
   };
 }
 

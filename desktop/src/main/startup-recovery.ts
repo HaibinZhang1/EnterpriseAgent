@@ -59,13 +59,34 @@ export function createStartupRecoveryRouter(options: StartupRecoveryRouterOption
     tools: [],
     projects: [],
     mcpInstallations: [],
-    pluginInstallations: []
+    pluginInstallations: [],
+    resources: emptyLocalResourceSnapshot()
   }));
+  router.register(IPC_CHANNELS.localListResources, () => emptyLocalResourceSnapshot());
   router.register(IPC_CHANNELS.localScanInventory, () => ({ scannedAt: new Date().toISOString(), discovered: { total: 0 } }));
   router.register(IPC_CHANNELS.logsGetRecent, () => []);
   router.register(IPC_CHANNELS.clientUpdateGetPending, () => undefined);
 
   return router;
+}
+
+function emptyLocalResourceSnapshot(): Record<string, unknown> {
+  return {
+    resources: [],
+    bindings: [],
+    files: [],
+    events: [],
+    rows: [],
+    summary: {
+      resourceCount: 0,
+      bindingCount: 0,
+      fileCount: 0,
+      eventCount: 0,
+      pendingSyncEvents: 0,
+      failureCount: 0,
+      generatedAt: new Date().toISOString()
+    }
+  };
 }
 
 export interface ClearStartupSessionResult {

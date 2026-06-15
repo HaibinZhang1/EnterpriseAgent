@@ -1,14 +1,30 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { EnterpriseAgentAppView, createEnterpriseAgentActions, initialView, normalizeActionResult, resolveTheme, shouldUseLocalDetailFallback, waitForStartupReady, type EnterpriseAgentActions, type EnterpriseAgentViewModel } from '../src/renderer/App';
+import { EnterpriseAgentAppView, applyLocalLoadOutcome, createEnterpriseAgentActions, initialView, normalizeActionResult, readLocalData, resolveTheme, shouldUseLocalDetailFallback, waitForStartupReady, type EnterpriseAgentActions, type EnterpriseAgentViewModel } from '../src/renderer/App';
 import { ExtensionActionModal } from '../src/renderer/features/extension/ExtensionActionModal';
 import { ExtensionDetailDrawer } from '../src/renderer/features/extension/ExtensionDetailDrawer';
 import { MySubmissionsDrawer } from '../src/renderer/features/publish/MySubmissionsDrawer';
 import { PublishWizard, type PublishDraft } from '../src/renderer/features/publish/PublishWizard';
 import { SettingsModal } from '../src/renderer/features/settings/SettingsModal';
 import { UpdateModal } from '../src/renderer/features/update/UpdateModal';
-import { readableErrorMessage } from '../src/renderer/lib/errors';
-import type { ExtensionKind, ExtensionSummary } from '../src/renderer/types/desktop';
+import { readableErrorMessage, UiApiError } from '../src/renderer/lib/errors';
+import type { ExtensionKind, ExtensionSummary, LocalResourceSnapshot } from '../src/renderer/types/desktop';
+import {
+  aggregateResourceStatus,
+  AuthStatuses,
+  AuditStatuses,
+  createEmptyPermissionSummary,
+  createNotAuditedSummary,
+  DetectionStatuses,
+  DriftStatuses,
+  LifecycleStatuses,
+  LocalResourceSourceTypes,
+  LocalResourceTypes,
+  OperationStatuses,
+  PathStatuses,
+  ResourceScopeTypes,
+  SyncStatuses
+} from '../src/shared/local-resources';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -84,7 +100,8 @@ describe('renderer app view', () => {
       bootError: { code: 'unauthenticated', message: '登录已失效，请重新登录。', requestID: 'req-auth-boot' },
       lifecycle: { extensions: [], versions: [], targets: [], tools: [], projects: [], mcpInstallations: [], pluginInstallations: [] }
     });
-    expect(html).toContain('本地仓库管理');
+    expect(html).toContain('本地资源管理');
+    expect(html).toContain('打开本地页面：概览');
     expect(html).not.toContain('客户端初始化失败');
     expect(html).not.toContain('req-auth-boot');
   });
@@ -212,9 +229,10 @@ describe('renderer app view', () => {
     expect(shouldUseLocalDetailFallback({ ...extension('local-skill', 'skill'), status: 'installed' }, { code: 'server_unavailable', message: '无法连接服务端，请检查网络或服务状态。' })).toBe(false);
   });
 
-  it('keeps local event sync hidden while showing offline warning and cleanup for scope-reduced entries', () => {
+  it('renders the unified local resource page with offline warning and scope-reduced entries', () => {
     const html = renderView({
       activeTab: 'local',
+      localTab: 'overview',
       offline: { online: false },
       lifecycle: {
         extensions: [{ extensionId: 'skill-one', name: 'Skill One', status: 'scope_reduced', updatedAt: '2026-05-25T00:00:00Z' }],
@@ -223,16 +241,57 @@ describe('renderer app view', () => {
         tools: [],
         projects: [],
         mcpInstallations: [],
-        pluginInstallations: []
+        pluginInstallations: [],
+        resources: localResourceSnapshot()
       }
     });
     expect(html).toContain('当前离线');
     expect(html).toContain('重新扫描');
-    expect(html).not.toContain('事件同步队列');
-    expect(html).not.toContain('待同步事件');
+    expect(html).toContain('待同步事件 0');
+    expect(html).toContain('Skill One');
+    expect(html).toContain('名称');
+    expect(html).toContain('智能体/项目');
     expect(html).not.toContain('SKILL_ENABLE');
     expect(html).toContain('授权收缩');
-    expect(html).toContain('本地清理');
+    expect(html).toContain('阶段一仅建模');
+  });
+
+  it('surfaces local resource snapshot failures instead of showing stale resources as ready', async () => {
+    const current: EnterpriseAgentViewModel = {
+      ...initialView(),
+      activeTab: 'local',
+      lifecycle: {
+        ...initialView().lifecycle,
+        resources: localResourceSnapshot()
+      }
+    };
+    const outcome = await readLocalData({
+      scanInventory: async () => ({
+        scannedAt: '2026-06-15T00:00:00Z',
+        discovered: { failures: 0, total: 0 }
+      }),
+      resources: async () => {
+        throw new UiApiError({ code: 'local_resources_failed', message: '资源快照读取失败', requestID: 'req-resources' });
+      }
+    });
+    const update = applyLocalLoadOutcome(current, outcome);
+
+    expect(update.localScanState).toBe('error');
+    expect(update.localScanError).toMatchObject({ code: 'local_resources_failed', message: '资源快照读取失败', requestID: 'req-resources' });
+    expect(update.localScanSummary).toMatchObject({ scannedAt: '2026-06-15T00:00:00Z' });
+    expect(update.lifecycle.resources?.rows).toHaveLength(0);
+
+    const html = renderView({
+      activeTab: 'local',
+      localScanState: update.localScanState,
+      localScanSummary: update.localScanSummary,
+      localScanError: update.localScanError,
+      lifecycle: update.lifecycle
+    });
+    expect(html).toContain('资源快照读取失败');
+    expect(html).toContain('req-resources');
+    expect(html).toContain('未发现可展示资源');
+    expect(html).not.toContain('Skill One');
   });
 
   it('renders MCP variable warnings and manual-download instructions in action results', () => {
@@ -525,5 +584,73 @@ function extension(id: string, type: ExtensionKind): ExtensionSummary {
     tags: [],
     authorized: true,
     starCount: 1
+  };
+}
+
+function localResourceSnapshot(): LocalResourceSnapshot {
+  const generatedAt = '2026-06-15T00:00:00Z';
+  const resource = {
+    id: 'resource_skill_one',
+    type: LocalResourceTypes.SKILL,
+    name: 'Skill One',
+    displayName: 'Skill One',
+    sourceType: LocalResourceSourceTypes.CENTRAL_STORE,
+    sourceId: 'skill-one',
+    sourcePath: '/tmp/central-store/skills/skill-one',
+    managed: true,
+    centralStoreManaged: true,
+    nativeDirectoryManaged: false,
+    eaManagedFallback: false,
+    permissionSummary: createEmptyPermissionSummary('未声明'),
+    auditSummary: createNotAuditedSummary(AuditStatuses.NOT_AUDITED),
+    createdAt: generatedAt,
+    lastScannedAt: generatedAt,
+    metadata: {}
+  };
+  const binding = {
+    id: 'binding_skill_one',
+    resourceId: resource.id,
+    resourceType: LocalResourceTypes.SKILL,
+    agentId: 'codex',
+    scopeType: ResourceScopeTypes.AGENT_GLOBAL,
+    targetPath: '/Users/alice/.codex/skills/skill-one',
+    managedMode: 'SERVER_MANAGED' as const,
+    writeMode: 'READ_ONLY' as const,
+    detectionStatus: DetectionStatuses.DETECTED,
+    lifecycleStatus: LifecycleStatuses.ENABLED,
+    pathStatus: PathStatuses.OK,
+    authStatus: AuthStatuses.AUTH_REVOKED,
+    auditStatus: AuditStatuses.NOT_AUDITED,
+    driftStatus: DriftStatuses.UNKNOWN,
+    operationStatus: OperationStatuses.IDLE,
+    syncStatus: SyncStatuses.LOCAL_ONLY,
+    externalModified: false,
+    drifted: false,
+    metadata: {},
+    updatedAt: generatedAt
+  };
+  return {
+    resources: [resource],
+    bindings: [binding],
+    files: [],
+    events: [],
+    rows: [{
+      resource,
+      binding,
+      files: [],
+      events: [],
+      status: aggregateResourceStatus(binding),
+      scopeLabel: 'codex / 智能体全局'
+    }],
+    summary: {
+      resourceCount: 1,
+      bindingCount: 1,
+      fileCount: 0,
+      eventCount: 0,
+      pendingSyncEvents: 0,
+      failureCount: 0,
+      lastScannedAt: generatedAt,
+      generatedAt
+    }
   };
 }

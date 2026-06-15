@@ -3,9 +3,7 @@ import { Shell } from './components/Shell';
 import { AgentHomePage } from './pages/AgentHomePage';
 import { CommunityHomePage } from './pages/CommunityHomePage';
 import { SearchResultsPage } from './pages/SearchResultsPage';
-import { LocalExtensionsPage } from './pages/LocalExtensionsPage';
-import { LocalProjectsPage } from './pages/LocalProjectsPage';
-import { LocalToolsPage } from './pages/LocalToolsPage';
+import { LocalPage } from './pages/LocalPage';
 import { LoginModal } from './features/auth/LoginModal';
 import { ChangePasswordModal } from './features/auth/PasswordModals';
 import { ExtensionActionModal, type ActionResultView } from './features/extension/ExtensionActionModal';
@@ -22,11 +20,27 @@ import { LoadingState } from './components/LoadingState';
 import { Modal } from './components/Modal';
 import { desktopApi } from './lib/api';
 import { toUiError, UiApiError } from './lib/errors';
-import { normalizeCatalogHome, normalizeExtension, normalizeLifecycle, normalizeNotifications, normalizePublishResult, normalizeSearchResults, normalizeSessionUser, normalizeUpdateState, normalizeVersions } from './lib/normalize';
-import type { AppTab, CatalogHome, DetailState, DeviceSummary, ExtensionSummary, LoadState, LocalInventoryScanSummary, LocalLifecycleSnapshot, LocalTab, NotificationItem, OfflineState, PublishResult, RememberedLoginState, SessionUser, UiError, UpdateState, VersionSummary } from './types/desktop';
+import { normalizeCatalogHome, normalizeExtension, normalizeLocalResourceSnapshot, normalizeNotifications, normalizePublishResult, normalizeSearchResults, normalizeSessionUser, normalizeUpdateState, normalizeVersions } from './lib/normalize';
+import type { AppTab, CatalogHome, DetailState, DeviceSummary, ExtensionSummary, LoadState, LocalInventoryScanSummary, LocalLifecycleSnapshot, LocalResourceSnapshot, LocalTab, NotificationItem, OfflineState, PublishResult, RememberedLoginState, SessionUser, UiError, UpdateState, VersionSummary } from './types/desktop';
 
 const emptyHome: CatalogHome = { skills: [], mcps: [], plugins: [], hot: [], stars: [], downloads: [] };
-const emptyLifecycle: LocalLifecycleSnapshot = { extensions: [], versions: [], targets: [], tools: [], projects: [], mcpInstallations: [], pluginInstallations: [] };
+const emptyResources: LocalResourceSnapshot = {
+  resources: [],
+  bindings: [],
+  files: [],
+  events: [],
+  rows: [],
+  summary: {
+    resourceCount: 0,
+    bindingCount: 0,
+    fileCount: 0,
+    eventCount: 0,
+    pendingSyncEvents: 0,
+    failureCount: 0,
+    generatedAt: new Date(0).toISOString()
+  }
+};
+const emptyLifecycle: LocalLifecycleSnapshot = { extensions: [], versions: [], targets: [], tools: [], projects: [], mcpInstallations: [], pluginInstallations: [], resources: emptyResources };
 const localOnlyDetailStatuses = new Set([
   'scanned',
   'installed',
@@ -125,6 +139,48 @@ export interface EnterpriseAgentActions {
   confirmCleanup: () => void;
 }
 
+type LocalLoadApi = Pick<typeof desktopApi.local, 'scanInventory' | 'resources'>;
+
+interface LocalLoadOutcome {
+  scanSummary?: LocalInventoryScanSummary;
+  scanError?: UiError;
+  resources?: unknown;
+  resourceError?: UiError;
+}
+
+export async function readLocalData(localApi: LocalLoadApi = desktopApi.local): Promise<LocalLoadOutcome> {
+  const outcome: LocalLoadOutcome = {};
+  try {
+    const scan = await localApi.scanInventory();
+    outcome.scanSummary = isRecord(scan) ? scan as LocalInventoryScanSummary : undefined;
+  } catch (error) {
+    outcome.scanError = toUiError(error);
+  }
+  try {
+    outcome.resources = await localApi.resources();
+  } catch (error) {
+    outcome.resourceError = toUiError(error);
+  }
+  return outcome;
+}
+
+export function applyLocalLoadOutcome(
+  current: EnterpriseAgentViewModel,
+  outcome: LocalLoadOutcome
+): Pick<EnterpriseAgentViewModel, 'localScanState' | 'localScanSummary' | 'localScanError' | 'lifecycle'> {
+  const visibleError = outcome.resourceError ?? outcome.scanError;
+  return {
+    localScanState: visibleError ? 'error' : 'ready',
+    localScanSummary: outcome.scanSummary ?? current.localScanSummary,
+    localScanError: visibleError,
+    lifecycle: outcome.resourceError
+      ? { ...current.lifecycle, resources: emptyResources }
+      : outcome.resources !== undefined
+        ? { ...current.lifecycle, resources: normalizeLocalResourceSnapshot(outcome.resources) }
+        : current.lifecycle
+  };
+}
+
 export function App() {
   const [view, setView] = useState<EnterpriseAgentViewModel>(() => initialView());
 
@@ -142,23 +198,10 @@ export function App() {
 
   const loadLocal = useCallback(async () => {
     setView((current) => ({ ...current, localScanState: 'loading', localScanError: undefined }));
-    let scanSummary: LocalInventoryScanSummary | undefined;
-    let scanError: UiError | undefined;
-    try {
-      const scan = await desktopApi.local.scanInventory();
-      scanSummary = isRecord(scan) ? scan as LocalInventoryScanSummary : undefined;
-    } catch (error) {
-      scanError = toUiError(error);
-    }
-    const lifecycle = await desktopApi.local.lifecycle()
-      .then((value) => ({ status: 'fulfilled' as const, value }))
-      .catch(() => ({ status: 'rejected' as const }));
+    const outcome = await readLocalData();
     setView((current) => ({
       ...current,
-      localScanState: scanError ? 'error' : 'ready',
-      localScanSummary: scanSummary ?? current.localScanSummary,
-      localScanError: scanError,
-      lifecycle: lifecycle.status === 'fulfilled' ? normalizeLifecycle(lifecycle.value) : current.lifecycle
+      ...applyLocalLoadOutcome(current, outcome)
     }));
   }, []);
 
@@ -618,14 +661,14 @@ export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAg
       ) : null}
       {model.activeTab === 'local' ? (
         <main className="page" aria-label="本地" style={{ padding: 0, height: '100%', overflow: 'hidden' }}>
-          <LocalExtensionsPage
-            snapshot={model.lifecycle}
+          <LocalPage
+            snapshot={model.lifecycle.resources ?? emptyResources}
+            activeTab={model.localTab}
             offline={model.offline?.online === false}
-            onCleanup={actions.requestCleanup}
-            onOpenDetail={actions.openDetail}
             localScanState={model.localScanState}
             localScanSummary={model.localScanSummary}
             localScanError={model.localScanError}
+            onChangeTab={actions.changeLocalTab}
             onRefreshLocal={actions.refreshLocal}
           />
         </main>
@@ -686,10 +729,6 @@ export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAg
       {model.modal === 'cleanup' ? <DangerConfirmModal title="本地清理确认" message="该操作只处理本地记录或托管目标，不需要服务端授权状态为可用。" busy={model.cleanupBusy} error={model.cleanupError} result={model.cleanupResult} onClose={actions.closeModal} onConfirm={actions.confirmCleanup} /> : null}
     </Shell>
   );
-}
-
-function LocalTabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: string }) {
-  return <button type="button" className={`segment ${active ? 'active' : ''}`} onClick={onClick}>{children}</button>;
 }
 
 function AccountMenu({
@@ -782,7 +821,7 @@ export function initialView(): EnterpriseAgentViewModel {
   return {
     bootState: 'idle',
     activeTab: 'agent',
-    localTab: 'extensions',
+    localTab: 'overview',
     showingSearch: false,
     searchQuery: '',
     searchState: 'idle',

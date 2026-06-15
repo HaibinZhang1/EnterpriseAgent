@@ -37,4 +37,80 @@ describe('Package download and local lifecycle repository', () => {
       await temp.cleanup();
     }
   });
+
+  it('backfills legacy Skill MCP and Plugin rows into the unified resource graph', async () => {
+    const temp = await tempRoot();
+    try {
+      const dbPath = path.join(temp.root, 'local.db');
+      const db = new LocalDatabase(dbPath);
+      await db.initialize();
+      const now = '2026-06-15T00:00:00.000Z';
+      await db.run(
+        `INSERT INTO local_extensions(extension_id, name, summary, visibility, status, cached_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        ['skill.legacy', 'Legacy Skill', 'Old skill row', 'local_scan', 'installed', now, now]
+      );
+      await db.run(
+        `INSERT INTO local_extension_versions(extension_id, version, package_sha256, status, cached_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        ['skill.legacy', '1.0.0', 'legacy-sha', 'installed', now, now]
+      );
+      await db.run(
+        `INSERT INTO local_targets(id, extension_id, target, status, metadata_json, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        ['target-skill-legacy', 'skill.legacy', '/tmp/legacy-skill', 'failed', JSON.stringify({ kind: 'skill', adapterId: 'codex' }), now]
+      );
+      await db.run(
+        `INSERT INTO mcp_local_installations(id, extension_id, target, status, config_path, secure_ref, metadata_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ['mcp-legacy', 'mcp.legacy', 'codex', 'connected', '/tmp/mcp.json', 'secure.ref', '{}', now, now]
+      );
+      await db.run(
+        `INSERT INTO plugin_local_installations(id, extension_id, target, status, adapter_id, metadata_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        ['plugin-legacy', 'plugin.legacy', 'codex', 'installed', 'manual', '{}', now, now]
+      );
+
+      const repo = new LocalLifecycleRepository(db);
+      await repo.recordScannedExtension({
+        kind: 'plugin',
+        extensionId: 'plugin.new',
+        name: 'New Plugin',
+        target: '/tmp/new-plugin',
+        status: 'scanned',
+        metadata: { kind: 'plugin' }
+      });
+      const snapshot = repo.listResources();
+
+      expect(snapshot.resources.map((resource) => resource.type)).toEqual(expect.arrayContaining(['SKILL', 'MCP_SERVER', 'PLUGIN']));
+      expect(snapshot.bindings.map((binding) => binding.resourceType)).toEqual(expect.arrayContaining(['SKILL', 'MCP_SERVER', 'PLUGIN']));
+      expect(snapshot.resources.map((resource) => resource.sourceId)).toEqual(expect.arrayContaining(['plugin.new', 'skill.legacy', 'mcp.legacy', 'plugin.legacy']));
+      expect(snapshot.resources.find((resource) => resource.sourceId === 'skill.legacy')).toMatchObject({
+        name: 'Legacy Skill',
+        version: '1.0.0',
+        packageHash: 'legacy-sha',
+        metadata: expect.objectContaining({ legacyBackfill: true, legacyTable: 'local_extensions' })
+      });
+      expect(snapshot.bindings.find((binding) => binding.targetPath === '/tmp/legacy-skill')).toMatchObject({
+        resourceType: 'SKILL',
+        detectionStatus: 'SCAN_FAILED',
+        operationStatus: 'FAILURE',
+        metadata: expect.objectContaining({ legacyBackfill: true })
+      });
+      expect(snapshot.bindings.find((binding) => binding.resourceType === 'MCP_SERVER')).toMatchObject({
+        lifecycleStatus: 'CONNECTED',
+        pathStatus: 'UNKNOWN'
+      });
+      expect(snapshot.files).toHaveLength(0);
+      await db.close();
+
+      const reopened = new LocalDatabase(dbPath);
+      await reopened.initialize();
+      const persisted = new LocalLifecycleRepository(reopened).listResources();
+      expect(persisted.resources.map((resource) => resource.sourceId)).toEqual(expect.arrayContaining(['skill.legacy', 'mcp.legacy', 'plugin.legacy']));
+      await reopened.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
 });

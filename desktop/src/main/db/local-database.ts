@@ -1,4 +1,5 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import initSqlJs, { type Database, type QueryExecResult, type SqlJsStatic, type SqlValue } from 'sql.js';
 import { DesktopErrorException, makeDesktopError } from '../../shared/errors';
@@ -78,8 +79,21 @@ CREATE TABLE IF NOT EXISTS local_events (
   extension_id TEXT,
   version TEXT,
   event_type TEXT NOT NULL,
+  operation_id TEXT,
+  execution_id TEXT,
+  resource_id TEXT,
+  binding_id TEXT,
+  resource_type TEXT,
+  agent_id TEXT,
+  project_id TEXT,
+  kit_id TEXT,
   result TEXT,
   error_code TEXT,
+  failure_reason TEXT,
+  suggestion TEXT,
+  offline_created INTEGER NOT NULL DEFAULT 1,
+  sync_status TEXT NOT NULL DEFAULT 'PENDING_SYNC',
+  server_ack_status TEXT,
   payload_json TEXT NOT NULL DEFAULT '{}',
   status TEXT NOT NULL,
   attempt_count INTEGER NOT NULL DEFAULT 0,
@@ -87,6 +101,86 @@ CREATE TABLE IF NOT EXISTS local_events (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   synced_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS local_resources (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  description TEXT,
+  source_type TEXT NOT NULL,
+  source_id TEXT,
+  source_path TEXT,
+  version TEXT,
+  latest_version TEXT,
+  sha256 TEXT,
+  package_hash TEXT,
+  managed INTEGER NOT NULL DEFAULT 0,
+  central_store_managed INTEGER NOT NULL DEFAULT 0,
+  native_directory_managed INTEGER NOT NULL DEFAULT 0,
+  ea_managed_fallback INTEGER NOT NULL DEFAULT 0,
+  permission_summary_json TEXT NOT NULL DEFAULT '{}',
+  audit_summary_json TEXT NOT NULL DEFAULT '{}',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  last_scanned_at TEXT,
+  last_modified_at TEXT,
+  last_event_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS resource_bindings (
+  id TEXT PRIMARY KEY,
+  resource_id TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  agent_id TEXT,
+  project_id TEXT,
+  kit_id TEXT,
+  scope_type TEXT NOT NULL,
+  scope_path TEXT,
+  target_path TEXT,
+  managed_mode TEXT NOT NULL,
+  write_mode TEXT NOT NULL,
+  detection_status TEXT NOT NULL,
+  lifecycle_status TEXT NOT NULL,
+  path_status TEXT NOT NULL,
+  auth_status TEXT NOT NULL,
+  audit_status TEXT NOT NULL,
+  drift_status TEXT NOT NULL,
+  operation_status TEXT NOT NULL,
+  sync_status TEXT NOT NULL,
+  last_known_hash TEXT,
+  current_hash TEXT,
+  external_modified INTEGER NOT NULL DEFAULT 0,
+  drifted INTEGER NOT NULL DEFAULT 0,
+  backup_snapshot_id TEXT,
+  last_execution_id TEXT,
+  last_event_at TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(resource_id) REFERENCES local_resources(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS file_backed_resources (
+  id TEXT PRIMARY KEY,
+  resource_id TEXT NOT NULL,
+  binding_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  size INTEGER NOT NULL DEFAULT 0,
+  last_known_mtime TEXT NOT NULL,
+  last_known_size INTEGER NOT NULL DEFAULT 0,
+  last_known_hash TEXT NOT NULL,
+  current_hash TEXT,
+  last_managed_hash TEXT,
+  external_modified INTEGER NOT NULL DEFAULT 0,
+  drifted INTEGER NOT NULL DEFAULT 0,
+  preview_available INTEGER NOT NULL DEFAULT 0,
+  backup_snapshot_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(resource_id) REFERENCES local_resources(id) ON DELETE CASCADE,
+  FOREIGN KEY(binding_id) REFERENCES resource_bindings(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS mcp_local_installations (
@@ -144,6 +238,23 @@ CREATE TABLE IF NOT EXISTS download_cache (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_local_events_idempotency_key ON local_events(idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_local_events_status ON local_events(status);
 CREATE INDEX IF NOT EXISTS idx_local_events_extension_id ON local_events(extension_id);
+CREATE INDEX IF NOT EXISTS idx_local_events_resource_id ON local_events(resource_id);
+CREATE INDEX IF NOT EXISTS idx_local_events_resource_type ON local_events(resource_type);
+CREATE INDEX IF NOT EXISTS idx_local_events_project_id ON local_events(project_id);
+CREATE INDEX IF NOT EXISTS idx_local_events_sync_status ON local_events(sync_status);
+CREATE INDEX IF NOT EXISTS idx_local_resources_type ON local_resources(type);
+CREATE INDEX IF NOT EXISTS idx_local_resources_source_type ON local_resources(source_type);
+CREATE INDEX IF NOT EXISTS idx_local_resources_last_scanned_at ON local_resources(last_scanned_at);
+CREATE INDEX IF NOT EXISTS idx_resource_bindings_resource_id ON resource_bindings(resource_id);
+CREATE INDEX IF NOT EXISTS idx_resource_bindings_resource_type ON resource_bindings(resource_type);
+CREATE INDEX IF NOT EXISTS idx_resource_bindings_agent_id ON resource_bindings(agent_id);
+CREATE INDEX IF NOT EXISTS idx_resource_bindings_project_id ON resource_bindings(project_id);
+CREATE INDEX IF NOT EXISTS idx_resource_bindings_scope_type ON resource_bindings(scope_type);
+CREATE INDEX IF NOT EXISTS idx_resource_bindings_detection_status ON resource_bindings(detection_status);
+CREATE INDEX IF NOT EXISTS idx_resource_bindings_audit_status ON resource_bindings(audit_status);
+CREATE INDEX IF NOT EXISTS idx_file_backed_resources_resource_id ON file_backed_resources(resource_id);
+CREATE INDEX IF NOT EXISTS idx_file_backed_resources_binding_id ON file_backed_resources(binding_id);
+CREATE INDEX IF NOT EXISTS idx_file_backed_resources_path ON file_backed_resources(path);
 CREATE INDEX IF NOT EXISTS idx_local_targets_extension_id ON local_targets(extension_id);
 CREATE INDEX IF NOT EXISTS idx_local_targets_target ON local_targets(target);
 CREATE INDEX IF NOT EXISTS idx_local_targets_status ON local_targets(status);
@@ -166,6 +277,21 @@ export class LocalDatabase {
       const bytes = await this.readExistingBytes();
       this.db = bytes ? new SQL.Database(bytes) : new SQL.Database();
       this.db.exec(MIGRATION_SQL);
+      this.ensureColumns('local_events', {
+        operation_id: 'TEXT',
+        execution_id: 'TEXT',
+        resource_id: 'TEXT',
+        binding_id: 'TEXT',
+        resource_type: 'TEXT',
+        agent_id: 'TEXT',
+        project_id: 'TEXT',
+        kit_id: 'TEXT',
+        failure_reason: 'TEXT',
+        suggestion: 'TEXT',
+        offline_created: 'INTEGER NOT NULL DEFAULT 1',
+        sync_status: "TEXT NOT NULL DEFAULT 'PENDING_SYNC'",
+        server_ack_status: 'TEXT'
+      });
       await this.persist();
     } catch (error) {
       throw new DesktopErrorException(makeDesktopError('db_error', 'Failed to initialize local SQLite database', undefined, error));
@@ -189,6 +315,16 @@ export class LocalDatabase {
     try {
       statement.run(params);
       await this.persist();
+    } finally {
+      statement.free();
+    }
+  }
+
+  runSync(sql: string, params: SqlValue[] = []): void {
+    const statement = this.ensureDb().prepare(sql);
+    try {
+      statement.run(params);
+      this.persistSync();
     } finally {
       statement.free();
     }
@@ -226,9 +362,22 @@ export class LocalDatabase {
     await writeFile(this.filePath, Buffer.from(data));
   }
 
+  private persistSync(): void {
+    const data = this.ensureDb().export();
+    writeFileSync(this.filePath, Buffer.from(data));
+  }
+
   private ensureDb(): Database {
     if (!this.db) throw new DesktopErrorException(makeDesktopError('db_error', 'Local database is not initialized'));
     return this.db;
+  }
+
+  private ensureColumns(table: string, columns: Record<string, string>): void {
+    const existing = new Set(this.query<{ name: string }>(`PRAGMA table_info(${table})`).map((row) => row.name));
+    for (const [name, definition] of Object.entries(columns)) {
+      if (existing.has(name)) continue;
+      this.ensureDb().exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+    }
   }
 }
 

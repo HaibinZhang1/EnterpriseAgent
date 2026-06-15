@@ -1,9 +1,38 @@
 import type { DesktopError } from '../../shared/errors';
+import type { LocalResourceSnapshot } from '../../shared/local-resources';
 
 export type AppTab = 'agent' | 'community' | 'local';
-export type LocalTab = 'extensions' | 'tools' | 'projects';
+export type LocalTab = 'overview' | 'agents' | 'extensions' | 'projects' | 'toolkits' | 'audit-events';
 export type ExtensionKind = 'skill' | 'mcp' | 'plugin';
 export type LoadState = 'idle' | 'loading' | 'ready' | 'error';
+
+export type {
+  AggregatedResourceStatus,
+  AuditStatus,
+  AuditSummary,
+  AuthStatus,
+  DetectionStatus,
+  DriftStatus,
+  FileBackedResource,
+  LocalEventRecord,
+  LocalEventType,
+  LocalResource,
+  LocalResourceSnapshot,
+  LocalResourceSourceType,
+  LocalResourceType,
+  LocalResourceRow,
+  LifecycleStatus,
+  ManagedMode,
+  OperationStatus,
+  PathStatus,
+  PermissionCategory,
+  PermissionItem,
+  PermissionSummary,
+  ResourceBinding,
+  ResourceScopeType,
+  SyncStatus,
+  WriteMode
+} from '../../shared/local-resources';
 
 export interface UiError {
   code?: string;
@@ -99,6 +128,7 @@ export interface LocalLifecycleSnapshot {
   projects: Array<Record<string, unknown>>;
   mcpInstallations: Array<Record<string, unknown>>;
   pluginInstallations: Array<Record<string, unknown>>;
+  resources?: LocalResourceSnapshot;
 }
 
 export interface LocalInventoryScanSummary {
@@ -109,8 +139,10 @@ export interface LocalInventoryScanSummary {
     mcpConfigs?: number;
     tools?: number;
     projects?: number;
+    failures?: number;
     total?: number;
   };
+  failures?: Array<{ path?: string; code: string; message: string; resourceType?: string }>;
 }
 
 export interface NotificationItem {

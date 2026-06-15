@@ -27,6 +27,7 @@ export const desktopApi = {
     status: () => call('localStatus', window.enterpriseAgent.local.getStatus(createRequestId('localStatus'))),
     offline: () => call('offline', window.enterpriseAgent.local.getOfflineState(createRequestId('offline'))),
     lifecycle: () => call('lifecycle', window.enterpriseAgent.local.listLifecycle(createRequestId('lifecycle'))),
+    resources: () => call('localResources', window.enterpriseAgent.local.listResources(createRequestId('localResources'))),
     scanInventory: () => call('localScan', window.enterpriseAgent.local.scanInventory(createRequestId('localScan'))),
     cleanup: (payload: unknown) => call('cleanup', window.enterpriseAgent.local.cleanup(payload, createRequestId('cleanup'))),
     syncPending: (payload: unknown) => call('syncPending', window.enterpriseAgent.local.syncPending(payload, createRequestId('syncPending')))

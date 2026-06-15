@@ -37,6 +37,7 @@ export function createPreloadApi(invoke: PreloadInvoke) {
       enqueueEvent: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.localEnqueueEvent, payload, requestID),
       listPendingEvents: (requestID?: string) => invoke(IPC_CHANNELS.localListPendingEvents, undefined, requestID),
       listLifecycle: (requestID?: string) => invoke(IPC_CHANNELS.localListLifecycle, undefined, requestID),
+      listResources: (requestID?: string) => invoke(IPC_CHANNELS.localListResources, undefined, requestID),
       scanInventory: (requestID?: string) => invoke(IPC_CHANNELS.localScanInventory, undefined, requestID),
       cleanup: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.localCleanup, payload, requestID),
       syncPending: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.localSyncPending, payload, requestID)

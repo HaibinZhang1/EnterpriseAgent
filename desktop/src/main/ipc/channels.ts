@@ -21,6 +21,7 @@ export const IPC_CHANNELS = {
   localEnqueueEvent: 'local.enqueueEvent',
   localListPendingEvents: 'local.listPendingEvents',
   localListLifecycle: 'local.listLifecycle',
+  localListResources: 'local.listResources',
   localScanInventory: 'local.scanInventory',
   localCleanup: 'local.cleanup',
   localSyncPending: 'local.syncPending',

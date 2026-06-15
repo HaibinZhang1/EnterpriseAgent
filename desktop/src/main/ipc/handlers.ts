@@ -181,6 +181,7 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
   });
   router.register(IPC_CHANNELS.localListPendingEvents, () => services.eventQueue.listPending());
   router.register(IPC_CHANNELS.localScanInventory, () => services.localInventoryScanner.scan());
+  router.register(IPC_CHANNELS.localListResources, () => services.lifecycleRepository.listResources());
   router.register(IPC_CHANNELS.localListLifecycle, async () => {
     await services.localInventoryScanner.scan();
     return services.lifecycleRepository.list();

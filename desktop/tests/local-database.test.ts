@@ -9,6 +9,9 @@ const REQUIRED_TABLES = [
   'local_tools',
   'local_projects',
   'local_events',
+  'local_resources',
+  'resource_bindings',
+  'file_backed_resources',
   'local_targets',
   'mcp_local_installations',
   'plugin_local_installations',
@@ -29,6 +32,10 @@ describe('LocalDatabase migrations', () => {
 
       const indexes = db.query<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'index'`).map((row) => row.name);
       expect(indexes).toContain('idx_local_events_idempotency_key');
+      expect(indexes).toContain('idx_local_events_resource_id');
+      expect(indexes).toContain('idx_local_resources_type');
+      expect(indexes).toContain('idx_resource_bindings_resource_id');
+      expect(indexes).toContain('idx_file_backed_resources_binding_id');
       expect(indexes).toContain('idx_local_targets_extension_id');
       expect(indexes).toContain('idx_local_targets_target');
       expect(indexes).toContain('idx_local_targets_status');
@@ -38,6 +45,12 @@ describe('LocalDatabase migrations', () => {
 
       const localToolColumns = db.query<{ name: string }>(`PRAGMA table_info(local_tools)`).map((row) => row.name);
       expect(new Set(localToolColumns).size).toBe(localToolColumns.length);
+      const eventColumns = db.query<{ name: string }>(`PRAGMA table_info(local_events)`).map((row) => row.name);
+      expect(eventColumns).toEqual(expect.arrayContaining(['resource_id', 'binding_id', 'resource_type', 'agent_id', 'project_id', 'kit_id', 'failure_reason', 'suggestion', 'sync_status']));
+      const resourceColumns = db.query<{ name: string }>(`PRAGMA table_info(local_resources)`).map((row) => row.name);
+      expect(resourceColumns).toEqual(expect.arrayContaining(['id', 'type', 'source_type', 'permission_summary_json', 'audit_summary_json']));
+      const bindingColumns = db.query<{ name: string }>(`PRAGMA table_info(resource_bindings)`).map((row) => row.name);
+      expect(bindingColumns).toEqual(expect.arrayContaining(['resource_id', 'scope_type', 'detection_status', 'auth_status', 'audit_status', 'sync_status']));
       await db.close();
     } finally {
       await temp.cleanup();
