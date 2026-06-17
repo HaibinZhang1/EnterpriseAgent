@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { LocalExecutor } from '../src/main/executor/local-executor';
@@ -29,7 +29,7 @@ describe('PlanValidator and dry-run executor', () => {
       const invalid = plan(temp.root);
       invalid.steps[0] = { ...invalid.steps[0], action: 'shell-command' as never };
       await expect(validator.validate(invalid, { allowedRoots: [temp.root] })).rejects.toMatchObject({ desktopError: { code: 'invalid_execution_plan' } });
-      for (const action of ['exec-script', 'download-and-run', 'arbitrary-write']) {
+      for (const action of ['exec-script', 'download-and-run', 'arbitrary-write', 'execute-cli', 'trigger-hook', 'start-mcp-stdio-server', 'run-plugin-lifecycle-script']) {
         const next = plan(temp.root);
         next.steps[0] = { ...next.steps[0], action: action as never };
         await expect(validator.validate(next, { allowedRoots: [temp.root] })).rejects.toMatchObject({ desktopError: { code: 'invalid_execution_plan' } });
@@ -60,6 +60,39 @@ describe('PlanValidator and dry-run executor', () => {
       const result = await executor.execute(failing, { allowedRoots: [temp.root], backupRoot: path.join(temp.root, 'backups') });
       expect(result.status).toBe('rolled_back');
       expect(await readFile(path.join(temp.root, 'file.txt'), 'utf8')).toBe('hello');
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('creates a backup snapshot before overwriting rollbackable local config', async () => {
+    const temp = await tempRoot();
+    try {
+      const targetPath = path.join(temp.root, 'settings.json');
+      const backupRoot = path.join(temp.root, 'backups');
+      await writeFile(targetPath, '{"mode":"before"}\n', 'utf8');
+      const writePlan = plan(temp.root, false);
+      writePlan.planId = 'plan_backup_before_write';
+      writePlan.summary = { title: 'Overwrite local settings', description: 'Impact: one managed settings file will be updated.', targetCount: 1, warnings: [] };
+      writePlan.steps = [{
+        stepId: 'write-settings',
+        action: 'write-file',
+        description: 'write managed settings',
+        targetPath,
+        content: '{"mode":"after"}\n',
+        rollbackable: true,
+        managed: true
+      }];
+
+      const result = await new LocalExecutor().execute(writePlan, { allowedRoots: [temp.root], backupRoot });
+
+      expect(result.status).toBe('success');
+      expect(await readFile(targetPath, 'utf8')).toBe('{"mode":"after"}\n');
+      const backupRecords = (await readdir(backupRoot)).filter((item) => item.endsWith('.json'));
+      expect(backupRecords).toHaveLength(1);
+      const backupRecord = JSON.parse(await readFile(path.join(backupRoot, backupRecords[0]), 'utf8')) as { backupPath: string; originalPath: string; existed: boolean };
+      expect(backupRecord).toMatchObject({ originalPath: targetPath, existed: true });
+      expect(await readFile(backupRecord.backupPath, 'utf8')).toBe('{"mode":"before"}\n');
     } finally {
       await temp.cleanup();
     }

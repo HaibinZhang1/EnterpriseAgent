@@ -34,13 +34,26 @@ export function createPreloadApi(invoke: PreloadInvoke) {
     local: {
       getStatus: (requestID?: string) => invoke(IPC_CHANNELS.localGetStatus, undefined, requestID),
       getOfflineState: (requestID?: string) => invoke(IPC_CHANNELS.localGetOfflineState, undefined, requestID),
-      enqueueEvent: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.localEnqueueEvent, payload, requestID),
       listPendingEvents: (requestID?: string) => invoke(IPC_CHANNELS.localListPendingEvents, undefined, requestID),
       listLifecycle: (requestID?: string) => invoke(IPC_CHANNELS.localListLifecycle, undefined, requestID),
       listResources: (requestID?: string) => invoke(IPC_CHANNELS.localListResources, undefined, requestID),
       scanInventory: (requestID?: string) => invoke(IPC_CHANNELS.localScanInventory, undefined, requestID),
+      runStaticAudit: (requestID?: string) => invoke(IPC_CHANNELS.localRunStaticAudit, undefined, requestID),
+      previewFile: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.localPreviewFile, payload, requestID),
+      checkPath: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.localCheckPath, payload, requestID),
+      removeProjectRecord: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.localRemoveProjectRecord, payload, requestID),
       cleanup: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.localCleanup, payload, requestID),
       syncPending: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.localSyncPending, payload, requestID)
+    },
+    kit: {
+      importManifest: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.kitImportManifest, payload, requestID),
+      exportManifest: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.kitExportManifest, payload, requestID),
+      generateFromAgent: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.kitGenerateFromAgent, payload, requestID),
+      generateFromProject: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.kitGenerateFromProject, payload, requestID),
+      apply: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.kitApply, payload, requestID),
+      removeApplication: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.kitRemoveApplication, payload, requestID),
+      checkDrift: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.kitCheckDrift, payload, requestID),
+      staticAudit: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.kitStaticAudit, payload, requestID)
     },
     settings: {
       getLocalConfig: (requestID?: string) => invoke(IPC_CHANNELS.settingsGetLocalConfig, undefined, requestID),

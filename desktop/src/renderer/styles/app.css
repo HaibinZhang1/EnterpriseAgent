@@ -884,6 +884,26 @@ html[data-theme="glass-light"] .drawer::before {
   width: min(440px, calc(100vw - 32px));
 }
 
+html[data-theme="glass-dark"] .modal {
+  background: rgba(18, 25, 43, 0.98);
+}
+
+html[data-theme="glass-light"] .modal {
+  background: rgba(255, 255, 255, 0.98);
+}
+
+html[data-theme="glass-dark"] .modal .input,
+html[data-theme="glass-dark"] .modal .select,
+html[data-theme="glass-dark"] .modal .textarea {
+  background: rgba(18, 25, 43, 0.94);
+}
+
+html[data-theme="glass-light"] .modal .input,
+html[data-theme="glass-light"] .modal .select,
+html[data-theme="glass-light"] .modal .textarea {
+  background: rgba(255, 255, 255, 0.98);
+}
+
 /* ==================== 17. 数据表格组件 (.table) ==================== */
 .table {
   width: 100%;
@@ -1230,6 +1250,23 @@ html[data-theme="glass-light"] .drawer::before {
   min-width: 60px;
 }
 
+/* Retired old broad LocalPage filter grid; page controls now use compact per-tab toolbar rules. */
+.local-filter-select {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.local-filter-select .filter-label {
+  min-width: 0;
+}
+
+.local-filter-select select {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+}
+
 .local-scan-summary {
   display: flex;
   align-items: center;
@@ -1466,4 +1503,92 @@ html[data-theme="glass-dark"] .saas-sidebar-item.active .saas-sidebar-item-badge
 .saas-layout {
   height: 100% !important;
   max-height: 100%;
+}
+
+/* Local page IA simplification: compact per-tab controls and split work surfaces. */
+.local-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin: 0 0 var(--space-3);
+  padding: 0 0 var(--space-3);
+  border-bottom: 1px solid var(--glass-border-soft);
+  flex-shrink: 0;
+}
+
+.local-page-header h2 {
+  margin: 0 0 var(--space-1);
+}
+
+.local-page-header .muted {
+  margin: var(--space-1) 0 0;
+}
+
+.local-tab-toolbar {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) 0;
+  flex-shrink: 0;
+}
+
+.local-tab-toolbar .local-filter-select {
+  min-width: 150px;
+  max-width: 240px;
+}
+
+.local-tab-toolbar input,
+.local-tab-toolbar select {
+  min-height: 34px;
+}
+
+.local-tab-toolbar .meta {
+  align-self: center;
+  padding-top: 18px;
+}
+
+.local-split-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 36%) minmax(0, 1fr);
+  gap: var(--space-4);
+  min-height: 0;
+  align-items: start;
+}
+
+.local-split-list,
+.local-split-detail {
+  min-width: 0;
+}
+
+.local-split-list {
+  overflow-x: auto;
+}
+
+.local-split-detail {
+  padding-left: var(--space-4);
+  border-left: 1px solid var(--border-subtle);
+}
+
+.local-split-detail > .section-header:first-child {
+  margin-top: 0;
+}
+
+@media (max-width: 980px) {
+  .local-page-header {
+    flex-direction: column;
+  }
+
+  .local-split-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .local-split-detail {
+    padding-left: 0;
+    padding-top: var(--space-4);
+    border-left: 0;
+    border-top: 1px solid var(--border-subtle);
+  }
 }

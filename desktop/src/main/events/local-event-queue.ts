@@ -6,6 +6,17 @@ import { SyncStatuses, type LocalResourceType, type ServerAckStatus, type SyncSt
 export type LocalEventStatus = 'pending' | 'retryable' | 'accepted' | 'rejected' | 'ignored' | 'failed';
 export type LocalEventSyncResult = 'accepted' | 'rejected' | 'ignored';
 
+const FORBIDDEN_RUNTIME_EVENT_TYPES = new Set([
+  'CLI_COMMAND_EXECUTED',
+  'CLI_EXECUTED',
+  'HOOK_TRIGGERED',
+  'HOOK_RUNTIME_STARTED',
+  'HOOK_RUNTIME_FINISHED',
+  'AGENT_TOOL_CALLED',
+  'trigger-hook',
+  'execute-cli'
+]);
+
 export interface LocalEventInput {
   idempotencyKey?: string;
   deviceID: string;
@@ -25,7 +36,30 @@ export interface LocalEventInput {
   errorCode?: string;
   failureReason?: string;
   suggestion?: string;
+  offlineCreated?: boolean;
+  syncStatus?: SyncStatus;
+  status?: LocalEventStatus;
+  serverAckStatus?: ServerAckStatus;
+  createdAt?: string;
+  updatedAt?: string;
   payload?: Record<string, unknown>;
+}
+
+export interface LocalEventFilters {
+  resourceType?: LocalResourceType;
+  resourceID?: string;
+  bindingID?: string;
+  agentID?: string;
+  projectID?: string;
+  kitID?: string;
+  eventType?: string;
+  result?: string;
+  status?: LocalEventStatus;
+  syncStatus?: SyncStatus;
+  offlineCreated?: boolean;
+  since?: string;
+  until?: string;
+  limit?: number;
 }
 
 export interface LocalEventRecord {
@@ -96,20 +130,25 @@ export class LocalEventQueue {
   constructor(private readonly db: LocalDatabase) {}
 
   async enqueue(input: LocalEventInput): Promise<LocalEventRecord> {
+    rejectForbiddenRuntimeEvent(input.eventType);
     const key = input.idempotencyKey ?? `event_${randomUUID()}`;
     const existing = this.findByIdempotencyKey(key);
     if (existing) return existing;
 
-    const now = new Date().toISOString();
+    const now = input.createdAt ?? new Date().toISOString();
+    const updatedAt = input.updatedAt ?? now;
     const id = `local_event_${randomUUID()}`;
+    const offlineCreated = input.offlineCreated ?? false;
+    const syncStatus = input.syncStatus ?? SyncStatuses.PENDING_SYNC;
+    const queueStatus = input.status ?? (syncStatus === SyncStatuses.LOCAL_ONLY ? 'accepted' : 'pending');
     const payloadJson = JSON.stringify(redactForLog(input.payload ?? {}));
     await this.db.run(
       `INSERT INTO local_events(
         id, idempotency_key, device_id, user_id, extension_id, version, event_type,
         operation_id, execution_id, resource_id, binding_id, resource_type, agent_id, project_id, kit_id,
         result, error_code, failure_reason, suggestion, offline_created, sync_status, payload_json,
-        status, attempt_count, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'pending', 0, ?, ?)`,
+        status, server_ack_status, attempt_count, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       [
         id,
         key,
@@ -130,13 +169,52 @@ export class LocalEventQueue {
         input.errorCode ?? null,
         input.failureReason ?? null,
         input.suggestion ?? null,
-        SyncStatuses.PENDING_SYNC,
+        offlineCreated ? 1 : 0,
+        syncStatus,
         payloadJson,
+        queueStatus,
+        input.serverAckStatus ?? (queueStatus === 'accepted' && syncStatus === SyncStatuses.LOCAL_ONLY ? 'accepted' : null),
         now,
-        now
+        updatedAt
       ]
     );
     return this.findByIdempotencyKey(key) as LocalEventRecord;
+  }
+
+  list(filters: LocalEventFilters = {}): LocalEventRecord[] {
+    const clauses: string[] = [];
+    const params: Array<string | number> = [];
+    addFilter(clauses, params, 'resource_type', filters.resourceType);
+    addFilter(clauses, params, 'resource_id', filters.resourceID);
+    addFilter(clauses, params, 'binding_id', filters.bindingID);
+    addFilter(clauses, params, 'agent_id', filters.agentID);
+    addFilter(clauses, params, 'project_id', filters.projectID);
+    addFilter(clauses, params, 'kit_id', filters.kitID);
+    addFilter(clauses, params, 'event_type', filters.eventType);
+    addFilter(clauses, params, 'result', filters.result);
+    addFilter(clauses, params, 'status', filters.status);
+    addFilter(clauses, params, 'sync_status', filters.syncStatus);
+    if (filters.offlineCreated !== undefined) {
+      clauses.push('offline_created = ?');
+      params.push(filters.offlineCreated ? 1 : 0);
+    }
+    if (filters.since) {
+      clauses.push('created_at >= ?');
+      params.push(filters.since);
+    }
+    if (filters.until) {
+      clauses.push('created_at <= ?');
+      params.push(filters.until);
+    }
+    const limit = Math.max(1, Math.min(filters.limit ?? 500, 2000));
+    params.push(limit);
+    return this.db.query<LocalEventRow>(
+      `SELECT * FROM local_events
+       ${clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''}
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      params
+    ).map(mapRow);
   }
 
   listPending(): LocalEventRecord[] {
@@ -166,7 +244,19 @@ export class LocalEventQueue {
   }
 }
 
+function rejectForbiddenRuntimeEvent(eventType: string): void {
+  if (!FORBIDDEN_RUNTIME_EVENT_TYPES.has(eventType)) return;
+  throw new Error(`Runtime event type is not allowed in LocalEventQueue: ${eventType}`);
+}
+
+function addFilter(clauses: string[], params: Array<string | number>, column: string, value: string | undefined): void {
+  if (!value) return;
+  clauses.push(`${column} = ?`);
+  params.push(value);
+}
+
 function mapRow(row: LocalEventRow): LocalEventRecord {
+  const payload = safeParseObject(row.payload_json);
   return {
     id: row.id,
     idempotencyKey: row.idempotency_key,
@@ -190,7 +280,7 @@ function mapRow(row: LocalEventRow): LocalEventRecord {
     offlineCreated: row.offline_created !== 0,
     syncStatus: row.sync_status ?? SyncStatuses.PENDING_SYNC,
     serverAckStatus: row.server_ack_status ?? undefined,
-    payload: JSON.parse(row.payload_json) as Record<string, unknown>,
+    payload,
     status: row.status,
     attemptCount: row.attempt_count,
     lastError: row.last_error ?? undefined,
@@ -198,4 +288,13 @@ function mapRow(row: LocalEventRow): LocalEventRecord {
     updatedAt: row.updated_at,
     syncedAt: row.synced_at ?? undefined
   };
+}
+
+function safeParseObject(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
 }

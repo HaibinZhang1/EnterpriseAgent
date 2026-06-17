@@ -96,6 +96,8 @@ export function ExtensionActionModal({
               <span>Plugin 操作</span>
               <select className="select" value={operation} aria-label="Plugin 操作" onChange={(event) => setOperation(event.target.value)}>
                 <option value="">默认安装/下载</option>
+                <option value="enable">启用</option>
+                <option value="disable">停用</option>
                 <option value="update">更新</option>
                 <option value="uninstall">卸载</option>
                 <option value="mark-installed">标记已安装</option>

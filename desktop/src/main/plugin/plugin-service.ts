@@ -42,6 +42,23 @@ export class PluginService {
   }
 
   private steps(input: PluginPlanInput): PlanStep[] {
+    if (input.operation === 'enable' || input.operation === 'disable') {
+      return [{
+        stepId: `record-plugin-${input.operation}`,
+        action: 'record-state',
+        description: `Record managed plugin ${input.operation} state`,
+        targetPath: path.join(input.targetPath, `${input.extensionId}.state.json`),
+        content: JSON.stringify({
+          extensionId: input.extensionId,
+          version: input.version,
+          enabled: input.operation === 'enable',
+          operation: input.operation,
+          managedBy: 'Enterprise Agent Hub'
+        }, null, 2),
+        rollbackable: true,
+        managed: true
+      }];
+    }
     if (input.installMode === 'MANUAL_DOWNLOAD') {
       return [
         {
@@ -108,13 +125,15 @@ export class PluginService {
 }
 
 function pluginOperation(input: PluginPlanInput): string {
+  if (input.operation === 'enable') return 'PLUGIN_ENABLE';
+  if (input.operation === 'disable') return 'PLUGIN_DISABLE';
+  if (input.operation === 'update') return 'PLUGIN_UPDATE';
   if (input.installMode === 'MANUAL_DOWNLOAD') {
     if (input.operation === 'mark-installed') return 'PLUGIN_MANUAL_MARK_INSTALLED';
     if (input.operation === 'mark-uninstalled') return 'PLUGIN_MANUAL_MARK_UNINSTALLED';
     return 'PLUGIN_MANUAL_CONTROLLED_DOWNLOAD';
   }
   if (input.operation === 'uninstall') return 'PLUGIN_UNINSTALL';
-  if (input.operation === 'update') return 'PLUGIN_UPDATE';
   if (input.installMode === 'CONFIG_PLUGIN') return 'PLUGIN_CONFIG_WRITE';
   return 'PLUGIN_INSTALL';
 }
@@ -122,6 +141,6 @@ function pluginOperation(input: PluginPlanInput): string {
 function pluginWarnings(input: PluginPlanInput): string[] {
   const warnings: string[] = [];
   if (input.installMode === 'MANUAL_DOWNLOAD') warnings.push('manual-download uses controlled download and does not auto-install');
-  if (input.installMode !== 'MANUAL_DOWNLOAD' && !input.packagePath && input.operation !== 'uninstall') warnings.push('package path must be supplied before non-dry-run managed plugin install');
+  if (input.installMode !== 'MANUAL_DOWNLOAD' && !input.packagePath && !['enable', 'disable', 'uninstall'].includes(input.operation ?? '')) warnings.push('package path must be supplied before non-dry-run managed plugin install');
   return warnings;
 }

@@ -9,6 +9,7 @@ import { PlanValidator, type PlanValidationOptions } from './plan-validator';
 import { RollbackManager } from './rollback-manager';
 import type { ExecutionPlan, PlanResult, PlanStep, StepResult } from './types';
 import { redactForLog } from '../../shared/redaction';
+import type { LocalResourceType } from '../../shared/local-resources';
 
 export interface LocalExecutorOptions extends PlanValidationOptions {
   backupRoot: string;
@@ -24,7 +25,12 @@ export class LocalExecutor {
   async execute(plan: ExecutionPlan, options: LocalExecutorOptions): Promise<PlanResult> {
     await this.validator.validate(plan, options);
     await this.persistPlan(plan, plan.dryRun ? 'dry_run' : 'planned', options.db);
-    if (plan.dryRun) return { planId: plan.planId, status: 'dry_run', dryRun: true, steps: plan.steps.map(dryRunStep) };
+    if (plan.dryRun) {
+      const result: PlanResult = { planId: plan.planId, status: 'dry_run', dryRun: true, steps: plan.steps.map(dryRunStep) };
+      const executionId = await this.persistRecord(plan.planId, result, options.db);
+      await this.enqueueEvent(plan, 'DRY_RUN', options, result, executionId);
+      return { ...result, executionId };
+    }
 
     const backupStore = new BackupStore(options.backupRoot);
     const backups: BackupRecord[] = [];
@@ -37,9 +43,10 @@ export class LocalExecutor {
         results.push({ stepId: step.stepId, action: step.action, status: 'success', rollbackStatus: 'not_needed' });
       }
       const result: PlanResult = { planId: plan.planId, status: 'success', dryRun: false, steps: results };
-      await this.persistRecord(plan.planId, result, options.db);
-      await this.enqueueEvent(plan, 'SUCCESS', options, result);
-      return result;
+      const executionId = await this.persistRecord(plan.planId, result, options.db);
+      await this.updatePlanStatus(plan.planId, result.status, options.db);
+      await this.enqueueEvent(plan, 'SUCCESS', options, result, executionId);
+      return { ...result, executionId };
     } catch (error) {
       const failedStep = plan.steps[results.length];
       const rollbackSummary = await new RollbackManager(backupStore).rollback(backups);
@@ -54,15 +61,16 @@ export class LocalExecutor {
       };
       const result: PlanResult = {
         planId: plan.planId,
-        status: rollbackFailed ? 'partial_success' : 'rolled_back',
+        status: rollbackFailed ? 'rollback_failed' : 'rolled_back',
         dryRun: false,
         steps: [...results, failure],
         failedStepId: failure.stepId,
         nextAction: rollbackFailed ? 'Inspect backup records and retry after manual cleanup' : 'Fix the failed step and retry the plan'
       };
-      await this.persistRecord(plan.planId, result, options.db);
-      await this.enqueueEvent(plan, rollbackFailed ? 'PARTIAL_SUCCESS' : 'FAILURE', options, result);
-      return result;
+      const executionId = await this.persistRecord(plan.planId, result, options.db);
+      await this.updatePlanStatus(plan.planId, result.status, options.db);
+      await this.enqueueEvent(plan, rollbackFailed ? 'ROLLBACK_FAILED' : 'FAILURE', options, result, executionId);
+      return { ...result, executionId };
     }
   }
 
@@ -107,22 +115,39 @@ export class LocalExecutor {
       [plan.planId, status, JSON.stringify(redactForLog(plan)), now, now]);
   }
 
-  private async persistRecord(planId: string, result: PlanResult, db?: LocalDatabase): Promise<void> {
-    if (!db) return;
+  private async persistRecord(planId: string, result: PlanResult, db?: LocalDatabase): Promise<string> {
+    const executionId = `execution_record_${randomUUID()}`;
+    if (!db) return executionId;
     const now = new Date().toISOString();
     await db.run(`INSERT INTO execution_records(id, plan_id, status, result_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-      [`execution_record_${randomUUID()}`, planId, result.status, JSON.stringify(redactForLog(result)), now, now]);
+      [executionId, planId, result.status, JSON.stringify(redactForLog(result)), now, now]);
+    return executionId;
   }
 
-  private async enqueueEvent(plan: ExecutionPlan, result: string, options: LocalExecutorOptions, planResult: PlanResult): Promise<void> {
+  private async updatePlanStatus(planId: string, status: string, db?: LocalDatabase): Promise<void> {
+    if (!db) return;
+    await db.run(`UPDATE execution_plans SET status = ?, updated_at = ? WHERE id = ?`, [status, new Date().toISOString(), planId]);
+  }
+
+  private async enqueueEvent(plan: ExecutionPlan, result: string, options: LocalExecutorOptions, planResult: PlanResult, executionId: string): Promise<void> {
     if (!options.eventQueue || !options.deviceID) return;
+    const context = planEventContext(plan);
     await options.eventQueue.enqueue({
       idempotencyKey: `${plan.idempotencyKey}:${result.toLowerCase()}`,
       deviceID: options.deviceID,
       extensionID: plan.extensionId,
       version: plan.version,
       eventType: plan.operation,
+      operationID: plan.planId,
+      executionID: executionId,
+      resourceID: context.resourceId,
+      bindingID: context.bindingId,
+      resourceType: context.resourceType,
+      agentID: context.agentId,
+      projectID: context.projectId,
+      kitID: context.kitId,
       result,
+      offlineCreated: true,
       payload: { planId: plan.planId, summary: plan.summary, execution: planResult }
     });
   }
@@ -190,4 +215,31 @@ async function readJsonObject(filePath: string): Promise<Record<string, unknown>
 function requiredManagedConfigId(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0) throw new Error('managedConfigId is required');
   return value;
+}
+
+function planEventContext(plan: ExecutionPlan): {
+  resourceId?: string;
+  bindingId?: string;
+  resourceType?: LocalResourceType;
+  agentId?: string;
+  projectId?: string;
+  kitId?: string;
+} {
+  for (const step of plan.steps) {
+    const metadata = step.metadata ?? {};
+    const resourceId = stringMetadata(metadata.resourceId);
+    const bindingId = stringMetadata(metadata.bindingId);
+    const resourceType = stringMetadata(metadata.resourceType) as LocalResourceType | undefined;
+    const agentId = stringMetadata(metadata.agentId);
+    const projectId = stringMetadata(metadata.projectId);
+    const kitId = stringMetadata(metadata.kitId);
+    if (resourceId || bindingId || resourceType || agentId || projectId || kitId) {
+      return { resourceId, bindingId, resourceType, agentId, projectId, kitId };
+    }
+  }
+  return {};
+}
+
+function stringMetadata(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }

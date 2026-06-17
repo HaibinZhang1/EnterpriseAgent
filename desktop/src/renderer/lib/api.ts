@@ -29,8 +29,22 @@ export const desktopApi = {
     lifecycle: () => call('lifecycle', window.enterpriseAgent.local.listLifecycle(createRequestId('lifecycle'))),
     resources: () => call('localResources', window.enterpriseAgent.local.listResources(createRequestId('localResources'))),
     scanInventory: () => call('localScan', window.enterpriseAgent.local.scanInventory(createRequestId('localScan'))),
+    runStaticAudit: () => call('localAudit', window.enterpriseAgent.local.runStaticAudit(createRequestId('localAudit'))),
+    previewFile: (payload: { resourceId?: string; bindingId?: string; targetPath?: string }) => call('localPreviewFile', window.enterpriseAgent.local.previewFile(payload, createRequestId('localPreviewFile'))),
+    checkPath: (payload: { resourceId?: string; bindingId?: string; targetPath?: string }) => call('localPathCheck', window.enterpriseAgent.local.checkPath(payload, createRequestId('localPathCheck'))),
+    removeProjectRecord: (payload: { projectId: string }) => call('projectRemoveRecord', window.enterpriseAgent.local.removeProjectRecord(payload, createRequestId('projectRemoveRecord'))),
     cleanup: (payload: unknown) => call('cleanup', window.enterpriseAgent.local.cleanup(payload, createRequestId('cleanup'))),
     syncPending: (payload: unknown) => call('syncPending', window.enterpriseAgent.local.syncPending(payload, createRequestId('syncPending')))
+  },
+  kit: {
+    importManifest: (payload: unknown) => call('kitImport', window.enterpriseAgent.kit.importManifest(payload, createRequestId('kitImport'))),
+    exportManifest: (payload: unknown) => call('kitExport', window.enterpriseAgent.kit.exportManifest(payload, createRequestId('kitExport'))),
+    generateFromAgent: (payload: unknown) => call('kitGenerateAgent', window.enterpriseAgent.kit.generateFromAgent(payload, createRequestId('kitGenerateAgent'))),
+    generateFromProject: (payload: unknown) => call('kitGenerateProject', window.enterpriseAgent.kit.generateFromProject(payload, createRequestId('kitGenerateProject'))),
+    apply: (payload: unknown) => call('kitApply', window.enterpriseAgent.kit.apply(payload, createRequestId('kitApply'))),
+    removeApplication: (payload: unknown) => call('kitRemove', window.enterpriseAgent.kit.removeApplication(payload, createRequestId('kitRemove'))),
+    checkDrift: (payload: unknown) => call('kitDrift', window.enterpriseAgent.kit.checkDrift(payload, createRequestId('kitDrift'))),
+    staticAudit: (payload: unknown) => call('kitAudit', window.enterpriseAgent.kit.staticAudit(payload, createRequestId('kitAudit')))
   },
   device: {
     info: () => call('device', window.enterpriseAgent.device.getInfo(createRequestId('device')))

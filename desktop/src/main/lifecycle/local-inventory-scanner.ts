@@ -3,8 +3,10 @@ import { readdir, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import { AgentInventoryScanner } from '../agents/agent-inventory-scanner';
+import { normalizeCustomAgentProfiles, type CustomAgentProfile } from '../agents/agent-catalog';
 import type { AppPaths } from '../config/app-paths';
-import type { LocalLifecycleRepository } from './local-lifecycle-repository';
+import type { LocalLifecycleRepository, ProjectScanTarget } from './local-lifecycle-repository';
 import { LocalResourceSourceTypes, LocalResourceTypes, type LocalResourceType } from '../../shared/local-resources';
 
 export interface LocalInventoryScanSummary {
@@ -64,11 +66,15 @@ interface ScannedProjectItem {
 export interface LocalInventoryScannerOptions {
   detectKnownTools?: boolean;
   homeDir?: string;
+  env?: Record<string, string | undefined>;
+  customAgentProfiles?: readonly CustomAgentProfile[];
 }
 
 export class LocalInventoryScanner {
   private readonly detectKnownTools: boolean;
   private readonly homeDir: string;
+  private readonly env: Record<string, string | undefined>;
+  private readonly customAgentProfiles?: readonly CustomAgentProfile[];
 
   constructor(
     private readonly paths: AppPaths,
@@ -77,6 +83,8 @@ export class LocalInventoryScanner {
   ) {
     this.detectKnownTools = options.detectKnownTools ?? true;
     this.homeDir = options.homeDir ?? os.homedir();
+    this.env = options.env ?? process.env;
+    this.customAgentProfiles = options.customAgentProfiles;
   }
 
   async scan(): Promise<LocalInventoryScanSummary> {
@@ -89,6 +97,7 @@ export class LocalInventoryScanner {
       scanProjects(this.paths.projectsDir, failures),
       this.detectKnownTools ? scanKnownToolInventory(this.homeDir, failures) : Promise.resolve({ skills: [], tools: [] })
     ]);
+    const customProfiles = this.customAgentProfiles ?? await readConfiguredCustomAgentProfiles(this.paths.configFile, failures);
     const skills = [...managedSkills, ...knownToolInventory.skills];
     const tools = [...adapterTools, ...knownToolInventory.tools];
 
@@ -142,22 +151,55 @@ export class LocalInventoryScanner {
       });
     }
 
+    const platform = process.platform === 'win32' ? 'windows' : 'macos';
+    const agentSummaries = [await new AgentInventoryScanner(this.lifecycleRepository, {
+      platform,
+      homeDir: this.homeDir,
+      userProfileDir: this.homeDir,
+      env: this.env,
+      includeMissingPaths: true,
+      customProfiles
+    }).scan()];
+    const projectScanTargets = mergeProjectScanTargets([
+      ...this.lifecycleRepository.listProjectScanTargets(),
+      ...projects.map((item) => ({
+        projectId: item.projectId,
+        name: item.name,
+        targetPath: item.target,
+        metadata: item.metadata
+      }))
+    ]);
+    for (const projectTarget of projectScanTargets) {
+      agentSummaries.push(await new AgentInventoryScanner(this.lifecycleRepository, {
+        platform,
+        homeDir: this.homeDir,
+        userProfileDir: this.homeDir,
+        projectRoot: projectTarget.targetPath,
+        projectId: projectTarget.projectId,
+        env: this.env,
+        includeMissingPaths: false,
+        customProfiles
+      }).scan());
+    }
+
     for (const failure of failures) {
       await this.lifecycleRepository.recordScanFailure({
         ...failure,
-        sourceType: LocalResourceSourceTypes.LOCAL_IMPORT,
-        metadata: { phase: 'local_inventory_scan' }
+        sourceType: failure.code.startsWith('agent_profiles_') ? LocalResourceSourceTypes.CUSTOM_DIRECTORY : LocalResourceSourceTypes.LOCAL_IMPORT,
+        metadata: { scanSource: 'local_inventory_scan' }
       });
     }
 
+    const agentFailures = agentSummaries.reduce((total, item) => total + item.failures, 0);
+    const agentResources = agentSummaries.reduce((total, item) => total + item.resources, 0);
     const discovered = {
       skills: skills.length,
       plugins: plugins.length,
       mcpConfigs: mcps.length,
       tools: tools.length,
-      projects: projects.length,
-      failures: failures.length,
-      total: skills.length + plugins.length + mcps.length + tools.length + projects.length
+      projects: projectScanTargets.length,
+      failures: failures.length + agentFailures,
+      total: skills.length + plugins.length + mcps.length + tools.length + projectScanTargets.length + agentResources
     };
     return {
       scannedAt: new Date().toISOString(),
@@ -172,6 +214,45 @@ export class LocalInventoryScanner {
       discovered,
       failures
     };
+  }
+}
+
+function mergeProjectScanTargets(targets: ProjectScanTarget[]): ProjectScanTarget[] {
+  const seen = new Set<string>();
+  const merged: ProjectScanTarget[] = [];
+  for (const target of targets) {
+    const key = `${target.projectId}:${path.resolve(target.targetPath)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push({ ...target, targetPath: path.resolve(target.targetPath) });
+  }
+  return merged;
+}
+
+async function readConfiguredCustomAgentProfiles(configFile: string, failures: LocalInventoryScanFailure[]): Promise<CustomAgentProfile[]> {
+  try {
+    const raw = await readFile(configFile, 'utf8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const validation = normalizeCustomAgentProfiles(parsed.agentProfiles);
+    if (!validation.valid) {
+      failures.push({
+        path: configFile,
+        code: 'agent_profiles_invalid',
+        message: validation.errors.join('; '),
+        resourceType: LocalResourceTypes.AGENT_CONFIG
+      });
+      return [];
+    }
+    return validation.normalized;
+  } catch (error) {
+    if (isMissingFileError(error)) return [];
+    failures.push({
+      path: configFile,
+      code: error instanceof SyntaxError ? 'agent_profiles_parse_failed' : 'agent_profiles_read_failed',
+      message: error instanceof Error ? error.message : 'Unable to read configured Agent Profiles',
+      resourceType: LocalResourceTypes.AGENT_CONFIG
+    });
+    return [];
   }
 }
 

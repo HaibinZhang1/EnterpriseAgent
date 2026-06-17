@@ -97,6 +97,7 @@ export function normalizeLocalResourceSnapshot(value: unknown): LocalResourceSna
     bindings: records(record.bindings) as unknown as LocalResourceSnapshot['bindings'],
     files: records(record.files) as unknown as LocalResourceSnapshot['files'],
     events: records(record.events) as unknown as LocalResourceSnapshot['events'],
+    findings: records(record.findings) as unknown as LocalResourceSnapshot['findings'],
     rows: records(record.rows) as unknown as LocalResourceSnapshot['rows'],
     summary: {
       resourceCount: num(summary.resourceCount) ?? 0,

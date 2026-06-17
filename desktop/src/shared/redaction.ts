@@ -6,6 +6,7 @@ const DOWNLOAD_TICKET_PATH_PATTERN = /(download-tickets\/)[^\/\s]+/gi;
 export const REDACTED = '[REDACTED]';
 
 export function isSensitiveKey(key: string): boolean {
+  if (/^(requiredAuthorizations|authorizationRequirements?)$/i.test(key)) return false;
   return SECRET_KEY_PATTERN.test(key);
 }
 

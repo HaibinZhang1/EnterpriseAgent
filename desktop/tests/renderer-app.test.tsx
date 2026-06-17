@@ -253,7 +253,9 @@ describe('renderer app view', () => {
     expect(html).toContain('智能体/项目');
     expect(html).not.toContain('SKILL_ENABLE');
     expect(html).toContain('授权收缩');
-    expect(html).toContain('阶段一仅建模');
+    expect(html).toContain('运行审计');
+    expect(html).toContain('当前离线：新增服务端动作已暂停。');
+    expect(html).not.toContain('当前仅展示已记录的统一审计摘要');
   });
 
   it('surfaces local resource snapshot failures instead of showing stale resources as ready', async () => {

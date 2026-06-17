@@ -39,8 +39,14 @@ describe('ToolAdapter and lifecycle plan generation', () => {
       expect(skillPlan.steps.some((step) => step.action === 'copy-file')).toBe(true);
       const installPlan = new SkillService(paths).createInstallPlan({ extensionId: 'skill-a', version: '1.0.0', targetPath: paths.tempDir, packagePath: path.join(paths.tempDir, 'pkg') });
       expect(installPlan.steps.map((step) => step.action)).toEqual(['ensure-dir', 'copy-file', 'switch-pointer']);
+      const enablePlan = new SkillService(paths).createEnablePlan({ extensionId: 'skill-a', version: '1.0.0', targetPath: paths.tempDir });
+      expect(enablePlan.operation).toBe('SKILL_ENABLE');
       const disablePlan = new SkillService(paths).createDisablePlan({ extensionId: 'skill-a', version: '1.0.0', targetPath: paths.tempDir });
       expect(disablePlan.operation).toBe('SKILL_DISABLE');
+      const skillUpdate = new SkillService(paths).createUpdatePlan({ extensionId: 'skill-a', version: '1.0.1', targetPath: paths.tempDir, packagePath: path.join(paths.tempDir, 'pkg') });
+      expect(skillUpdate.operation).toBe('SKILL_UPDATE');
+      const skillUninstall = new SkillService(paths).createUninstallPlan({ extensionId: 'skill-a', version: '1.0.0', targetPath: paths.tempDir });
+      expect(skillUninstall.operation).toBe('SKILL_UNINSTALL');
 
       const mcp = await new McpService(new MemorySecureStore()).createConfigWritePlan({
         definition: { extensionId: 'mcp-a', version: '1.0.0', configTemplate: { command: 'remote' }, variablesSchema: [{ name: 'apiKey', sensitive: true }] },
@@ -56,12 +62,24 @@ describe('ToolAdapter and lifecycle plan generation', () => {
       expect(mcp.managedConfigId).toContain('eah_mcp_mcp-a');
       expect(mcp.fullConfigRef).toContain('mcp.managed-config.');
       expect(mcp.plan.steps[0]).toMatchObject({ action: 'json-upsert', managed: true });
+      const mcpUpdate = await new McpService(new MemorySecureStore()).createUpdatePlan({
+        definition: { extensionId: 'mcp-a', version: '1.0.1', configTemplate: { command: 'remote' } },
+        targetConfigPath: path.join(paths.tempDir, 'mcp.json'),
+        variables: {}
+      });
+      expect(mcpUpdate.plan.operation).toBe('MCP_CONFIG_UPDATE');
       expect(mcpUninstall.steps[0]).toMatchObject({ action: 'json-remove', managed: true });
       expect(() => new McpService(new MemorySecureStore()).validateConnectionTest({ type: 'LOCAL_COMMAND', command: 'rm -rf /' })).toThrow(/Local MCP connection tests/);
 
       const pluginService = new PluginService();
       const managed = pluginService.createPlan({ extensionId: 'plugin-a', version: '1.0.0', installMode: 'MANAGED_PACKAGE', targetPath: paths.tempDir, packagePath: path.join(paths.tempDir, 'pkg') });
       expect(managed.steps[0].action).toBe('copy-file');
+      const pluginEnable = pluginService.createPlan({ extensionId: 'plugin-a', version: '1.0.0', installMode: 'MANAGED_PACKAGE', operation: 'enable', targetPath: paths.tempDir });
+      expect(pluginEnable).toMatchObject({ operation: 'PLUGIN_ENABLE', steps: [{ action: 'record-state' }] });
+      const pluginDisable = pluginService.createPlan({ extensionId: 'plugin-a', version: '1.0.0', installMode: 'MANAGED_PACKAGE', operation: 'disable', targetPath: paths.tempDir });
+      expect(pluginDisable).toMatchObject({ operation: 'PLUGIN_DISABLE', steps: [{ action: 'record-state' }] });
+      const pluginUpdate = pluginService.createPlan({ extensionId: 'plugin-a', version: '1.0.1', installMode: 'MANAGED_PACKAGE', operation: 'update', targetPath: paths.tempDir, packagePath: path.join(paths.tempDir, 'pkg') });
+      expect(pluginUpdate.operation).toBe('PLUGIN_UPDATE');
       expect(() => pluginService.createPlan({ extensionId: 'plugin-a', version: '1.0.0', installMode: 'MANAGED_PACKAGE', targetPath: paths.tempDir, manifest: { actions: [{ action: 'shell-command' }] } })).toThrow(/Unsupported/);
       const manual = pluginService.createPlan({ extensionId: 'plugin-b', version: '1.0.0', installMode: 'MANUAL_DOWNLOAD', targetPath: paths.tempDir });
       expect(manual.operation).toBe('PLUGIN_MANUAL_CONTROLLED_DOWNLOAD');
@@ -70,6 +88,7 @@ describe('ToolAdapter and lifecycle plan generation', () => {
       expect(manualInstalled.steps[1].content).toContain('"installed":true');
       const uninstall = pluginService.createPlan({ extensionId: 'plugin-a', version: '1.0.0', installMode: 'MANAGED_PACKAGE', operation: 'uninstall', targetPath: paths.tempDir });
       expect(uninstall.steps[0]).toMatchObject({ action: 'remove-managed', managed: true });
+      expect(JSON.stringify([skillPlan, installPlan, enablePlan, disablePlan, skillUpdate, skillUninstall, mcp.plan, mcpUpdate.plan, mcpUninstall, managed, pluginEnable, pluginDisable, pluginUpdate, uninstall])).not.toMatch(/shell-command|exec-script|trigger-hook|start-mcp-stdio-server|run-plugin-lifecycle-script/);
     } finally {
       await temp.cleanup();
     }

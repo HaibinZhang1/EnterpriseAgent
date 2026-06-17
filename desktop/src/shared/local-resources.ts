@@ -1,3 +1,5 @@
+import type { AuditFindingRecord } from './local-audit';
+
 export const LocalResourceTypes = {
   AGENT: 'AGENT',
   AGENT_CONFIG: 'AGENT_CONFIG',
@@ -208,6 +210,10 @@ export const LocalEventTypes = {
   KIT_DISCOVERED: 'KIT_DISCOVERED',
   AUDIT_NOT_RUN: 'AUDIT_NOT_RUN',
   AUDIT_FAILED: 'AUDIT_FAILED',
+  STATIC_AUDIT_RUN: 'STATIC_AUDIT_RUN',
+  FILE_PREVIEWED: 'FILE_PREVIEWED',
+  FILE_PREVIEW_FAILED: 'FILE_PREVIEW_FAILED',
+  PATH_CHECKED: 'PATH_CHECKED',
   PATH_ERROR: 'PATH_ERROR',
   PERMISSION_DENIED: 'PERMISSION_DENIED',
   HASH_CHECK_FAILED: 'HASH_CHECK_FAILED',
@@ -219,6 +225,15 @@ export const LocalEventTypes = {
   ROLLBACK_FAILED: 'ROLLBACK_FAILED',
   PARTIAL_SUCCESS: 'PARTIAL_SUCCESS',
   LOCAL_IMPORT: 'LOCAL_IMPORT',
+  KIT_IMPORTED: 'KIT_IMPORTED',
+  KIT_EXPORTED: 'KIT_EXPORTED',
+  KIT_GENERATED: 'KIT_GENERATED',
+  KIT_APPLIED: 'KIT_APPLIED',
+  KIT_APPLICATION_REMOVED: 'KIT_APPLICATION_REMOVED',
+  KIT_DRIFT_CHECKED: 'KIT_DRIFT_CHECKED',
+  KIT_STATIC_AUDITED: 'KIT_STATIC_AUDITED',
+  PROJECT_RECORD_REMOVAL_BLOCKED: 'PROJECT_RECORD_REMOVAL_BLOCKED',
+  PROJECT_RECORD_REMOVED: 'PROJECT_RECORD_REMOVED',
   EVENT_SYNCED: 'EVENT_SYNCED',
   EVENT_SYNC_FAILED: 'EVENT_SYNC_FAILED'
 } as const;
@@ -253,6 +268,109 @@ export interface AuditSummary {
   highCount: number;
   lastAuditedAt?: string;
   message?: string;
+}
+
+export type KitManifestSourceType = 'local' | 'central-store' | 'imported';
+export type KitSupportedPlatform = 'macos' | 'windows';
+export type KitConflictPolicy = 'skip' | 'overwrite-managed' | 'prompt';
+export type KitRollbackPolicy = 'best-effort' | 'all-or-nothing-for-managed-overwrites';
+export type KitResourceKind =
+  | typeof LocalResourceTypes.SKILL
+  | typeof LocalResourceTypes.MCP_SERVER
+  | typeof LocalResourceTypes.PLUGIN
+  | typeof LocalResourceTypes.HOOK
+  | typeof LocalResourceTypes.CLI_COMMAND
+  | typeof LocalResourceTypes.RULE
+  | typeof LocalResourceTypes.MEMORY
+  | typeof LocalResourceTypes.SUBAGENT
+  | typeof LocalResourceTypes.AGENT_CONFIG
+  | typeof LocalResourceTypes.IGNORE_FILE;
+
+export interface AuthorizationRequirement {
+  resourceId: string;
+  resourceType: LocalResourceType | KitResourceKind;
+  reason: string;
+  requiredStatus?: AuthStatus;
+}
+
+export interface KitDependency {
+  id: string;
+  version?: string;
+  resourceType?: LocalResourceType | KitResourceKind;
+  optional?: boolean;
+}
+
+export interface KitResourceRef {
+  refId: string;
+  resourceType: KitResourceKind;
+  resourceId?: string;
+  sourcePath?: string;
+  targetPath?: string;
+  bindingId?: string;
+  required: boolean;
+  metadata: Record<string, unknown>;
+}
+
+export interface KitManifest {
+  kitId: string;
+  name: string;
+  version: string;
+  description?: string;
+  sourceType: KitManifestSourceType;
+  createdAt: string;
+  supportedAgents: string[];
+  supportedPlatforms: KitSupportedPlatform[];
+  resources: KitResourceRef[];
+  permissionSummary: PermissionSummary;
+  auditSummary: AuditSummary;
+  requiredAuthorizations: AuthorizationRequirement[];
+  resourceHashes: Record<string, string>;
+  dependencies: KitDependency[];
+  conflictPolicy: KitConflictPolicy;
+  rollbackPolicy: KitRollbackPolicy;
+  metadata: Record<string, unknown>;
+}
+
+const KIT_RESOURCE_TYPES = new Set<string>([
+  LocalResourceTypes.SKILL,
+  LocalResourceTypes.MCP_SERVER,
+  LocalResourceTypes.PLUGIN,
+  LocalResourceTypes.HOOK,
+  LocalResourceTypes.CLI_COMMAND,
+  LocalResourceTypes.RULE,
+  LocalResourceTypes.MEMORY,
+  LocalResourceTypes.SUBAGENT,
+  LocalResourceTypes.AGENT_CONFIG,
+  LocalResourceTypes.IGNORE_FILE
+]);
+
+const KIT_SOURCE_TYPES = new Set<string>(['local', 'central-store', 'imported']);
+const KIT_PLATFORMS = new Set<string>(['macos', 'windows']);
+const KIT_CONFLICT_POLICIES = new Set<string>(['skip', 'overwrite-managed', 'prompt']);
+const KIT_ROLLBACK_POLICIES = new Set<string>(['best-effort', 'all-or-nothing-for-managed-overwrites']);
+
+export function extractKitManifest(metadata: Record<string, unknown> | undefined): KitManifest | undefined {
+  if (!metadata) return undefined;
+  const candidate = metadata.kitManifest ?? metadata.manifest;
+  return isKitManifest(candidate) ? candidate : undefined;
+}
+
+export function isKitManifest(value: unknown): value is KitManifest {
+  if (!isRecord(value)) return false;
+  if (!nonEmptyString(value.kitId) || !nonEmptyString(value.name) || !nonEmptyString(value.version)) return false;
+  if (!nonEmptyString(value.createdAt) || !KIT_SOURCE_TYPES.has(String(value.sourceType))) return false;
+  if (!stringArray(value.supportedAgents)) return false;
+  if (!stringArray(value.supportedPlatforms) || !value.supportedPlatforms.every((platform) => KIT_PLATFORMS.has(platform))) return false;
+  if (!Array.isArray(value.resources) || !value.resources.every(isKitResourceRef)) return false;
+  if (!isPermissionSummaryLike(value.permissionSummary)) return false;
+  if (!isAuditSummaryLike(value.auditSummary)) return false;
+  if (!Array.isArray(value.requiredAuthorizations) || !value.requiredAuthorizations.every(isAuthorizationRequirementLike)) return false;
+  if (!isStringRecord(value.resourceHashes)) return false;
+  if (!Array.isArray(value.dependencies) || !value.dependencies.every(isKitDependencyLike)) return false;
+  if (!KIT_CONFLICT_POLICIES.has(String(value.conflictPolicy))) return false;
+  if (!KIT_ROLLBACK_POLICIES.has(String(value.rollbackPolicy))) return false;
+  if (!isRecord(value.metadata)) return false;
+  return true;
 }
 
 export interface LocalResource {
@@ -372,6 +490,7 @@ export interface LocalResourceRow {
   binding?: ResourceBinding;
   files: FileBackedResource[];
   events: LocalEventRecord[];
+  findings: AuditFindingRecord[];
   status: AggregatedResourceStatus;
   scopeLabel: string;
 }
@@ -381,6 +500,7 @@ export interface LocalResourceSnapshot {
   bindings: ResourceBinding[];
   files: FileBackedResource[];
   events: LocalEventRecord[];
+  findings: AuditFindingRecord[];
   rows: LocalResourceRow[];
   summary: {
     resourceCount: number;
@@ -516,4 +636,64 @@ export function contentTypeFromPath(filePath: string): FileBackedResourceContent
 
 function status(key: string, label: string, tone: ResourceStatusTone, source: string): AggregatedResourceStatus {
   return { key, label, tone, source };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function stringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((item) => typeof item === 'string');
+}
+
+function isKitResourceRef(value: unknown): value is KitResourceRef {
+  if (!isRecord(value)) return false;
+  if (!nonEmptyString(value.refId) || !KIT_RESOURCE_TYPES.has(String(value.resourceType))) return false;
+  if (value.resourceId !== undefined && typeof value.resourceId !== 'string') return false;
+  if (value.sourcePath !== undefined && typeof value.sourcePath !== 'string') return false;
+  if (value.targetPath !== undefined && typeof value.targetPath !== 'string') return false;
+  if (value.bindingId !== undefined && typeof value.bindingId !== 'string') return false;
+  if (typeof value.required !== 'boolean') return false;
+  return isRecord(value.metadata);
+}
+
+function isPermissionSummaryLike(value: unknown): value is PermissionSummary {
+  if (!isRecord(value)) return false;
+  return stringArray(value.categories)
+    && stringArray(value.items)
+    && typeof value.label === 'string'
+    && typeof value.declared === 'boolean'
+    && Array.isArray(value.details);
+}
+
+function isAuditSummaryLike(value: unknown): value is AuditSummary {
+  if (!isRecord(value)) return false;
+  return typeof value.status === 'string'
+    && typeof value.findingCount === 'number'
+    && typeof value.criticalCount === 'number'
+    && typeof value.highCount === 'number';
+}
+
+function isAuthorizationRequirementLike(value: unknown): value is AuthorizationRequirement {
+  if (!isRecord(value)) return false;
+  return nonEmptyString(value.resourceId)
+    && typeof value.resourceType === 'string'
+    && typeof value.reason === 'string'
+    && (value.requiredStatus === undefined || typeof value.requiredStatus === 'string');
+}
+
+function isKitDependencyLike(value: unknown): value is KitDependency {
+  if (!isRecord(value)) return false;
+  return nonEmptyString(value.id)
+    && (value.version === undefined || typeof value.version === 'string')
+    && (value.resourceType === undefined || typeof value.resourceType === 'string')
+    && (value.optional === undefined || typeof value.optional === 'boolean');
 }

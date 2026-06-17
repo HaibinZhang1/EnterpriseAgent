@@ -15,6 +15,8 @@ import {
   SyncStatuses,
   createEmptyPermissionSummary,
   createNotAuditedSummary,
+  extractKitManifest,
+  isKitManifest,
   localResourceTypeLabel
 } from '../src/shared/local-resources';
 
@@ -73,5 +75,39 @@ describe('local resource model', () => {
     expect(aggregateResourceStatus({
       lifecycleStatus: LifecycleStatuses.ENABLED
     }).label).toBe('已启用');
+  });
+
+  it('validates explicit Kit manifests and rejects legacy tool metadata', () => {
+    const manifest = {
+      kitId: 'kit.phase3',
+      name: 'Phase 3 Kit',
+      version: '1.0.0',
+      sourceType: 'local',
+      createdAt: '2026-06-16T00:00:00.000Z',
+      supportedAgents: ['codex'],
+      supportedPlatforms: ['macos', 'windows'],
+      resources: [{
+        refId: 'rule.default',
+        resourceType: LocalResourceTypes.RULE,
+        resourceId: 'resource_rule_default',
+        required: true,
+        metadata: {}
+      }],
+      permissionSummary: createEmptyPermissionSummary('Kit 权限'),
+      auditSummary: createNotAuditedSummary('Kit 未审计'),
+      requiredAuthorizations: [],
+      resourceHashes: { 'rule.default': 'sha256:abc' },
+      dependencies: [],
+      conflictPolicy: 'skip',
+      rollbackPolicy: 'best-effort',
+      metadata: {}
+    };
+
+    expect(isKitManifest(manifest)).toBe(true);
+    expect(extractKitManifest({ kitManifest: manifest })).toMatchObject({ kitId: 'kit.phase3' });
+    expect(extractKitManifest({ manifest })).toMatchObject({ kitId: 'kit.phase3' });
+    expect(isKitManifest({ ...manifest, resources: [{ refId: 'bad', resourceType: 'PROJECT', required: true, metadata: {} }] })).toBe(false);
+    expect(isKitManifest({ ...manifest, rollbackPolicy: 'all-or-nothing' })).toBe(false);
+    expect(extractKitManifest({ toolName: 'Codex', legacyTable: 'local_tools' })).toBeUndefined();
   });
 });

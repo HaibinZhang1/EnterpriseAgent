@@ -2,7 +2,16 @@ import type { ExecutionPlan, PlanStep } from './types';
 import { FileSystemGuard } from './file-system-guard';
 import { DesktopErrorException, makeDesktopError } from '../../shared/errors';
 
-const FORBIDDEN = new Set(['exec-script', 'shell-command', 'download-and-run', 'arbitrary-write']);
+const FORBIDDEN = new Set([
+  'exec-script',
+  'shell-command',
+  'download-and-run',
+  'arbitrary-write',
+  'execute-cli',
+  'trigger-hook',
+  'start-mcp-stdio-server',
+  'run-plugin-lifecycle-script'
+]);
 const ALLOWED = new Set(['ensure-dir', 'write-file', 'copy-file', 'remove-managed', 'symlink', 'json-upsert', 'json-remove', 'verify-hash', 'switch-pointer', 'record-state']);
 
 export interface PlanValidationOptions {

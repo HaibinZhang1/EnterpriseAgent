@@ -14,6 +14,7 @@ import { DeviceHeartbeatScheduler } from './device/device-heartbeat-scheduler';
 import { DeviceRegistrationService } from './device/device-registration-service';
 import { LocalLifecycleRepository } from './lifecycle/local-lifecycle-repository';
 import { LocalInventoryScanner } from './lifecycle/local-inventory-scanner';
+import { LocalKitService } from './lifecycle/local-kit-service';
 import { ClientLogger } from './logging/client-logger';
 import { McpService } from './mcp/mcp-service';
 import { PackageDownloadService } from './packages/package-download-service';
@@ -59,6 +60,7 @@ export interface DesktopServices {
   localExecutor: LocalExecutor;
   lifecycleRepository: LocalLifecycleRepository;
   localInventoryScanner: LocalInventoryScanner;
+  localKitService: LocalKitService;
   mcpService: McpService;
   packageDownloadService: PackageDownloadService;
   pluginService: PluginService;
@@ -96,6 +98,14 @@ export async function createDesktopServices(options: CreateDesktopServicesOption
   const offlinePolicy = new OfflinePolicy();
   const localExecutor = new LocalExecutor();
   const lifecycleRepository = new LocalLifecycleRepository(db);
+  const localKitService = new LocalKitService({
+    db,
+    eventQueue,
+    lifecycleRepository,
+    localExecutor,
+    paths,
+    getDeviceInfo: async () => deviceInfo
+  });
   const localInventoryScanner = new LocalInventoryScanner(paths, lifecycleRepository);
   const eventSyncService = new LocalEventSyncService(eventQueue, (events) => apiClient.syncLocalEvents(events), {
     applyServerStateHints: (hints) => lifecycleRepository.applyServerStateHints(hints)
@@ -127,6 +137,7 @@ export async function createDesktopServices(options: CreateDesktopServicesOption
     eventSyncService,
     getDeviceInfo: async () => deviceInfo,
     lifecycleRepository,
+    localKitService,
     localInventoryScanner,
     localExecutor,
     logger,
@@ -155,6 +166,7 @@ export async function createDesktopServices(options: CreateDesktopServicesOption
     clientUpdateService,
     lifecycleRepository,
     localInventoryScanner,
+    localKitService,
     localExecutor,
     logger,
     mcpService,

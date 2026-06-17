@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { initializeAppDataLayout } from '../src/main/config/app-paths';
 import { LocalDatabase } from '../src/main/db/local-database';
 import { LocalEventQueue } from '../src/main/events/local-event-queue';
+import { LocalLifecycleRepository } from '../src/main/lifecycle/local-lifecycle-repository';
+import { LocalEventTypes, LocalResourceTypes, SyncStatuses } from '../src/shared/local-resources';
 import { tempRoot } from './test-utils';
 
 describe('LocalEventQueue', () => {
@@ -78,6 +80,121 @@ describe('LocalEventQueue', () => {
       expect(queue.findByIdempotencyKey('accepted-failure')).toMatchObject({ status: 'accepted', result: 'FAILURE' });
       expect(queue.findByIdempotencyKey('rejected-failure')).toMatchObject({ status: 'rejected', result: 'FAILURE' });
       expect(queue.findByIdempotencyKey('ignored-cancelled')).toMatchObject({ status: 'ignored', result: 'CANCELLED' });
+      await db.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('filters events and preserves offline/local-only sync semantics', async () => {
+    const temp = await tempRoot();
+    try {
+      const paths = await initializeAppDataLayout(temp.root);
+      const db = new LocalDatabase(paths.localDbFile);
+      await db.initialize();
+      const queue = new LocalEventQueue(db);
+      const offline = await queue.enqueue({
+        idempotencyKey: 'offline-path-error',
+        deviceID: 'device_1',
+        eventType: LocalEventTypes.PATH_ERROR,
+        resourceType: LocalResourceTypes.HOOK,
+        resourceID: 'resource_hook',
+        bindingID: 'binding_hook',
+        agentID: 'codex',
+        projectID: 'project_1',
+        kitID: 'kit_1',
+        result: 'FAILURE',
+        offlineCreated: true,
+        syncStatus: SyncStatuses.PENDING_SYNC,
+        createdAt: '2026-06-16T00:00:00.000Z'
+      });
+      const localOnly = await queue.enqueue({
+        idempotencyKey: 'local-only-discovery',
+        deviceID: 'device_1',
+        eventType: LocalEventTypes.HOOK_DISCOVERED,
+        resourceType: LocalResourceTypes.HOOK,
+        resourceID: 'resource_hook',
+        agentID: 'codex',
+        offlineCreated: false,
+        syncStatus: SyncStatuses.LOCAL_ONLY,
+        createdAt: '2026-06-16T00:05:00.000Z'
+      });
+
+      expect(offline.offlineCreated).toBe(true);
+      expect(offline.syncStatus).toBe(SyncStatuses.PENDING_SYNC);
+      expect(localOnly.offlineCreated).toBe(false);
+      expect(localOnly.syncStatus).toBe(SyncStatuses.LOCAL_ONLY);
+      expect(localOnly.status).toBe('accepted');
+      expect(queue.listPending().map((event) => event.idempotencyKey)).toEqual(['offline-path-error']);
+      expect(queue.list({ resourceType: LocalResourceTypes.HOOK })).toHaveLength(2);
+      expect(queue.list({ agentID: 'codex', projectID: 'project_1' }).map((event) => event.id)).toEqual([offline.id]);
+      expect(queue.list({ kitID: 'kit_1', eventType: LocalEventTypes.PATH_ERROR, result: 'FAILURE' }).map((event) => event.id)).toEqual([offline.id]);
+      expect(queue.list({ offlineCreated: false }).map((event) => event.id)).toEqual([localOnly.id]);
+      expect(queue.list({ syncStatus: SyncStatuses.PENDING_SYNC }).map((event) => event.id)).toEqual([offline.id]);
+      expect(queue.list({ since: '2026-06-16T00:01:00.000Z' }).map((event) => event.id)).toEqual([localOnly.id]);
+      await db.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('rejects runtime Hook and CLI event names before persistence', async () => {
+    const temp = await tempRoot();
+    try {
+      const paths = await initializeAppDataLayout(temp.root);
+      const db = new LocalDatabase(paths.localDbFile);
+      await db.initialize();
+      const queue = new LocalEventQueue(db);
+
+      await expect(queue.enqueue({ deviceID: 'device_1', eventType: 'CLI_COMMAND_EXECUTED' })).rejects.toThrow(/Runtime event type/);
+      await expect(queue.enqueue({ deviceID: 'device_1', eventType: 'trigger-hook' })).rejects.toThrow(/Runtime event type/);
+      expect(queue.list()).toHaveLength(0);
+      await db.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('routes repository-originated events through queue redaction and idempotency', async () => {
+    const temp = await tempRoot();
+    try {
+      const paths = await initializeAppDataLayout(temp.root);
+      const db = new LocalDatabase(paths.localDbFile);
+      await db.initialize();
+      const queue = new LocalEventQueue(db);
+      const repository = new LocalLifecycleRepository(db, queue);
+
+      await repository.recordAgentEvent({
+        eventType: LocalEventTypes.HOOK_DISCOVERED,
+        resourceType: LocalResourceTypes.HOOK,
+        sourceId: 'codex:hook:pre',
+        agentId: 'codex',
+        targetPath: '/tmp/hook.json',
+        status: 'info',
+        message: 'Hook config discovered',
+        metadata: { token: 'raw-token-value' }
+      });
+      await repository.recordAgentEvent({
+        eventType: LocalEventTypes.HOOK_DISCOVERED,
+        resourceType: LocalResourceTypes.HOOK,
+        sourceId: 'codex:hook:pre',
+        agentId: 'codex',
+        targetPath: '/tmp/hook.json',
+        status: 'info',
+        message: 'Hook config discovered',
+        metadata: { token: 'raw-token-value' }
+      });
+
+      const events = queue.list({ eventType: LocalEventTypes.HOOK_DISCOVERED });
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        deviceID: 'local-inventory-scanner',
+        syncStatus: SyncStatuses.LOCAL_ONLY,
+        status: 'accepted',
+        resourceType: LocalResourceTypes.HOOK,
+        agentID: 'codex'
+      });
+      expect(JSON.stringify(events[0].payload)).not.toContain('raw-token-value');
       await db.close();
     } finally {
       await temp.cleanup();

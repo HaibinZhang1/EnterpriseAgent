@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { createDesktopServices } from '../src/main/services';
 import { IPC_CHANNELS } from '../src/main/ipc/channels';
 import { createPreloadApi } from '../src/preload/api';
+import { LocalEventTypes, LocalResourceTypes, PathStatuses } from '../src/shared/local-resources';
 import { tempRoot } from './test-utils';
 
 describe('IPC router and preload API', () => {
@@ -50,13 +51,201 @@ describe('IPC router and preload API', () => {
 
   it('preload exposes only whitelisted grouped methods, never raw ipcRenderer or Node objects', () => {
     const api = createPreloadApi(async <T>(channel: any, _payload?: unknown, requestID?: string) => ({ success: true, data: channel as T, requestID: requestID ?? 'req' }));
-    expect(Object.keys(api).sort()).toEqual(['auth', 'catalog', 'clientUpdate', 'device', 'extension', 'local', 'logs', 'mcp', 'notifications', 'plugin', 'publish', 'settings', 'startup']);
+    expect(Object.keys(api).sort()).toEqual(['auth', 'catalog', 'clientUpdate', 'device', 'extension', 'kit', 'local', 'logs', 'mcp', 'notifications', 'plugin', 'publish', 'settings', 'startup']);
     expect(Object.keys(api.clientUpdate).sort()).toEqual(['cancel', 'check', 'confirmDownload', 'confirmInstall', 'getPending']);
-    expect(Object.keys(api.local).sort()).toEqual(['cleanup', 'enqueueEvent', 'getOfflineState', 'getStatus', 'listLifecycle', 'listPendingEvents', 'listResources', 'scanInventory', 'syncPending']);
+    expect(Object.keys(api.kit).sort()).toEqual(['apply', 'checkDrift', 'exportManifest', 'generateFromAgent', 'generateFromProject', 'importManifest', 'removeApplication', 'staticAudit']);
+    expect(Object.keys(api.local).sort()).toEqual(['checkPath', 'cleanup', 'getOfflineState', 'getStatus', 'listLifecycle', 'listPendingEvents', 'listResources', 'previewFile', 'removeProjectRecord', 'runStaticAudit', 'scanInventory', 'syncPending']);
     expect(Object.keys(api.startup).sort()).toEqual(['clearSession', 'getStatus', 'rebuildLocalDatabase', 'retry']);
     expect(JSON.stringify(api)).not.toContain('ipcRenderer');
+    expect(JSON.stringify(api)).not.toContain('enqueueEvent');
     expect('fs' in api).toBe(false);
     expect('process' in api).toBe(false);
+  });
+
+  it('does not expose renderer-originated LocalEvent enqueue as a public IPC channel', async () => {
+    const temp = await tempRoot();
+    try {
+      const services = await createDesktopServices({ rootOverride: temp.root });
+      const forged = await services.router.invoke('local.enqueueEvent', {
+        deviceID: 'renderer-forged-device',
+        eventType: 'KIT_APPLIED',
+        result: 'SUCCESS',
+        idempotencyKey: 'renderer-forged-success',
+        payload: { message: 'fake success' }
+      }, { requestID: 'req_forged_event' });
+      expect(forged).toMatchObject({ success: false, error: { code: 'unknown_ipc_channel' } });
+      expect(services.eventQueue.findByIdempotencyKey('renderer-forged-success')).toBeUndefined();
+      await services.db.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('exposes project management record removal through IPC without deleting project directories', async () => {
+    const temp = await tempRoot();
+    try {
+      const services = await createDesktopServices({ rootOverride: temp.root });
+      const projectDir = path.join(temp.root, 'real-project');
+      await mkdir(projectDir, { recursive: true });
+      await services.lifecycleRepository.recordScannedProject({
+        projectId: 'project.ipc',
+        name: 'IPC Project',
+        status: 'scanned',
+        metadata: { target: projectDir }
+      });
+
+      const result = await services.router.invoke(IPC_CHANNELS.localRemoveProjectRecord, { projectId: 'project.ipc' }, { requestID: 'req_project_remove' });
+
+      expect(result).toMatchObject({
+        success: true,
+        requestID: 'req_project_remove',
+        data: { removed: true, validation: { projectId: 'project.ipc', allowed: true } }
+      });
+      expect(await stat(projectDir)).toMatchObject({ isDirectory: expect.any(Function) });
+      expect(services.db.query<{ count: number }>('SELECT COUNT(*) as count FROM local_projects WHERE project_id = ?', ['project.ipc'])[0].count).toBe(0);
+      expect(services.db.query<{ event_type: string; project_id: string }>('SELECT event_type, project_id FROM local_events WHERE event_type = ?', [LocalEventTypes.PROJECT_RECORD_REMOVED])[0]).toMatchObject({
+        event_type: LocalEventTypes.PROJECT_RECORD_REMOVED,
+        project_id: 'project.ipc'
+      });
+      await services.db.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('runs all-resource static audit through IPC as local-only audit events', async () => {
+    const temp = await tempRoot();
+    try {
+      const services = await createDesktopServices({ rootOverride: temp.root });
+      const hookPath = path.join(temp.root, 'agent', 'settings.json');
+      await mkdir(path.dirname(hookPath), { recursive: true });
+      await services.lifecycleRepository.recordAgentResource({
+        resourceType: LocalResourceTypes.HOOK,
+        sourceId: 'hook.danger',
+        name: 'Danger Hook',
+        agentId: 'codex',
+        targetPath: hookPath,
+        status: 'scanned',
+        metadata: { staticOnly: true }
+      });
+      await writeFile(hookPath, JSON.stringify({ hooks: { PreToolUse: [{ command: 'rm -rf /tmp/nope' }] } }), 'utf8');
+
+      const result = await services.router.invoke(IPC_CHANNELS.localRunStaticAudit, undefined, { requestID: 'req_audit_all' });
+
+      expect(result).toMatchObject({
+        success: true,
+        requestID: 'req_audit_all',
+        data: { audited: expect.any(Number), failed: 0 }
+      });
+      if (!result.success) throw new Error('audit should succeed');
+      expect((result.data as { audited: number; findingCount: number }).audited).toBeGreaterThanOrEqual(1);
+      expect((result.data as { audited: number; findingCount: number }).findingCount).toBeGreaterThan(0);
+      expect(services.db.query<{ event_type: string; result: string }>('SELECT event_type, result FROM local_events WHERE event_type = ?', [LocalEventTypes.STATIC_AUDIT_RUN])[0]).toMatchObject({
+        event_type: LocalEventTypes.STATIC_AUDIT_RUN,
+        result: 'success'
+      });
+      await services.db.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('checks real resource paths through IPC and records local path events', async () => {
+    const temp = await tempRoot();
+    try {
+      const services = await createDesktopServices({ rootOverride: temp.root });
+      const skillPath = path.join(temp.root, 'skills', 'weather', 'SKILL.md');
+      await mkdir(path.dirname(skillPath), { recursive: true });
+      await writeFile(skillPath, '# Weather\n', 'utf8');
+      await services.lifecycleRepository.recordAgentResource({
+        resourceType: LocalResourceTypes.SKILL,
+        sourceId: 'skill.weather',
+        name: 'Weather Skill',
+        agentId: 'codex',
+        targetPath: skillPath,
+        status: 'scanned'
+      });
+      const binding = services.db.query<{ id: string }>('SELECT id FROM resource_bindings WHERE target_path = ?', [skillPath])[0];
+
+      const result = await services.router.invoke(IPC_CHANNELS.localCheckPath, { bindingId: binding.id }, { requestID: 'req_path_check' });
+
+      expect(result).toMatchObject({
+        success: true,
+        requestID: 'req_path_check',
+        data: { pathStatus: PathStatuses.OK, exists: true, isFile: true, currentHash: expect.any(String) }
+      });
+      expect(services.db.query<{ path_status: string; current_hash?: string }>('SELECT path_status, current_hash FROM resource_bindings WHERE id = ?', [binding.id])[0]).toMatchObject({
+        path_status: PathStatuses.OK,
+        current_hash: createHash('sha256').update('# Weather\n').digest('hex')
+      });
+      expect(services.db.query<{ event_type: string; result: string }>('SELECT event_type, result FROM local_events WHERE event_type = ?', [LocalEventTypes.PATH_CHECKED])[0]).toMatchObject({
+        event_type: LocalEventTypes.PATH_CHECKED,
+        result: 'success'
+      });
+      await services.db.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('previews small local files through IPC with redaction and records failure reasons', async () => {
+    const temp = await tempRoot();
+    try {
+      const services = await createDesktopServices({ rootOverride: temp.root });
+      const settingsPath = path.join(temp.root, 'agents', 'codex', 'settings.toml');
+      await mkdir(path.dirname(settingsPath), { recursive: true });
+      await writeFile(settingsPath, 'api_key = "secret-value"\nmode = "readonly"\n', 'utf8');
+      await services.lifecycleRepository.recordAgentResource({
+        resourceType: LocalResourceTypes.AGENT_CONFIG,
+        sourceId: 'settings.codex',
+        name: 'Codex Settings',
+        agentId: 'codex',
+        targetPath: settingsPath,
+        status: 'scanned'
+      });
+      const binding = services.db.query<{ id: string }>('SELECT id FROM resource_bindings WHERE target_path = ?', [settingsPath])[0];
+
+      const preview = await services.router.invoke(IPC_CHANNELS.localPreviewFile, { bindingId: binding.id }, { requestID: 'req_file_preview' });
+
+      expect(preview).toMatchObject({
+        success: true,
+        requestID: 'req_file_preview',
+        data: {
+          previewAvailable: true,
+          targetPath: settingsPath,
+          contentType: 'toml',
+          redactedContent: expect.stringContaining('[REDACTED]')
+        }
+      });
+      expect(JSON.stringify(preview)).not.toContain('secret-value');
+      expect(services.db.query<{ event_type: string; result: string; resource_type: string }>('SELECT event_type, result, resource_type FROM local_events WHERE event_type = ?', [LocalEventTypes.FILE_PREVIEWED])[0]).toMatchObject({
+        event_type: LocalEventTypes.FILE_PREVIEWED,
+        result: 'success',
+        resource_type: LocalResourceTypes.AGENT_CONFIG
+      });
+
+      const missingPath = path.join(temp.root, 'agents', 'codex', 'missing.json');
+      const missing = await services.router.invoke(IPC_CHANNELS.localPreviewFile, { targetPath: missingPath }, { requestID: 'req_file_preview_missing' });
+
+      expect(missing).toMatchObject({
+        success: true,
+        requestID: 'req_file_preview_missing',
+        data: {
+          previewAvailable: false,
+          targetPath: missingPath,
+          failureReason: expect.any(String),
+          suggestion: expect.any(String)
+        }
+      });
+      expect(services.db.query<{ event_type: string; result: string; error_code: string }>('SELECT event_type, result, error_code FROM local_events WHERE event_type = ?', [LocalEventTypes.FILE_PREVIEW_FAILED])[0]).toMatchObject({
+        event_type: LocalEventTypes.FILE_PREVIEW_FAILED,
+        result: 'failure',
+        error_code: 'target_path_not_found'
+      });
+      await services.db.close();
+    } finally {
+      await temp.cleanup();
+    }
   });
 
   it('applies saved baseURL settings to the live ApiClient instance', async () => {

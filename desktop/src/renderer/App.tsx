@@ -29,6 +29,7 @@ const emptyResources: LocalResourceSnapshot = {
   bindings: [],
   files: [],
   events: [],
+  findings: [],
   rows: [],
   summary: {
     resourceCount: 0,
@@ -670,6 +671,7 @@ export function EnterpriseAgentAppView({ model, actions }: { model: EnterpriseAg
             localScanError={model.localScanError}
             onChangeTab={actions.changeLocalTab}
             onRefreshLocal={actions.refreshLocal}
+            settingsConfig={model.settingsConfig}
           />
         </main>
       ) : null}

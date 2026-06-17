@@ -2,7 +2,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { readFile, writeFile } from 'node:fs/promises';
 import { requiredString, assertRecord, optionalString, optionalBoolean, optionalRecord, requiredRecord, type RecordPayload } from '../../shared/validation';
-import { DesktopErrorException, makeDesktopError } from '../../shared/errors';
+import { DesktopErrorException, makeDesktopError, type DesktopErrorCode } from '../../shared/errors';
 import type { ApiClient } from '../api/api-client';
 import type { CacheRepository } from '../cache/cache-repository';
 import type { OfflinePolicy } from '../cache/offline-policy';
@@ -14,8 +14,10 @@ import type { LocalEventQueue } from '../events/local-event-queue';
 import type { LocalEventSyncService, NetworkRecoverySyncInput } from '../events/local-event-sync-service';
 import type { LocalExecutor } from '../executor/local-executor';
 import type { ExecutionPlan } from '../executor/types';
+import { normalizeCustomAgentProfiles } from '../agents/agent-catalog';
 import type { LocalLifecycleRepository } from '../lifecycle/local-lifecycle-repository';
 import type { LocalInventoryScanner } from '../lifecycle/local-inventory-scanner';
+import type { LocalKitService } from '../lifecycle/local-kit-service';
 import type { ClientLogger } from '../logging/client-logger';
 import type { McpDefinition, McpService } from '../mcp/mcp-service';
 import type { PackageDownloadService } from '../packages/package-download-service';
@@ -25,6 +27,14 @@ import type { SkillService } from '../skill/skill-service';
 import type { AdapterRegistry } from '../tool-adapters/registry';
 import type { AdapterCapability, ExtensionKind, ToolAdapter } from '../tool-adapters/types';
 import type { ClientUpdateService } from '../update/client-update-service';
+import { LocalResourceTypes, ResourceScopeTypes, type LocalResourceType, type ResourceScopeType } from '../../shared/local-resources';
+import {
+  createPhase3OperationPolicyDecision,
+  isPhase3OperationPermitted,
+  toPhase3ResourceContext,
+  type OperationPolicyDecision,
+  type Phase3PageSurface
+} from '../../shared/local-phase3-operations';
 import { IPC_CHANNELS } from './channels';
 import { IpcRouter } from './ipc-router';
 import { sanitizeLoginResult } from './sanitize';
@@ -50,6 +60,7 @@ export interface DesktopIpcServices {
   localExecutor: LocalExecutor;
   lifecycleRepository: LocalLifecycleRepository;
   localInventoryScanner: LocalInventoryScanner;
+  localKitService: LocalKitService;
   mcpService: McpService;
   packageDownloadService: PackageDownloadService;
   pluginService: PluginService;
@@ -165,23 +176,35 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
       return { online: false, checkedAt, reason, installDecision: services.offlinePolicy.decide('extension.install', false, context.requestID) };
     }
   });
-  router.register(IPC_CHANNELS.localEnqueueEvent, async (payload, context) => {
-    const record = assertRecord(payload, context.requestID);
-    return services.eventQueue.enqueue({
-      deviceID: requiredString(record, 'deviceID', context.requestID),
-      userID: optionalString(record, 'userID', context.requestID),
-      extensionID: optionalString(record, 'extensionID', context.requestID),
-      version: optionalString(record, 'version', context.requestID),
-      eventType: requiredString(record, 'eventType', context.requestID),
-      result: optionalString(record, 'result', context.requestID),
-      errorCode: optionalString(record, 'errorCode', context.requestID),
-      idempotencyKey: optionalString(record, 'idempotencyKey', context.requestID),
-      payload: typeof record.payload === 'object' && record.payload ? record.payload as Record<string, unknown> : {}
-    });
-  });
   router.register(IPC_CHANNELS.localListPendingEvents, () => services.eventQueue.listPending());
   router.register(IPC_CHANNELS.localScanInventory, () => services.localInventoryScanner.scan());
   router.register(IPC_CHANNELS.localListResources, () => services.lifecycleRepository.listResources());
+  router.register(IPC_CHANNELS.localRunStaticAudit, (_payload, context) => services.lifecycleRepository.runStaticAuditForAllResources({ requestID: context.requestID }));
+  router.register(IPC_CHANNELS.localPreviewFile, (payload, context) => {
+    const record = assertRecord(payload ?? {}, context.requestID);
+    return services.lifecycleRepository.previewResourceFile({
+      resourceId: optionalString(record, 'resourceId', context.requestID),
+      bindingId: optionalString(record, 'bindingId', context.requestID),
+      targetPath: optionalString(record, 'targetPath', context.requestID),
+      requestID: context.requestID
+    });
+  });
+  router.register(IPC_CHANNELS.localCheckPath, (payload, context) => {
+    const record = assertRecord(payload, context.requestID);
+    return services.lifecycleRepository.checkResourcePath({
+      resourceId: optionalString(record, 'resourceId', context.requestID),
+      bindingId: optionalString(record, 'bindingId', context.requestID),
+      targetPath: expandUserPath(optionalString(record, 'targetPath', context.requestID)),
+      requestID: context.requestID
+    });
+  });
+  router.register(IPC_CHANNELS.localRemoveProjectRecord, (payload, context) => {
+    const record = assertRecord(payload, context.requestID);
+    return services.lifecycleRepository.removeProjectManagementRecord({
+      projectId: requiredString(record, 'projectId', context.requestID),
+      requestID: context.requestID
+    });
+  });
   router.register(IPC_CHANNELS.localListLifecycle, async () => {
     await services.localInventoryScanner.scan();
     return services.lifecycleRepository.list();
@@ -192,6 +215,85 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
       online: optionalBoolean(record, 'online', context.requestID) ?? true,
       previousOnline: optionalBoolean(record, 'previousOnline', context.requestID) ?? false,
       reason: normalizeSyncReason(optionalString(record, 'reason', context.requestID), context.requestID)
+    });
+  });
+  router.register(IPC_CHANNELS.kitImportManifest, (payload, context) => {
+    const record = assertRecord(payload, context.requestID);
+    return services.localKitService.importManifest({
+      manifest: record.manifest ?? record.kitManifest ?? record,
+      sourcePath: expandUserPath(optionalString(record, 'sourcePath', context.requestID)),
+      dryRun: optionalBoolean(record, 'dryRun', context.requestID) ?? false,
+      requestID: context.requestID
+    });
+  });
+  router.register(IPC_CHANNELS.kitExportManifest, (payload, context) => {
+    const record = assertRecord(payload, context.requestID);
+    return services.localKitService.exportManifest({
+      kitId: requiredString(record, 'kitId', context.requestID),
+      targetPath: expandUserPath(optionalString(record, 'targetPath', context.requestID)),
+      dryRun: optionalBoolean(record, 'dryRun', context.requestID) ?? false,
+      requestID: context.requestID
+    });
+  });
+  router.register(IPC_CHANNELS.kitGenerateFromAgent, (payload, context) => {
+    const record = assertRecord(payload, context.requestID);
+    return services.localKitService.generateFromAgent({
+      agentId: requiredString(record, 'agentId', context.requestID),
+      kitId: requiredString(record, 'kitId', context.requestID),
+      name: requiredString(record, 'name', context.requestID),
+      version: optionalString(record, 'version', context.requestID),
+      description: optionalString(record, 'description', context.requestID),
+      dryRun: optionalBoolean(record, 'dryRun', context.requestID) ?? false,
+      requestID: context.requestID
+    });
+  });
+  router.register(IPC_CHANNELS.kitGenerateFromProject, (payload, context) => {
+    const record = assertRecord(payload, context.requestID);
+    return services.localKitService.generateFromProject({
+      projectId: requiredString(record, 'projectId', context.requestID),
+      kitId: requiredString(record, 'kitId', context.requestID),
+      name: requiredString(record, 'name', context.requestID),
+      version: optionalString(record, 'version', context.requestID),
+      description: optionalString(record, 'description', context.requestID),
+      dryRun: optionalBoolean(record, 'dryRun', context.requestID) ?? false,
+      requestID: context.requestID
+    });
+  });
+  router.register(IPC_CHANNELS.kitApply, (payload, context) => {
+    const record = assertRecord(payload, context.requestID);
+    const targetRecord = optionalRecord(record, 'target', context.requestID) ?? record;
+    return services.localKitService.apply({
+      kitId: optionalString(record, 'kitId', context.requestID),
+      manifest: record.manifest,
+      applicationId: optionalString(record, 'applicationId', context.requestID),
+      target: kitTargetPayload(targetRecord, context.requestID),
+      dryRun: optionalBoolean(record, 'dryRun', context.requestID) ?? false,
+      requestID: context.requestID
+    });
+  });
+  router.register(IPC_CHANNELS.kitRemoveApplication, (payload, context) => {
+    const record = assertRecord(payload, context.requestID);
+    return services.localKitService.removeApplication({
+      kitId: requiredString(record, 'kitId', context.requestID),
+      applicationId: optionalString(record, 'applicationId', context.requestID),
+      dryRun: optionalBoolean(record, 'dryRun', context.requestID) ?? false,
+      requestID: context.requestID
+    });
+  });
+  router.register(IPC_CHANNELS.kitCheckDrift, (payload, context) => {
+    const record = assertRecord(payload, context.requestID);
+    return services.localKitService.checkDrift({
+      kitId: requiredString(record, 'kitId', context.requestID),
+      dryRun: optionalBoolean(record, 'dryRun', context.requestID) ?? false,
+      requestID: context.requestID
+    });
+  });
+  router.register(IPC_CHANNELS.kitStaticAudit, (payload, context) => {
+    const record = assertRecord(payload, context.requestID);
+    return services.localKitService.runStaticAudit({
+      kitId: requiredString(record, 'kitId', context.requestID),
+      dryRun: optionalBoolean(record, 'dryRun', context.requestID) ?? false,
+      requestID: context.requestID
     });
   });
   router.register(IPC_CHANNELS.localCleanup, async (payload, context) => {
@@ -249,6 +351,13 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
     const version = optionalString(record, 'version', context.requestID) ?? '1.0.0';
     const targetPath = expandUserPath(requiredString(record, 'targetPath', context.requestID));
     const dryRun = optionalBoolean(record, 'dryRun', context.requestID) ?? true;
+    const phase3Policy = await assertPhase3IpcPolicyAllowed(services, {
+      surface: 'extensions',
+      operation: 'skill.install',
+      extensionId,
+      resourceType: LocalResourceTypes.SKILL,
+      requestID: context.requestID
+    });
     const adapter = selectAdapter(services, {
       extensionKind: 'skill',
       adapterId: optionalString(record, 'adapterId', context.requestID),
@@ -273,7 +382,7 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
       await services.lifecycleRepository.recordSkillInstalled({ extensionId, version, packageSha256: packageInfo.expectedSha256, name: detail.name, summary: detail.summary });
       await services.lifecycleRepository.recordTarget({ extensionId, target: targetPath, status: 'enabled', metadata: { version, adapterId: adapter.manifest.adapterId } });
     }
-    return { adapter: adapter.manifest, packageInfo, installPlan, installResult, plan, result };
+    return { policy: phase3Policy, adapter: adapter.manifest, packageInfo, installPlan, installResult, plan, result };
   });
 
   router.register(IPC_CHANNELS.mcpConfigure, async (payload, context) => {
@@ -282,6 +391,13 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
     const targetConfigPath = expandUserPath(requiredString(record, 'targetConfigPath', context.requestID));
     const variables = stringMap(optionalRecord(record, 'variables', context.requestID) ?? {}, context.requestID);
     const dryRun = optionalBoolean(record, 'dryRun', context.requestID) ?? true;
+    const phase3Policy = await assertPhase3IpcPolicyAllowed(services, {
+      surface: 'extensions',
+      operation: 'mcp.configure',
+      extensionId,
+      resourceType: LocalResourceTypes.MCP_SERVER,
+      requestID: context.requestID
+    });
     const adapter = selectAdapter(services, {
       extensionKind: 'mcp',
       adapterId: optionalString(record, 'adapterId', context.requestID),
@@ -324,13 +440,21 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
         metadata: { version: definition.version, adapterId: adapter.manifest.adapterId, managedConfigId: output.managedConfigId, secretRefs: output.secretRefs, variableChanges: output.variableChanges, variablesSchema: definition.variablesSchema, operation: output.plan.operation, connectionTest, rollbackResult }
       });
     }
-    return { adapter: adapter.manifest, definition, redactedPreview: output.redactedPreview, variableChanges: output.variableChanges, managedConfigId: output.managedConfigId, fullConfigRef: output.fullConfigRef, plan: output.plan, result, connectionTest, rollbackPlan, rollbackResult };
+    return { policy: phase3Policy, adapter: adapter.manifest, definition, redactedPreview: output.redactedPreview, variableChanges: output.variableChanges, managedConfigId: output.managedConfigId, fullConfigRef: output.fullConfigRef, plan: output.plan, result, connectionTest, rollbackPlan, rollbackResult };
   });
 
   router.register(IPC_CHANNELS.mcpConnectionTest, async (payload, context) => {
     const record = assertRecord(payload, context.requestID);
     const extensionId = requiredString(record, 'extensionID', context.requestID);
     const definition = normalizeMcpDefinition(await services.apiClient.getMcpDefinition(extensionId, context.requestID), extensionId);
+    await assertPhase3IpcPolicyAllowed(services, {
+      surface: 'extensions',
+      operation: 'mcp.connection-test',
+      extensionId,
+      resourceType: LocalResourceTypes.MCP_SERVER,
+      requestID: context.requestID,
+      metadata: { connectionTestType: definition.connectionTest?.type, transport: definition.connectionTest?.type }
+    });
     return services.mcpService.executeConnectionTest(definition.connectionTest, {
       requestID: context.requestID,
       extensionId,
@@ -348,6 +472,13 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
     const installMode = normalizePluginInstallMode(optionalString(record, 'installMode', context.requestID) ?? definition.installMode, context.requestID);
     const dryRun = optionalBoolean(record, 'dryRun', context.requestID) ?? true;
     const operation = normalizePluginOperation(optionalString(record, 'operation', context.requestID), context.requestID);
+    const phase3Policy = await assertPhase3IpcPolicyAllowed(services, {
+      surface: 'extensions',
+      operation: phase3PluginOperation(installMode, operation),
+      extensionId,
+      resourceType: LocalResourceTypes.PLUGIN,
+      requestID: context.requestID
+    });
     const adapter = selectAdapter(services, {
       extensionKind: 'plugin',
       adapterId: optionalString(record, 'adapterId', context.requestID),
@@ -358,7 +489,7 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
     if (!decision.allowed) {
       throw new DesktopErrorException(decision.error ?? makeDesktopError('offline_server_authority_required', decision.reason, context.requestID));
     }
-    const shouldDownload = !dryRun && installMode !== 'CONFIG_PLUGIN' && operation !== 'uninstall' && operation !== 'mark-installed' && operation !== 'mark-uninstalled';
+    const shouldDownload = !dryRun && installMode !== 'CONFIG_PLUGIN' && !['enable', 'disable', 'uninstall', 'mark-installed', 'mark-uninstalled'].includes(operation ?? '');
     const downloaded = shouldDownload
       ? await downloadExtensionPackage(services, {
         extensionId,
@@ -392,7 +523,7 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
         metadata: { version: definition.version, installMode, operation: plan.operation, downloadedPackagePath: downloaded?.packagePath, expectedSha256: downloaded?.expectedSha256 }
       });
     }
-    return { adapter: adapter.manifest, definition, download: downloaded, plan, result };
+    return { policy: phase3Policy, adapter: adapter.manifest, definition, download: downloaded, plan, result };
   });
 
   router.register(IPC_CHANNELS.publishUploadPackage, (payload, context) => {
@@ -527,6 +658,12 @@ function sanitizeLocalConfig(payload: RecordPayload, requestID?: string): Record
         throw new DesktopErrorException(makeDesktopError('validation_failed', `${key} must be a boolean`, requestID));
       }
       output[key] = value;
+    } else if (key === 'agentProfiles') {
+      const validation = normalizeCustomAgentProfiles(value);
+      if (!validation.valid) {
+        throw new DesktopErrorException(makeDesktopError('validation_failed', validation.errors.join('; '), requestID));
+      }
+      output[key] = validation.normalized;
     }
   }
   return output;
@@ -672,6 +809,125 @@ async function executePlan(services: DesktopIpcServices, plan: ExecutionPlan, al
   });
 }
 
+async function assertPhase3IpcPolicyAllowed(
+  services: DesktopIpcServices,
+  input: {
+    surface: Phase3PageSurface;
+    operation: string;
+    extensionId: string;
+    resourceType: LocalResourceType;
+    requestID?: string;
+    metadata?: Record<string, unknown>;
+  }
+): Promise<OperationPolicyDecision> {
+  const resources = phase3ResourcesForExtension(services, input);
+  const decision = createPhase3OperationPolicyDecision({
+    surface: input.surface,
+    operation: input.operation,
+    resources,
+    metadata: input.metadata
+  });
+  if (isPhase3OperationPermitted(decision) && decision.status !== 'read_only') return decision;
+
+  await enqueuePhase3PolicyBlockedEvent(services, input, decision, resources[0]);
+  throw new DesktopErrorException(makeDesktopError(
+    desktopErrorCodeForPolicy(decision),
+    decision.reason ?? 'Operation is not allowed by local phase-three policy',
+    input.requestID,
+    { operation: input.operation, decision }
+  ));
+}
+
+function phase3ResourcesForExtension(
+  services: DesktopIpcServices,
+  input: { extensionId: string; resourceType: LocalResourceType; metadata?: Record<string, unknown> }
+) {
+  const snapshot = services.lifecycleRepository.listResources();
+  const rows = snapshot.rows.filter((row) => row.resource.type === input.resourceType && row.resource.sourceId === input.extensionId);
+  if (rows.length === 0) {
+    return [{
+      sourceId: input.extensionId,
+      name: input.extensionId,
+      resourceType: input.resourceType,
+      metadata: input.metadata ?? {}
+    }];
+  }
+  return rows.map((row) => toPhase3ResourceContext({
+    resource: row.resource,
+    binding: row.binding,
+    metadata: input.metadata
+  }));
+}
+
+async function enqueuePhase3PolicyBlockedEvent(
+  services: DesktopIpcServices,
+  input: { operation: string; extensionId: string; resourceType: LocalResourceType; requestID?: string },
+  decision: OperationPolicyDecision,
+  firstResource: ReturnType<typeof phase3ResourcesForExtension>[number] | undefined
+): Promise<void> {
+  const device = await services.getDeviceInfo();
+  await services.eventQueue.enqueue({
+    idempotencyKey: `phase3-policy:${input.requestID ?? 'unknown'}:${input.operation}:${input.extensionId}`,
+    deviceID: device.deviceID,
+    extensionID: input.extensionId,
+    eventType: 'PHASE3_OPERATION_BLOCKED',
+    operationID: input.operation,
+    resourceID: firstResource?.resourceId,
+    bindingID: firstResource?.bindingId,
+    resourceType: input.resourceType,
+    agentID: firstResource?.agentId,
+    projectID: firstResource?.projectId,
+    kitID: firstResource?.kitId,
+    result: 'FAILURE',
+    errorCode: decision.checks.find((check) => check.status === 'block')?.errorCode ?? decision.status,
+    failureReason: decision.reason,
+    suggestion: decision.suggestion,
+    offlineCreated: true,
+    payload: { decision }
+  });
+}
+
+function desktopErrorCodeForPolicy(decision: OperationPolicyDecision): DesktopErrorCode {
+  const errorCode = decision.checks.find((check) => check.status === 'block')?.errorCode;
+  if (errorCode === 'hash_mismatch') return 'hash_mismatch';
+  if (errorCode === 'target_path_not_found') return 'target_path_not_found';
+  if (errorCode === 'invalid_execution_plan') return 'invalid_execution_plan';
+  if (errorCode === 'offline_server_authority_required') return 'offline_server_authority_required';
+  if (errorCode === 'security_delisted') return 'permission_denied';
+  return decision.status === 'disabled' ? 'invalid_execution_plan' : 'scope_restricted';
+}
+
+function phase3PluginOperation(installMode: PluginInstallMode, operation: ReturnType<typeof normalizePluginOperation>): string {
+  if (operation === 'uninstall' || operation === 'mark-uninstalled') return 'plugin.uninstall';
+  if (operation === 'disable') return 'plugin.disable';
+  if (operation === 'enable' || operation === 'mark-installed') return 'plugin.enable';
+  if (operation === 'update') return 'plugin.update';
+  if (installMode === 'MANUAL_DOWNLOAD') return 'plugin.download';
+  return 'plugin.install';
+}
+
+function kitTargetPayload(record: RecordPayload, requestID?: string): {
+  scopeType?: ResourceScopeType;
+  agentId?: string;
+  projectId?: string;
+  scopePath?: string;
+  targetPath?: string;
+} {
+  const scopeType = optionalString(record, 'scopeType', requestID);
+  return {
+    scopeType: scopeType ? requireResourceScopeType(scopeType, requestID) : undefined,
+    agentId: optionalString(record, 'agentId', requestID),
+    projectId: optionalString(record, 'projectId', requestID),
+    scopePath: expandUserPath(optionalString(record, 'scopePath', requestID)),
+    targetPath: expandUserPath(optionalString(record, 'targetPath', requestID))
+  };
+}
+
+function requireResourceScopeType(value: string, requestID?: string): ResourceScopeType {
+  if (Object.values(ResourceScopeTypes).includes(value as ResourceScopeType)) return value as ResourceScopeType;
+  throw new DesktopErrorException(makeDesktopError('validation_failed', `Invalid Kit target scopeType: ${value}`, requestID));
+}
+
 async function downloadExtensionPackage(
   services: DesktopIpcServices,
   input: {
@@ -735,6 +991,9 @@ function normalizeExtensionDetail(value: unknown, fallbackExtensionId: string, f
 }
 
 function pluginLifecycleStatus(installMode: PluginInstallMode, operation: ReturnType<typeof normalizePluginOperation>): string {
+  if (operation === 'enable') return 'enabled';
+  if (operation === 'disable') return 'disabled';
+  if (operation === 'update') return 'updated';
   if (operation === 'mark-installed') return 'installed';
   if (operation === 'mark-uninstalled') return 'manual_uninstalled';
   if (operation === 'uninstall') return 'uninstalled';

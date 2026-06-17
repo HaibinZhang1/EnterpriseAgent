@@ -10,10 +10,18 @@ export type PlanStepAction =
   | 'switch-pointer'
   | 'record-state';
 
-export type ForbiddenPlanStepAction = 'exec-script' | 'shell-command' | 'download-and-run' | 'arbitrary-write';
+export type ForbiddenPlanStepAction =
+  | 'exec-script'
+  | 'shell-command'
+  | 'download-and-run'
+  | 'arbitrary-write'
+  | 'execute-cli'
+  | 'trigger-hook'
+  | 'start-mcp-stdio-server'
+  | 'run-plugin-lifecycle-script';
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
 export type StepStatus = 'pending' | 'skipped' | 'success' | 'failed' | 'rolled_back';
-export type PlanStatus = 'planned' | 'dry_run' | 'success' | 'failed' | 'partial_success' | 'rolled_back';
+export type PlanStatus = 'planned' | 'dry_run' | 'success' | 'failed' | 'partial_success' | 'rolled_back' | 'rollback_failed';
 
 export interface PlanSummary {
   title: string;
@@ -75,6 +83,7 @@ export interface StepResult {
 
 export interface PlanResult {
   planId: string;
+  executionId?: string;
   status: PlanStatus;
   dryRun: boolean;
   steps: StepResult[];

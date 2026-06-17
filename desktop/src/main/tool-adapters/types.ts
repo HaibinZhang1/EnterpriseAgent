@@ -23,13 +23,41 @@ export type AgentAdapterCapability =
   | 'backup'
   | 'rollback';
 
+export type AgentResourceKind =
+  | 'settings'
+  | 'rules'
+  | 'memory'
+  | 'subagents'
+  | 'ignore-files'
+  | 'skills'
+  | 'mcp'
+  | 'plugins'
+  | 'hooks'
+  | 'cli'
+  | 'files';
+
+export type AgentPathProfileSourceLevel =
+  | 'OFFICIAL_VERIFIED'
+  | 'PRODUCT_DOC_UNSTRUCTURED'
+  | 'DOC_OR_COMMUNITY_VERIFIED'
+  | 'EA_MANAGED'
+  | 'NOT_APPLICABLE'
+  | 'USER_CONFIG_REQUIRED';
+
+export type AgentCapabilityStatus = 'SUPPORTED' | 'NOT_CONFIGURED' | 'NOT_APPLICABLE' | 'USER_CONFIG_REQUIRED';
+
 export interface AgentPathProfile {
   platform: 'macos' | 'windows' | 'linux' | 'test';
   detectionRoots: string[];
   globalResourcePaths: string[];
   projectResourcePaths: string[];
   fallbackRoot?: string;
-  sourceLevel?: 'OFFICIAL_VERIFIED' | 'PRODUCT_DOC_UNSTRUCTURED' | 'DOC_OR_COMMUNITY_VERIFIED' | 'EA_MANAGED' | 'NOT_APPLICABLE' | 'USER_CONFIG_REQUIRED';
+  sourceLevel?: AgentPathProfileSourceLevel;
+  sourceLevels?: AgentPathProfileSourceLevel[];
+  envOverrides?: string[];
+  capabilityStatus?: Partial<Record<AgentResourceKind, AgentCapabilityStatus>>;
+  resourcePaths?: Partial<Record<AgentResourceKind, string[]>>;
+  notes?: string[];
 }
 
 export interface AgentAdapterManifest {
@@ -42,6 +70,8 @@ export interface AgentAdapterManifest {
   capabilities: AgentAdapterCapability[];
   macosPathProfile?: AgentPathProfile;
   windowsPathProfile?: AgentPathProfile;
+  pathProfileVersion?: string;
+  defaultWriteMode?: 'read-only' | 'execution-plan-required';
 }
 
 export interface AdapterManifest {

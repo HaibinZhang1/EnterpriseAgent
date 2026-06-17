@@ -4,6 +4,11 @@ import path from 'node:path';
 import initSqlJs, { type Database, type QueryExecResult, type SqlJsStatic, type SqlValue } from 'sql.js';
 import { DesktopErrorException, makeDesktopError } from '../../shared/errors';
 
+export interface LocalDatabaseTransaction {
+  run(sql: string, params?: SqlValue[]): void;
+  query<T extends object>(sql: string, params?: SqlValue[]): T[];
+}
+
 let sqlPromise: Promise<SqlJsStatic> | undefined;
 
 async function loadSql(): Promise<SqlJsStatic> {
@@ -183,6 +188,39 @@ CREATE TABLE IF NOT EXISTS file_backed_resources (
   FOREIGN KEY(binding_id) REFERENCES resource_bindings(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS local_audit_findings (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  rule_id TEXT NOT NULL,
+  harness_rule_id TEXT,
+  resource_id TEXT NOT NULL,
+  binding_id TEXT,
+  resource_type TEXT NOT NULL,
+  agent_id TEXT,
+  project_id TEXT,
+  kit_id TEXT,
+  severity TEXT NOT NULL,
+  audit_status TEXT NOT NULL,
+  trust_score_impact INTEGER NOT NULL,
+  permission_category TEXT NOT NULL,
+  path TEXT,
+  line_start INTEGER,
+  line_end INTEGER,
+  snippet_hash TEXT,
+  path_summary TEXT,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL,
+  impact_scope_json TEXT NOT NULL DEFAULT '{}',
+  remediation TEXT NOT NULL,
+  related_event_ids_json TEXT NOT NULL DEFAULT '[]',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  detected_at TEXT NOT NULL,
+  resolved_at TEXT,
+  blocker INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY(resource_id) REFERENCES local_resources(id) ON DELETE CASCADE,
+  FOREIGN KEY(binding_id) REFERENCES resource_bindings(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS mcp_local_installations (
   id TEXT PRIMARY KEY,
   extension_id TEXT,
@@ -255,6 +293,12 @@ CREATE INDEX IF NOT EXISTS idx_resource_bindings_audit_status ON resource_bindin
 CREATE INDEX IF NOT EXISTS idx_file_backed_resources_resource_id ON file_backed_resources(resource_id);
 CREATE INDEX IF NOT EXISTS idx_file_backed_resources_binding_id ON file_backed_resources(binding_id);
 CREATE INDEX IF NOT EXISTS idx_file_backed_resources_path ON file_backed_resources(path);
+CREATE INDEX IF NOT EXISTS idx_local_audit_findings_resource_id ON local_audit_findings(resource_id);
+CREATE INDEX IF NOT EXISTS idx_local_audit_findings_binding_id ON local_audit_findings(binding_id);
+CREATE INDEX IF NOT EXISTS idx_local_audit_findings_rule_id ON local_audit_findings(rule_id);
+CREATE INDEX IF NOT EXISTS idx_local_audit_findings_severity ON local_audit_findings(severity);
+CREATE INDEX IF NOT EXISTS idx_local_audit_findings_audit_status ON local_audit_findings(audit_status);
+CREATE INDEX IF NOT EXISTS idx_local_audit_findings_detected_at ON local_audit_findings(detected_at);
 CREATE INDEX IF NOT EXISTS idx_local_targets_extension_id ON local_targets(extension_id);
 CREATE INDEX IF NOT EXISTS idx_local_targets_target ON local_targets(target);
 CREATE INDEX IF NOT EXISTS idx_local_targets_status ON local_targets(status);
@@ -311,22 +355,35 @@ export class LocalDatabase {
   }
 
   async run(sql: string, params: SqlValue[] = []): Promise<void> {
-    const statement = this.ensureDb().prepare(sql);
-    try {
-      statement.run(params);
-      await this.persist();
-    } finally {
-      statement.free();
-    }
+    this.runStatement(sql, params);
+    await this.persist();
   }
 
   runSync(sql: string, params: SqlValue[] = []): void {
-    const statement = this.ensureDb().prepare(sql);
+    this.runStatement(sql, params);
+    this.persistSync();
+  }
+
+  async transaction<T>(work: (tx: LocalDatabaseTransaction) => T | Promise<T>): Promise<T> {
+    const db = this.ensureDb();
+    db.exec('BEGIN IMMEDIATE TRANSACTION');
+    const tx: LocalDatabaseTransaction = {
+      run: (sql, params = []) => this.runStatement(sql, params),
+      query: <Row extends object>(sql: string, params: SqlValue[] = []) => this.query<Row>(sql, params)
+    };
     try {
-      statement.run(params);
-      this.persistSync();
-    } finally {
-      statement.free();
+      const result = await work(tx);
+      db.exec('COMMIT');
+      await this.persist();
+      return result;
+    } catch (error) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // Preserve the original transaction failure for callers.
+      }
+      await this.persist();
+      throw error;
     }
   }
 
@@ -370,6 +427,15 @@ export class LocalDatabase {
   private ensureDb(): Database {
     if (!this.db) throw new DesktopErrorException(makeDesktopError('db_error', 'Local database is not initialized'));
     return this.db;
+  }
+
+  private runStatement(sql: string, params: SqlValue[] = []): void {
+    const statement = this.ensureDb().prepare(sql);
+    try {
+      statement.run(params);
+    } finally {
+      statement.free();
+    }
   }
 
   private ensureColumns(table: string, columns: Record<string, string>): void {

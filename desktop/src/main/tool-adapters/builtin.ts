@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import { listBuiltInAgentManifests, resolveAgentPathProfile } from '../agents/agent-catalog';
 import type { ExecutionPlan } from '../executor/types';
-import type { AdapterManifest, AdapterMatchRequest, ToolAdapter } from './types';
+import type { AdapterManifest, AdapterMatchRequest, ToolAdapter, AgentAdapterManifest } from './types';
 import { createCapabilityMatcher } from './registry';
 
 export class DirectoryToolAdapter implements ToolAdapter {
@@ -24,12 +25,12 @@ export class DirectoryToolAdapter implements ToolAdapter {
    * The built-in adapters share the safe directory-plan implementation while
    * carrying tool-specific identity/capability metadata for target selection.
    */
-  static forKnownTool(adapterId: string, toolName: string, defaultScanPaths: string[]): DirectoryToolAdapter {
+  static forKnownTool(adapterId: string, toolName: string, defaultScanPaths: string[], agentAdapter?: AgentAdapterManifest): DirectoryToolAdapter {
     return new DirectoryToolAdapter({
       adapterId,
       toolName,
       defaultScanPaths,
-      agentAdapter: {
+      agentAdapter: agentAdapter ?? {
         agentId: adapterId,
         displayName: toolName,
         adapterVersion: '1.0.0',
@@ -79,12 +80,18 @@ export class DirectoryToolAdapter implements ToolAdapter {
 
 export function createDryRunAdapters(): DirectoryToolAdapter[] {
   const home = os.homedir();
+  const builtIns = listBuiltInAgentManifests().map((manifest) => {
+    const platform = process.platform === 'win32' ? 'windows' : 'macos';
+    const profile = resolveAgentPathProfile(platform === 'windows' ? manifest.windowsPathProfile! : manifest.macosPathProfile!, {
+      platform,
+      homeDir: home,
+      userProfileDir: home,
+      env: process.env
+    });
+    return DirectoryToolAdapter.forKnownTool(manifest.agentId, manifest.displayName, profile.detectionRoots, manifest);
+  });
   return [
     new DirectoryToolAdapter(),
-    DirectoryToolAdapter.forKnownTool('codex', 'Codex', [path.join(home, '.codex')]),
-    DirectoryToolAdapter.forKnownTool('claude', 'Claude', [path.join(home, '.claude')]),
-    DirectoryToolAdapter.forKnownTool('cursor', 'Cursor', [path.join(home, '.cursor')]),
-    DirectoryToolAdapter.forKnownTool('windsurf', 'Windsurf', [path.join(home, '.codeium', 'windsurf')]),
-    DirectoryToolAdapter.forKnownTool('opencode', 'opencode', [path.join(home, '.opencode')])
+    ...builtIns
   ];
 }
