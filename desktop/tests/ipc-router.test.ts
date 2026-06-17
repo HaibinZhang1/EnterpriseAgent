@@ -53,7 +53,7 @@ describe('IPC router and preload API', () => {
     const api = createPreloadApi(async <T>(channel: any, _payload?: unknown, requestID?: string) => ({ success: true, data: channel as T, requestID: requestID ?? 'req' }));
     expect(Object.keys(api).sort()).toEqual(['auth', 'catalog', 'clientUpdate', 'device', 'extension', 'kit', 'local', 'logs', 'mcp', 'notifications', 'plugin', 'publish', 'settings', 'startup']);
     expect(Object.keys(api.clientUpdate).sort()).toEqual(['cancel', 'check', 'confirmDownload', 'confirmInstall', 'getPending']);
-    expect(Object.keys(api.kit).sort()).toEqual(['apply', 'checkDrift', 'exportManifest', 'generateFromAgent', 'generateFromProject', 'importManifest', 'removeApplication', 'staticAudit']);
+    expect(Object.keys(api.kit).sort()).toEqual(['apply', 'checkDrift', 'deleteManifest', 'exportManifest', 'generateFromAgent', 'generateFromProject', 'importManifest', 'removeApplication', 'staticAudit']);
     expect(Object.keys(api.local).sort()).toEqual(['checkPath', 'cleanup', 'getOfflineState', 'getStatus', 'listLifecycle', 'listPendingEvents', 'listResources', 'previewFile', 'removeProjectRecord', 'runStaticAudit', 'scanInventory', 'syncPending']);
     expect(Object.keys(api.startup).sort()).toEqual(['clearSession', 'getStatus', 'rebuildLocalDatabase', 'retry']);
     expect(JSON.stringify(api)).not.toContain('ipcRenderer');
@@ -113,7 +113,7 @@ describe('IPC router and preload API', () => {
     }
   });
 
-  it('runs all-resource static audit through IPC as local-only audit events', async () => {
+  it('runs all-resource static audit through IPC without writing local-only events', async () => {
     const temp = await tempRoot();
     try {
       const services = await createDesktopServices({ rootOverride: temp.root });
@@ -140,17 +140,14 @@ describe('IPC router and preload API', () => {
       if (!result.success) throw new Error('audit should succeed');
       expect((result.data as { audited: number; findingCount: number }).audited).toBeGreaterThanOrEqual(1);
       expect((result.data as { audited: number; findingCount: number }).findingCount).toBeGreaterThan(0);
-      expect(services.db.query<{ event_type: string; result: string }>('SELECT event_type, result FROM local_events WHERE event_type = ?', [LocalEventTypes.STATIC_AUDIT_RUN])[0]).toMatchObject({
-        event_type: LocalEventTypes.STATIC_AUDIT_RUN,
-        result: 'success'
-      });
+      expect(services.db.query<{ count: number }>('SELECT COUNT(*) as count FROM local_events WHERE event_type = ?', [LocalEventTypes.STATIC_AUDIT_RUN])[0].count).toBe(0);
       await services.db.close();
     } finally {
       await temp.cleanup();
     }
   });
 
-  it('checks real resource paths through IPC and records local path events', async () => {
+  it('checks real resource paths through IPC without writing local-only path events', async () => {
     const temp = await tempRoot();
     try {
       const services = await createDesktopServices({ rootOverride: temp.root });
@@ -178,17 +175,14 @@ describe('IPC router and preload API', () => {
         path_status: PathStatuses.OK,
         current_hash: createHash('sha256').update('# Weather\n').digest('hex')
       });
-      expect(services.db.query<{ event_type: string; result: string }>('SELECT event_type, result FROM local_events WHERE event_type = ?', [LocalEventTypes.PATH_CHECKED])[0]).toMatchObject({
-        event_type: LocalEventTypes.PATH_CHECKED,
-        result: 'success'
-      });
+      expect(services.db.query<{ count: number }>('SELECT COUNT(*) as count FROM local_events WHERE event_type = ?', [LocalEventTypes.PATH_CHECKED])[0].count).toBe(0);
       await services.db.close();
     } finally {
       await temp.cleanup();
     }
   });
 
-  it('previews small local files through IPC with redaction and records failure reasons', async () => {
+  it('previews small local files through IPC with redaction without writing local-only events', async () => {
     const temp = await tempRoot();
     try {
       const services = await createDesktopServices({ rootOverride: temp.root });
@@ -218,11 +212,7 @@ describe('IPC router and preload API', () => {
         }
       });
       expect(JSON.stringify(preview)).not.toContain('secret-value');
-      expect(services.db.query<{ event_type: string; result: string; resource_type: string }>('SELECT event_type, result, resource_type FROM local_events WHERE event_type = ?', [LocalEventTypes.FILE_PREVIEWED])[0]).toMatchObject({
-        event_type: LocalEventTypes.FILE_PREVIEWED,
-        result: 'success',
-        resource_type: LocalResourceTypes.AGENT_CONFIG
-      });
+      expect(services.db.query<{ count: number }>('SELECT COUNT(*) as count FROM local_events WHERE event_type = ?', [LocalEventTypes.FILE_PREVIEWED])[0].count).toBe(0);
 
       const missingPath = path.join(temp.root, 'agents', 'codex', 'missing.json');
       const missing = await services.router.invoke(IPC_CHANNELS.localPreviewFile, { targetPath: missingPath }, { requestID: 'req_file_preview_missing' });
@@ -237,11 +227,7 @@ describe('IPC router and preload API', () => {
           suggestion: expect.any(String)
         }
       });
-      expect(services.db.query<{ event_type: string; result: string; error_code: string }>('SELECT event_type, result, error_code FROM local_events WHERE event_type = ?', [LocalEventTypes.FILE_PREVIEW_FAILED])[0]).toMatchObject({
-        event_type: LocalEventTypes.FILE_PREVIEW_FAILED,
-        result: 'failure',
-        error_code: 'target_path_not_found'
-      });
+      expect(services.db.query<{ count: number }>('SELECT COUNT(*) as count FROM local_events WHERE event_type = ?', [LocalEventTypes.FILE_PREVIEW_FAILED])[0].count).toBe(0);
       await services.db.close();
     } finally {
       await temp.cleanup();

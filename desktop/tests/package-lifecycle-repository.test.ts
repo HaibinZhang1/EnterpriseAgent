@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildAppPaths } from '../src/main/config/app-paths';
 import { LocalDatabase } from '../src/main/db/local-database';
 import { LocalLifecycleRepository } from '../src/main/lifecycle/local-lifecycle-repository';
 import { PackageDownloadService } from '../src/main/packages/package-download-service';
+import { LocalEventTypes, LocalResourceTypes, PathStatuses } from '../src/shared/local-resources';
 import { tempRoot } from './test-utils';
 
 describe('Package download and local lifecycle repository', () => {
@@ -109,6 +110,182 @@ describe('Package download and local lifecycle repository', () => {
       const persisted = new LocalLifecycleRepository(reopened).listResources();
       expect(persisted.resources.map((resource) => resource.sourceId)).toEqual(expect.arrayContaining(['skill.legacy', 'mcp.legacy', 'plugin.legacy']));
       await reopened.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('allows binding-scoped path operations only for paths owned by the binding', async () => {
+    const temp = await tempRoot();
+    try {
+      const dbPath = path.join(temp.root, 'local.db');
+      const db = new LocalDatabase(dbPath);
+      await db.initialize();
+      const repo = new LocalLifecycleRepository(db);
+      const codexDir = path.join(temp.root, '.codex');
+      const ownedFile = path.join(codexDir, 'config.toml');
+      const unownedFile = path.join(temp.root, 'other.toml');
+      await mkdir(codexDir, { recursive: true });
+      await writeFile(ownedFile, 'api_key = "EAH_SENTINEL_SECRET_DO_NOT_PERSIST"\n', 'utf8');
+      await writeFile(unownedFile, 'model = "unowned"\n', 'utf8');
+      await repo.recordAgentResource({
+        resourceType: LocalResourceTypes.AGENT_CONFIG,
+        sourceId: 'codex.directory',
+        name: 'Codex Directory',
+        agentId: 'codex',
+        targetPath: codexDir,
+        status: 'scanned'
+      });
+      const snapshot = repo.listResources();
+      const binding = snapshot.bindings.find((candidate) => candidate.targetPath === codexDir);
+      const resource = snapshot.resources.find((candidate) => candidate.sourceId === 'codex.directory');
+      expect(binding).toBeDefined();
+      expect(resource).toBeDefined();
+      await db.run(
+        `INSERT OR REPLACE INTO file_backed_resources(
+          id, resource_id, binding_id, path, content_type, size, last_known_mtime,
+          last_known_size, last_known_hash, current_hash, external_modified,
+          drifted, preview_available, metadata_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'owned-codex-config-file',
+          resource!.id,
+          binding!.id,
+          ownedFile,
+          'toml',
+          44,
+          '2026-06-16T00:00:00.000Z',
+          44,
+          'owned-hash',
+          'owned-hash',
+          0,
+          0,
+          1,
+          '{}',
+          '2026-06-16T00:00:00.000Z'
+        ]
+      );
+
+      const allowed = await repo.checkResourcePath({ bindingId: binding!.id, targetPath: ownedFile, operationId: 'owned-path-check' });
+      expect(allowed).toMatchObject({ bindingId: binding!.id, targetPath: ownedFile, pathStatus: PathStatuses.OK });
+      expect(allowed.eventId).toBeUndefined();
+      const preview = await repo.previewResourceFile({ bindingId: binding!.id, targetPath: ownedFile, operationId: 'owned-preview' });
+      expect(preview).toMatchObject({ bindingId: binding!.id, targetPath: ownedFile, previewAvailable: true });
+      expect(preview.eventId).toBeUndefined();
+      expect(preview.redactedContent).not.toContain('EAH_SENTINEL_SECRET_DO_NOT_PERSIST');
+      const resourceScoped = await repo.checkResourcePath({ resourceId: resource!.id, targetPath: ownedFile, operationId: 'resource-owned-path-check' });
+      expect(resourceScoped).toMatchObject({ bindingId: binding!.id, targetPath: ownedFile, pathStatus: PathStatuses.OK });
+      expect(resourceScoped.eventId).toBeUndefined();
+      const resourceScopedPreview = await repo.previewResourceFile({ resourceId: resource!.id, targetPath: ownedFile, operationId: 'resource-owned-preview' });
+      expect(resourceScopedPreview).toMatchObject({ bindingId: binding!.id, targetPath: ownedFile, previewAvailable: true });
+      expect(resourceScopedPreview.eventId).toBeUndefined();
+
+      await expect(repo.checkResourcePath({ bindingId: binding!.id, targetPath: unownedFile }))
+        .rejects.toMatchObject({ desktopError: { code: 'validation_failed' } });
+      await expect(repo.previewResourceFile({ bindingId: binding!.id, targetPath: unownedFile }))
+        .rejects.toMatchObject({ desktopError: { code: 'validation_failed' } });
+      expect(db.query<{ count: number }>(
+        `SELECT COUNT(*) as count
+         FROM local_events
+         WHERE binding_id = ? AND json_extract(payload_json, '$.targetPath') = ?`,
+        [binding!.id, unownedFile]
+      )[0].count).toBe(0);
+      expect(db.query<{ count: number }>(
+        `SELECT COUNT(*) as count
+         FROM local_events
+         WHERE operation_id IN (?, ?)`,
+        ['owned-path-check', 'owned-preview']
+      )[0].count).toBe(0);
+      await db.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('rejects resource-scoped path operations when the resource has no binding owner', async () => {
+    const temp = await tempRoot();
+    try {
+      const dbPath = path.join(temp.root, 'local.db');
+      const db = new LocalDatabase(dbPath);
+      await db.initialize();
+      const repo = new LocalLifecycleRepository(db);
+      const orphanFile = path.join(temp.root, 'orphan.toml');
+      await writeFile(orphanFile, 'model = "orphan"\n', 'utf8');
+      await repo.recordAgentResource({
+        resourceType: LocalResourceTypes.AGENT_CONFIG,
+        sourceId: 'codex.orphan',
+        name: 'Orphan Codex Config',
+        agentId: 'codex',
+        targetPath: orphanFile,
+        status: 'scanned'
+      });
+      const resource = repo.listResources().resources.find((candidate) => candidate.sourceId === 'codex.orphan');
+      expect(resource).toBeDefined();
+      await db.run('DELETE FROM file_backed_resources WHERE resource_id = ?', [resource!.id]);
+      await db.run('DELETE FROM resource_bindings WHERE resource_id = ?', [resource!.id]);
+
+      await expect(repo.checkResourcePath({ resourceId: resource!.id, targetPath: orphanFile, operationId: 'orphan-path-check' }))
+        .rejects.toMatchObject({ desktopError: { code: 'validation_failed' } });
+      await expect(repo.previewResourceFile({ resourceId: resource!.id, targetPath: orphanFile, operationId: 'orphan-preview' }))
+        .rejects.toMatchObject({ desktopError: { code: 'validation_failed' } });
+      expect(db.query<{ count: number }>(
+        `SELECT COUNT(*) as count
+         FROM local_events
+         WHERE operation_id IN (?, ?)`,
+        ['orphan-path-check', 'orphan-preview']
+      )[0].count).toBe(0);
+      await db.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  it('rejects binding-scoped path operations against another binding on the same resource', async () => {
+    const temp = await tempRoot();
+    try {
+      const dbPath = path.join(temp.root, 'local.db');
+      const db = new LocalDatabase(dbPath);
+      await db.initialize();
+      const repo = new LocalLifecycleRepository(db);
+      const firstPath = path.join(temp.root, 'first.toml');
+      const secondPath = path.join(temp.root, 'second.toml');
+      await writeFile(firstPath, 'model = "first"\n', 'utf8');
+      await writeFile(secondPath, 'model = "second"\n', 'utf8');
+      await repo.recordAgentResource({
+        resourceType: LocalResourceTypes.AGENT_CONFIG,
+        sourceId: 'codex.multi-binding',
+        name: 'Codex Multi Binding',
+        agentId: 'codex',
+        targetPath: firstPath,
+        status: 'scanned'
+      });
+      await repo.recordAgentResource({
+        resourceType: LocalResourceTypes.AGENT_CONFIG,
+        sourceId: 'codex.multi-binding',
+        name: 'Codex Multi Binding',
+        agentId: 'codex',
+        targetPath: secondPath,
+        status: 'scanned'
+      });
+      const snapshot = repo.listResources();
+      const resource = snapshot.resources.find((candidate) => candidate.sourceId === 'codex.multi-binding');
+      const firstBinding = snapshot.bindings.find((candidate) => candidate.resourceId === resource?.id && candidate.targetPath === firstPath);
+      const secondBinding = snapshot.bindings.find((candidate) => candidate.resourceId === resource?.id && candidate.targetPath === secondPath);
+      expect(resource).toMatchObject({ sourcePath: secondPath });
+      expect(firstBinding).toBeDefined();
+      expect(secondBinding).toBeDefined();
+
+      await expect(repo.checkResourcePath({ bindingId: firstBinding!.id, targetPath: secondPath, operationId: 'cross-binding-path-check' }))
+        .rejects.toMatchObject({ desktopError: { code: 'validation_failed' } });
+      await expect(repo.previewResourceFile({ bindingId: firstBinding!.id, targetPath: secondPath, operationId: 'cross-binding-preview' }))
+        .rejects.toMatchObject({ desktopError: { code: 'validation_failed' } });
+      expect(db.query<{ count: number }>(
+        `SELECT COUNT(*) as count
+         FROM local_events
+         WHERE operation_id IN (?, ?)`,
+        ['cross-binding-path-check', 'cross-binding-preview']
+      )[0].count).toBe(0);
+      await db.close();
     } finally {
       await temp.cleanup();
     }

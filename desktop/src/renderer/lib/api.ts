@@ -43,6 +43,7 @@ export const desktopApi = {
     generateFromProject: (payload: unknown) => call('kitGenerateProject', window.enterpriseAgent.kit.generateFromProject(payload, createRequestId('kitGenerateProject'))),
     apply: (payload: unknown) => call('kitApply', window.enterpriseAgent.kit.apply(payload, createRequestId('kitApply'))),
     removeApplication: (payload: unknown) => call('kitRemove', window.enterpriseAgent.kit.removeApplication(payload, createRequestId('kitRemove'))),
+    deleteManifest: (payload: unknown) => call('kitDelete', window.enterpriseAgent.kit.deleteManifest(payload, createRequestId('kitDelete'))),
     checkDrift: (payload: unknown) => call('kitDrift', window.enterpriseAgent.kit.checkDrift(payload, createRequestId('kitDrift'))),
     staticAudit: (payload: unknown) => call('kitAudit', window.enterpriseAgent.kit.staticAudit(payload, createRequestId('kitAudit')))
   },

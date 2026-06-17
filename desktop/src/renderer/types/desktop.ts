@@ -2,7 +2,7 @@ import type { DesktopError } from '../../shared/errors';
 import type { LocalResourceSnapshot } from '../../shared/local-resources';
 
 export type AppTab = 'agent' | 'community' | 'local';
-export type LocalTab = 'overview' | 'agents' | 'extensions' | 'projects' | 'toolkits' | 'audit-events';
+export type LocalTab = 'overview' | 'agents' | 'extensions' | 'projects' | 'toolkits' | 'audit';
 export type ExtensionKind = 'skill' | 'mcp' | 'plugin';
 export type LoadState = 'idle' | 'loading' | 'ready' | 'error';
 

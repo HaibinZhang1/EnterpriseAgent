@@ -43,7 +43,7 @@ export function LocalExtensionsPage({
     return row.metadata as Record<string, unknown>;
   };
 
-  // Aggregate extensions, targets, mcps, and plugins by unique extensionId
+  // Aggregate extensions, targets, mcps, and plugins by canonical local instance.
   const allLocalEntries = useMemo(() => {
     const extIds = new Set<string>();
 
@@ -52,12 +52,22 @@ export function LocalExtensionsPage({
     snapshot.mcpInstallations.forEach(m => { if (m.extensionId) extIds.add(String(m.extensionId)); });
     snapshot.pluginInstallations.forEach(p => { if (p.extensionId) extIds.add(String(p.extensionId)); });
 
-    return Array.from(extIds).map(extensionId => {
+    return groupLocalExtensionIds(Array.from(extIds), snapshot).map(extensionIds => {
+      const extensionId = preferredLocalExtensionId(extensionIds, snapshot);
       const baseExt = snapshot.extensions.find(e => String(e.extensionId) === extensionId);
 
-      const relatedTargets = snapshot.targets.filter(t => String(t.extensionId) === extensionId);
-      const relatedMcps = snapshot.mcpInstallations.filter(m => String(m.extensionId) === extensionId);
-      const relatedPlugins = snapshot.pluginInstallations.filter(p => String(p.extensionId) === extensionId);
+      const relatedTargets = dedupeLocalRecords(
+        extensionIds.flatMap(id => snapshot.targets.filter(t => String(t.extensionId) === id)),
+        localTargetKey
+      );
+      const relatedMcps = dedupeLocalRecords(
+        extensionIds.flatMap(id => snapshot.mcpInstallations.filter(m => String(m.extensionId) === id)),
+        localTargetKey
+      );
+      const relatedPlugins = dedupeLocalRecords(
+        extensionIds.flatMap(id => snapshot.pluginInstallations.filter(p => String(p.extensionId) === id)),
+        localTargetKey
+      );
 
       // Determine kind: 'skill' | 'mcp' | 'plugin'
       let kind: 'skill' | 'mcp' | 'plugin' = 'skill';
@@ -72,7 +82,7 @@ export function LocalExtensionsPage({
         }
       }
 
-      const relatedVersions = snapshot.versions.filter(v => String(v.extensionId) === extensionId);
+      const relatedVersions = extensionIds.flatMap(id => snapshot.versions.filter(v => String(v.extensionId) === id));
       const localVersion = asText(
         relatedVersions[0]?.version
         || baseExt?.version
@@ -573,6 +583,82 @@ function formatScanSummary(summary?: LocalInventoryScanSummary): string | undefi
     .map(([label, count]) => `${label} ${count}`);
   if (parts.length === 0) return '未发现本地记录';
   return `${parts.join(' / ')}${summary.scannedAt ? ` · ${compactDate(summary.scannedAt)}` : ''}`;
+}
+
+function groupLocalExtensionIds(extensionIds: string[], snapshot: LocalLifecycleSnapshot): string[][] {
+  const groups = new Map<string, string[]>();
+  for (const extensionId of extensionIds) {
+    const key = localExtensionCanonicalKey(extensionId, snapshot);
+    groups.set(key, [...(groups.get(key) ?? []), extensionId]);
+  }
+  return [...groups.values()];
+}
+
+function localExtensionCanonicalKey(extensionId: string, snapshot: LocalLifecycleSnapshot): string {
+  const targets = snapshot.targets.filter((row) => String(row.extensionId) === extensionId);
+  const baseExt = snapshot.extensions.find((row) => String(row.extensionId) === extensionId);
+  const skillKey = localSkillManifestKey([baseExt, ...targets]);
+  return skillKey ?? extensionId;
+}
+
+function preferredLocalExtensionId(extensionIds: string[], snapshot: LocalLifecycleSnapshot): string {
+  return [...extensionIds].sort((left, right) => localExtensionRank(right, snapshot) - localExtensionRank(left, snapshot))[0] ?? extensionIds[0];
+}
+
+function localExtensionRank(extensionId: string, snapshot: LocalLifecycleSnapshot): number {
+  const targets = snapshot.targets.filter((row) => String(row.extensionId) === extensionId);
+  if (targets.some((row) => isSkillManifestPath(asText(row.target, '')))) return 3;
+  if (targets.some((row) => Boolean(asText(recordMetadata(row).skillFile, '')))) return 2;
+  if (!extensionId.startsWith('codex.skill.')) return 1;
+  return 0;
+}
+
+function dedupeLocalRecords<T extends Record<string, unknown>>(records: T[], keyFor: (record: T) => string): T[] {
+  const seen = new Set<string>();
+  return records.flatMap((record) => {
+    const key = keyFor(record);
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [record];
+  });
+}
+
+function localTargetKey(record: Record<string, unknown>): string {
+  return localSkillManifestKey([record])
+    ?? asText(record.target ?? record.configPath ?? record.id, JSON.stringify(record));
+}
+
+function localSkillManifestKey(records: Array<Record<string, unknown> | undefined>): string | undefined {
+  for (const record of records) {
+    if (!record) continue;
+    const metadata = recordMetadata(record);
+    const target = asText(record.target ?? record.configPath, '');
+    const skillFile = asText(metadata.skillFile, '');
+    if (skillFile) return `skill:${normalizeLocalPath(skillFile)}`;
+    if (isSkillManifestPath(target)) return `skill:${normalizeLocalPath(target)}`;
+    const skillDirectory = asText(metadata.skillDirectory, '');
+    if (skillDirectory) return `skill:${normalizeLocalPath(`${skillDirectory}/SKILL.md`)}`;
+    if (isKnownToolSkill(metadata) && target) return `skill:${normalizeLocalPath(`${target}/SKILL.md`)}`;
+  }
+  return undefined;
+}
+
+function recordMetadata(record: Record<string, unknown> | undefined): Record<string, unknown> {
+  return record?.metadata && typeof record.metadata === 'object' && !Array.isArray(record.metadata)
+    ? record.metadata as Record<string, unknown>
+    : {};
+}
+
+function isKnownToolSkill(metadata: Record<string, unknown>): boolean {
+  return metadata.source === 'known_tool_scan' && (metadata.adapterId === 'codex' || metadata.hasSkillMd === true);
+}
+
+function isSkillManifestPath(value: string): boolean {
+  return /(^|[\\/])SKILL\.md$/i.test(value);
+}
+
+function normalizeLocalPath(value: string): string {
+  return value.replace(/\\/g, '/').replace(/\/+/g, '/');
 }
 
 // Chevron SVG helper component for clean expandable animations

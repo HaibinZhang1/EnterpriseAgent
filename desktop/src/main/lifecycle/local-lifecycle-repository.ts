@@ -241,7 +241,7 @@ export interface LocalPathCheckResult {
   mtime?: string;
   currentHash?: string;
   drifted?: boolean;
-  eventId: string;
+  eventId?: string;
   checkedAt: string;
   message: string;
 }
@@ -257,7 +257,7 @@ export interface LocalFilePreviewResult {
   redactedContent?: string;
   failureReason?: string;
   suggestion?: string;
-  eventId: string;
+  eventId?: string;
   previewedAt: string;
 }
 
@@ -284,11 +284,109 @@ export interface RemovedKitBindingRecord {
   targetPath?: string;
 }
 
+interface PathOperationTargetRow {
+  resource_id: string;
+  resource_type: LocalResourceType;
+  source_path?: string;
+  binding_id?: string;
+  target_path?: string;
+  agent_id?: string;
+  project_id?: string;
+  kit_id?: string;
+  drift_status?: DriftStatus;
+  external_modified?: number;
+  drifted?: number;
+  metadata_json?: string;
+}
+
 export class LocalLifecycleRepository {
   constructor(
     private readonly db: LocalDatabase,
     private readonly eventQueue: LocalEventQueue = new LocalEventQueue(db)
   ) {}
+
+  private assertTargetPathBelongsToBinding(input: {
+    resourceId?: string;
+    bindingId?: string;
+    targetPath?: string;
+    bindingTargetPath?: string;
+    requestID?: string;
+  }): void {
+    if (!input.targetPath) return;
+    if (!input.bindingId) {
+      if (!input.resourceId) return;
+      throw new DesktopErrorException(makeDesktopError(
+        'validation_failed',
+        '路径操作必须解析到本地资源绑定，拒绝记录到未绑定资源。',
+        input.requestID,
+        { resourceId: input.resourceId, targetPath: input.targetPath }
+      ));
+    }
+    if (input.targetPath === input.bindingTargetPath) return;
+    const ownedFile = this.db.query<{ path: string }>(
+      `SELECT path
+       FROM file_backed_resources
+       WHERE binding_id = ? AND path = ?
+       LIMIT 1`,
+      [input.bindingId, input.targetPath]
+    )[0];
+    if (ownedFile) return;
+    throw new DesktopErrorException(makeDesktopError(
+      'validation_failed',
+      'targetPath 必须属于当前资源绑定，拒绝记录到不匹配的绑定。',
+      input.requestID,
+      { bindingId: input.bindingId, targetPath: input.targetPath }
+    ));
+  }
+
+  private resolvePathOperationTarget(input: { resourceId?: string; bindingId?: string; targetPath?: string }): PathOperationTargetRow | undefined {
+    if (input.bindingId) {
+      return this.db.query<PathOperationTargetRow>(
+        `SELECT r.id as resource_id, r.type as resource_type, r.source_path, b.id as binding_id,
+                b.target_path, b.agent_id, b.project_id, b.kit_id, b.drift_status,
+                b.external_modified, b.drifted, b.metadata_json
+         FROM resource_bindings b
+         JOIN local_resources r ON r.id = b.resource_id
+         WHERE b.id = ?
+         LIMIT 1`,
+        [input.bindingId]
+      )[0];
+    }
+    if (!input.resourceId) return undefined;
+    if (input.targetPath) {
+      const matchingBinding = this.db.query<PathOperationTargetRow>(
+        `SELECT r.id as resource_id, r.type as resource_type, r.source_path, b.id as binding_id,
+                b.target_path, b.agent_id, b.project_id, b.kit_id, b.drift_status,
+                b.external_modified, b.drifted, b.metadata_json
+         FROM resource_bindings b
+         JOIN local_resources r ON r.id = b.resource_id
+         WHERE r.id = ?
+           AND (
+             b.target_path = ?
+             OR EXISTS (
+               SELECT 1
+               FROM file_backed_resources f
+               WHERE f.binding_id = b.id AND f.path = ?
+             )
+           )
+         ORDER BY b.updated_at DESC
+         LIMIT 1`,
+        [input.resourceId, input.targetPath, input.targetPath]
+      )[0];
+      if (matchingBinding) return matchingBinding;
+    }
+    return this.db.query<PathOperationTargetRow>(
+      `SELECT r.id as resource_id, r.type as resource_type, r.source_path, b.id as binding_id,
+              b.target_path, b.agent_id, b.project_id, b.kit_id, b.drift_status,
+              b.external_modified, b.drifted, b.metadata_json
+       FROM local_resources r
+       LEFT JOIN resource_bindings b ON b.resource_id = r.id
+       WHERE r.id = ?
+       ORDER BY b.updated_at DESC
+       LIMIT 1`,
+      [input.resourceId]
+    )[0];
+  }
 
   list(): LocalLifecycleSnapshot {
     return {
@@ -383,7 +481,7 @@ export class LocalLifecycleRepository {
             staticOnly: true
           },
           knownResourceIds: snapshot.resources.map((resource) => resource.id),
-          relatedEventIds: row.events.map((event) => event.eventId)
+          relatedEventIds: []
         }, { runId: `${runId}_${audited + skipped + failed + 1}`, detectedAt: now });
         await this.upsertAuditRunFindings(audit.runId, audit.findings, [{ resourceId: row.resource.id, bindingId: binding?.id }]);
         const eventId = await this.recordLocalEvent({
@@ -409,7 +507,7 @@ export class LocalLifecycleRepository {
             targetPath
           }
         });
-        eventIds.push(eventId);
+        if (eventId) eventIds.push(eventId);
         audited += 1;
         findingCount += audit.findings.length;
       } catch (error) {
@@ -441,7 +539,7 @@ export class LocalLifecycleRepository {
           createdAt: now,
           metadata: { requestID: input.requestID, targetPath, staticOnly: true }
         });
-        eventIds.push(eventId);
+        if (eventId) eventIds.push(eventId);
       }
     }
 
@@ -449,56 +547,7 @@ export class LocalLifecycleRepository {
   }
 
   async checkResourcePath(input: { resourceId?: string; bindingId?: string; targetPath?: string; requestID?: string; operationId?: string } = {}): Promise<LocalPathCheckResult> {
-    const targetRow = input.bindingId
-      ? this.db.query<{
-        resource_id: string;
-        resource_type: LocalResourceType;
-        source_path?: string;
-        binding_id?: string;
-        target_path?: string;
-        agent_id?: string;
-        project_id?: string;
-        kit_id?: string;
-        drift_status: DriftStatus;
-        external_modified: number;
-        drifted: number;
-        metadata_json?: string;
-      }>(
-        `SELECT r.id as resource_id, r.type as resource_type, r.source_path, b.id as binding_id,
-                b.target_path, b.agent_id, b.project_id, b.kit_id, b.drift_status,
-                b.external_modified, b.drifted, b.metadata_json
-         FROM resource_bindings b
-         JOIN local_resources r ON r.id = b.resource_id
-         WHERE b.id = ?
-         LIMIT 1`,
-        [input.bindingId]
-      )[0]
-      : input.resourceId
-        ? this.db.query<{
-          resource_id: string;
-          resource_type: LocalResourceType;
-          source_path?: string;
-          binding_id?: string;
-          target_path?: string;
-          agent_id?: string;
-          project_id?: string;
-          kit_id?: string;
-          drift_status: DriftStatus;
-          external_modified: number;
-          drifted: number;
-          metadata_json?: string;
-        }>(
-          `SELECT r.id as resource_id, r.type as resource_type, r.source_path, b.id as binding_id,
-                  b.target_path, b.agent_id, b.project_id, b.kit_id, b.drift_status,
-                  b.external_modified, b.drifted, b.metadata_json
-           FROM local_resources r
-           LEFT JOIN resource_bindings b ON b.resource_id = r.id
-           WHERE r.id = ?
-           ORDER BY b.updated_at DESC
-           LIMIT 1`,
-          [input.resourceId]
-        )[0]
-        : undefined;
+    const targetRow = this.resolvePathOperationTarget(input);
 
     if ((input.bindingId || input.resourceId) && !targetRow && !input.targetPath) {
       throw new DesktopErrorException(makeDesktopError('resource_not_found', '未找到可检查路径的本地资源记录。', input.requestID, input));
@@ -508,6 +557,13 @@ export class LocalLifecycleRepository {
     if (!targetPath) {
       throw new DesktopErrorException(makeDesktopError('validation_failed', '路径检查需要 bindingId、resourceId 或 targetPath。', input.requestID, input));
     }
+    this.assertTargetPathBelongsToBinding({
+      resourceId: targetRow?.resource_id ?? input.resourceId,
+      bindingId: targetRow?.binding_id ?? input.bindingId,
+      targetPath,
+      bindingTargetPath: targetRow?.target_path,
+      requestID: input.requestID
+    });
 
     const now = new Date().toISOString();
     const operationId = input.operationId ?? `path_check_${randomUUID()}`;
@@ -575,7 +631,9 @@ export class LocalLifecycleRepository {
     if (targetRow?.binding_id) {
       const nextDriftStatus = currentHash
         ? drifted ? DriftStatuses.HASH_CHANGED : DriftStatuses.UNKNOWN
-        : targetRow.drift_status;
+        : targetRow.drift_status ?? DriftStatuses.UNKNOWN;
+      const nextExternalModified = currentHash ? (drifted ? 1 : 0) : targetRow.external_modified ?? 0;
+      const nextDrifted = currentHash ? (drifted ? 1 : 0) : targetRow.drifted ?? 0;
       await this.db.run(
         `UPDATE resource_bindings
          SET path_status = ?, drift_status = ?, current_hash = COALESCE(?, current_hash),
@@ -585,8 +643,8 @@ export class LocalLifecycleRepository {
           pathStatus,
           nextDriftStatus,
           currentHash ?? null,
-          currentHash ? (drifted ? 1 : 0) : targetRow.external_modified,
-          currentHash ? (drifted ? 1 : 0) : targetRow.drifted,
+          nextExternalModified,
+          nextDrifted,
           now,
           now,
           targetRow.binding_id
@@ -658,46 +716,7 @@ export class LocalLifecycleRepository {
   }
 
   async previewResourceFile(input: { resourceId?: string; bindingId?: string; targetPath?: string; requestID?: string; operationId?: string } = {}): Promise<LocalFilePreviewResult> {
-    const targetRow = input.bindingId
-      ? this.db.query<{
-        resource_id: string;
-        resource_type: LocalResourceType;
-        source_path?: string;
-        binding_id?: string;
-        target_path?: string;
-        agent_id?: string;
-        project_id?: string;
-        kit_id?: string;
-      }>(
-        `SELECT r.id as resource_id, r.type as resource_type, r.source_path, b.id as binding_id,
-                b.target_path, b.agent_id, b.project_id, b.kit_id
-         FROM resource_bindings b
-         JOIN local_resources r ON r.id = b.resource_id
-         WHERE b.id = ?
-         LIMIT 1`,
-        [input.bindingId]
-      )[0]
-      : input.resourceId
-        ? this.db.query<{
-          resource_id: string;
-          resource_type: LocalResourceType;
-          source_path?: string;
-          binding_id?: string;
-          target_path?: string;
-          agent_id?: string;
-          project_id?: string;
-          kit_id?: string;
-        }>(
-          `SELECT r.id as resource_id, r.type as resource_type, r.source_path, b.id as binding_id,
-                  b.target_path, b.agent_id, b.project_id, b.kit_id
-           FROM local_resources r
-           LEFT JOIN resource_bindings b ON b.resource_id = r.id
-           WHERE r.id = ?
-           ORDER BY b.updated_at DESC
-           LIMIT 1`,
-          [input.resourceId]
-        )[0]
-        : undefined;
+    const targetRow = this.resolvePathOperationTarget(input);
 
     if ((input.bindingId || input.resourceId) && !targetRow && !input.targetPath) {
       throw new DesktopErrorException(makeDesktopError('resource_not_found', '未找到可预览文件的本地资源记录。', input.requestID, input));
@@ -707,6 +726,13 @@ export class LocalLifecycleRepository {
     if (!targetPath) {
       throw new DesktopErrorException(makeDesktopError('validation_failed', '文件预览需要 bindingId、resourceId 或 targetPath。', input.requestID, input));
     }
+    this.assertTargetPathBelongsToBinding({
+      resourceId: targetRow?.resource_id ?? input.resourceId,
+      bindingId: targetRow?.binding_id ?? input.bindingId,
+      targetPath,
+      bindingTargetPath: targetRow?.target_path,
+      requestID: input.requestID
+    });
 
     const now = new Date().toISOString();
     const operationId = input.operationId ?? `file_preview_${randomUUID()}`;
@@ -815,6 +841,8 @@ export class LocalLifecycleRepository {
               resource_type, agent_id, project_id, kit_id, result, status, error_code, failure_reason,
               suggestion, offline_created, sync_status, server_ack_status, payload_json, created_at, synced_at
        FROM local_events
+       WHERE status IN ('pending', 'retryable')
+         AND sync_status IN ('PENDING_SYNC', 'SYNC_FAILED')
        ORDER BY created_at DESC`
     ).map(mapEventRow);
     const findings = this.listAuditFindings();
@@ -875,7 +903,7 @@ export class LocalLifecycleRepository {
         bindingCount: bindings.length,
         fileCount: files.length,
         eventCount: events.length,
-        pendingSyncEvents: events.filter((event) => event.syncStatus === SyncStatuses.PENDING_SYNC).length,
+        pendingSyncEvents: events.length,
         failureCount: rows.filter((row) => row.status.tone === 'danger').length,
         lastScannedAt: latestString(resources.map((resource) => resource.lastScannedAt)),
         generatedAt
@@ -989,6 +1017,8 @@ export class LocalLifecycleRepository {
                 suggestion, offline_created, sync_status, server_ack_status, payload_json, created_at, synced_at
          FROM local_events
          WHERE id IN (${finding.relatedEventIds.map(() => '?').join(',')})
+           AND status IN ('pending', 'retryable')
+           AND sync_status IN ('PENDING_SYNC', 'SYNC_FAILED')
          ORDER BY created_at DESC`,
         finding.relatedEventIds
       ).map(mapEventRow)
@@ -998,11 +1028,15 @@ export class LocalLifecycleRepository {
               resource_type, agent_id, project_id, kit_id, result, status, error_code, failure_reason,
               suggestion, offline_created, sync_status, server_ack_status, payload_json, created_at, synced_at
        FROM local_events
-       WHERE resource_id = ?
-          OR (? IS NOT NULL AND binding_id = ?)
-          OR (? IS NOT NULL AND agent_id = ?)
-          OR (? IS NOT NULL AND project_id = ?)
-          OR (? IS NOT NULL AND kit_id = ?)
+       WHERE status IN ('pending', 'retryable')
+         AND sync_status IN ('PENDING_SYNC', 'SYNC_FAILED')
+         AND (
+           resource_id = ?
+           OR (? IS NOT NULL AND binding_id = ?)
+           OR (? IS NOT NULL AND agent_id = ?)
+           OR (? IS NOT NULL AND project_id = ?)
+           OR (? IS NOT NULL AND kit_id = ?)
+         )
        ORDER BY created_at DESC
        LIMIT 50`,
       [
@@ -1573,6 +1607,30 @@ export class LocalLifecycleRepository {
     });
   }
 
+  async deleteAgentInventoryResourcesByKinds(kinds: readonly string[]): Promise<number> {
+    const normalizedKinds = kinds.map((kind) => kind.trim()).filter(Boolean);
+    if (normalizedKinds.length === 0) return 0;
+    const kindClauses = normalizedKinds.map(() => `metadata_json LIKE ?`).join(' OR ');
+    const resources = this.db.query<{ id: string }>(
+      `SELECT id FROM local_resources
+       WHERE metadata_json LIKE ?
+         AND (${kindClauses})`,
+      [
+        '%"discoveredBy":"agent_inventory_scan"%',
+        ...normalizedKinds.map((kind) => `%"kind":"${kind}"%`)
+      ]
+    );
+    const resourceIds = resources.map((resource) => resource.id);
+    if (resourceIds.length === 0) return 0;
+    const bindMarks = resourceIds.map(() => '?').join(', ');
+    await this.db.run(`DELETE FROM local_audit_findings WHERE resource_id IN (${bindMarks})`, resourceIds);
+    await this.db.run(`DELETE FROM file_backed_resources WHERE resource_id IN (${bindMarks})`, resourceIds);
+    await this.db.run(`DELETE FROM local_events WHERE resource_id IN (${bindMarks})`, resourceIds);
+    await this.db.run(`DELETE FROM resource_bindings WHERE resource_id IN (${bindMarks})`, resourceIds);
+    await this.db.run(`DELETE FROM local_resources WHERE id IN (${bindMarks})`, resourceIds);
+    return resourceIds.length;
+  }
+
   async recordAgentEvent(input: AgentEventRecord): Promise<void> {
     const now = new Date().toISOString();
     const resourceId = input.resourceType && input.sourceId ? resourceIdFor(input.resourceType, input.sourceId) : undefined;
@@ -1965,6 +2023,20 @@ export class LocalLifecycleRepository {
       projectId: binding.project_id ?? undefined,
       targetPath: binding.target_path ?? undefined
     };
+  }
+
+  async deleteKitManifestRecord(input: { kitId: string }): Promise<boolean> {
+    const resourceId = resourceIdFor(LocalResourceTypes.KIT, input.kitId);
+    return this.db.transaction(async (tx) => {
+      const existing = tx.query<{ id: string }>(
+        `SELECT id FROM local_resources WHERE id = ? AND type = ? LIMIT 1`,
+        [resourceId, LocalResourceTypes.KIT]
+      )[0];
+      if (!existing) return false;
+      tx.run(`DELETE FROM resource_bindings WHERE resource_id = ? AND resource_type = ?`, [resourceId, LocalResourceTypes.KIT]);
+      tx.run(`DELETE FROM local_resources WHERE id = ? AND type = ?`, [resourceId, LocalResourceTypes.KIT]);
+      return true;
+    });
   }
 
   private async upsertExistingResourceBinding(input: {
@@ -2438,7 +2510,8 @@ export class LocalLifecycleRepository {
     syncStatus: SyncStatus;
     createdAt: string;
     metadata?: Record<string, unknown>;
-  }): Promise<string> {
+  }): Promise<string | undefined> {
+    if (!isOfflineSyncLocalEvent(input.syncStatus)) return undefined;
     const idempotencyKey = `local:${input.eventType}:${input.operationId ?? 'none'}:${input.resourceId ?? 'none'}:${input.bindingId ?? 'none'}:${input.errorCode ?? 'info'}`;
     const queued = await this.eventQueue.enqueue({
       idempotencyKey,
@@ -2976,6 +3049,10 @@ function localQueueStatusFor(syncStatus: SyncStatus): LocalEventQueueStatus {
   if (syncStatus === SyncStatuses.SYNC_FAILED) return 'retryable';
   if (syncStatus === SyncStatuses.SYNCED) return 'accepted';
   return 'pending';
+}
+
+function isOfflineSyncLocalEvent(syncStatus: SyncStatus): boolean {
+  return syncStatus === SyncStatuses.PENDING_SYNC || syncStatus === SyncStatuses.SYNC_FAILED;
 }
 
 function localId(prefix: string, extensionId: string, target: string): string {

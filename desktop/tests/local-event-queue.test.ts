@@ -7,7 +7,7 @@ import { LocalEventTypes, LocalResourceTypes, SyncStatuses } from '../src/shared
 import { tempRoot } from './test-utils';
 
 describe('LocalEventQueue', () => {
-  it('persists events, returns existing rows for duplicate idempotency keys, and redacts payloads', async () => {
+  it('persists pending events, returns existing rows for duplicate idempotency keys, redacts payloads, and drops acked rows', async () => {
     const temp = await tempRoot();
     try {
       const paths = await initializeAppDataLayout(temp.root);
@@ -39,14 +39,14 @@ describe('LocalEventQueue', () => {
       const reopened = new LocalDatabase(paths.localDbFile);
       await reopened.initialize();
       const reopenedQueue = new LocalEventQueue(reopened);
-      expect(reopenedQueue.findByIdempotencyKey('dup-key')?.status).toBe('accepted');
+      expect(reopenedQueue.findByIdempotencyKey('dup-key')).toBeUndefined();
       await reopened.close();
     } finally {
       await temp.cleanup();
     }
   });
 
-  it('preserves the original business result when sync is accepted rejected or ignored', async () => {
+  it('removes events once sync is accepted rejected or ignored', async () => {
     const temp = await tempRoot();
     try {
       const paths = await initializeAppDataLayout(temp.root);
@@ -77,16 +77,17 @@ describe('LocalEventQueue', () => {
       await queue.markSynced(rejected.id, 'rejected');
       await queue.markSynced(ignored.id, 'ignored');
 
-      expect(queue.findByIdempotencyKey('accepted-failure')).toMatchObject({ status: 'accepted', result: 'FAILURE' });
-      expect(queue.findByIdempotencyKey('rejected-failure')).toMatchObject({ status: 'rejected', result: 'FAILURE' });
-      expect(queue.findByIdempotencyKey('ignored-cancelled')).toMatchObject({ status: 'ignored', result: 'CANCELLED' });
+      expect(queue.findByIdempotencyKey('accepted-failure')).toBeUndefined();
+      expect(queue.findByIdempotencyKey('rejected-failure')).toBeUndefined();
+      expect(queue.findByIdempotencyKey('ignored-cancelled')).toBeUndefined();
+      expect(queue.list()).toHaveLength(0);
       await db.close();
     } finally {
       await temp.cleanup();
     }
   });
 
-  it('filters events and preserves offline/local-only sync semantics', async () => {
+  it('filters pending events and refuses local-only records', async () => {
     const temp = await tempRoot();
     try {
       const paths = await initializeAppDataLayout(temp.root);
@@ -108,7 +109,7 @@ describe('LocalEventQueue', () => {
         syncStatus: SyncStatuses.PENDING_SYNC,
         createdAt: '2026-06-16T00:00:00.000Z'
       });
-      const localOnly = await queue.enqueue({
+      await expect(queue.enqueue({
         idempotencyKey: 'local-only-discovery',
         deviceID: 'device_1',
         eventType: LocalEventTypes.HOOK_DISCOVERED,
@@ -118,20 +119,17 @@ describe('LocalEventQueue', () => {
         offlineCreated: false,
         syncStatus: SyncStatuses.LOCAL_ONLY,
         createdAt: '2026-06-16T00:05:00.000Z'
-      });
+      })).rejects.toThrow(/only stores offline sync records/);
 
       expect(offline.offlineCreated).toBe(true);
       expect(offline.syncStatus).toBe(SyncStatuses.PENDING_SYNC);
-      expect(localOnly.offlineCreated).toBe(false);
-      expect(localOnly.syncStatus).toBe(SyncStatuses.LOCAL_ONLY);
-      expect(localOnly.status).toBe('accepted');
       expect(queue.listPending().map((event) => event.idempotencyKey)).toEqual(['offline-path-error']);
-      expect(queue.list({ resourceType: LocalResourceTypes.HOOK })).toHaveLength(2);
+      expect(queue.list({ resourceType: LocalResourceTypes.HOOK })).toHaveLength(1);
       expect(queue.list({ agentID: 'codex', projectID: 'project_1' }).map((event) => event.id)).toEqual([offline.id]);
       expect(queue.list({ kitID: 'kit_1', eventType: LocalEventTypes.PATH_ERROR, result: 'FAILURE' }).map((event) => event.id)).toEqual([offline.id]);
-      expect(queue.list({ offlineCreated: false }).map((event) => event.id)).toEqual([localOnly.id]);
+      expect(queue.list({ offlineCreated: false })).toHaveLength(0);
       expect(queue.list({ syncStatus: SyncStatuses.PENDING_SYNC }).map((event) => event.id)).toEqual([offline.id]);
-      expect(queue.list({ since: '2026-06-16T00:01:00.000Z' }).map((event) => event.id)).toEqual([localOnly.id]);
+      expect(queue.list({ since: '2026-06-16T00:01:00.000Z' })).toHaveLength(0);
       await db.close();
     } finally {
       await temp.cleanup();
@@ -155,7 +153,7 @@ describe('LocalEventQueue', () => {
     }
   });
 
-  it('routes repository-originated events through queue redaction and idempotency', async () => {
+  it('does not persist repository-originated local-only inventory events', async () => {
     const temp = await tempRoot();
     try {
       const paths = await initializeAppDataLayout(temp.root);
@@ -186,15 +184,7 @@ describe('LocalEventQueue', () => {
       });
 
       const events = queue.list({ eventType: LocalEventTypes.HOOK_DISCOVERED });
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({
-        deviceID: 'local-inventory-scanner',
-        syncStatus: SyncStatuses.LOCAL_ONLY,
-        status: 'accepted',
-        resourceType: LocalResourceTypes.HOOK,
-        agentID: 'codex'
-      });
-      expect(JSON.stringify(events[0].payload)).not.toContain('raw-token-value');
+      expect(events).toHaveLength(0);
       await db.close();
     } finally {
       await temp.cleanup();
@@ -217,7 +207,7 @@ describe('LocalEventSyncService', () => {
       const sync = new LocalEventSyncService(queue, async () => [{ idempotencyKey: accepted.idempotencyKey, result: 'accepted' }]);
       const summary = await sync.syncPending();
       expect(summary).toMatchObject({ attempted: 2, accepted: 1, failed: 1 });
-      expect(queue.findByIdempotencyKey(accepted.idempotencyKey)?.status).toBe('accepted');
+      expect(queue.findByIdempotencyKey(accepted.idempotencyKey)).toBeUndefined();
       expect(queue.findByIdempotencyKey(missing.idempotencyKey)?.status).toBe('retryable');
       await db.close();
     } finally {

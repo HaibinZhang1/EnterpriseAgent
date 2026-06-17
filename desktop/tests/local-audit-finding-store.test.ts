@@ -157,7 +157,7 @@ describe('local audit finding projection', () => {
 
       const detail = repository.getAuditFinding(dangerous[0].id);
       expect(detail?.finding.id).toBe(dangerous[0].id);
-      expect(detail?.relatedEvents.some((event) => event.eventType === LocalEventTypes.HOOK_DISCOVERED)).toBe(true);
+      expect(detail?.relatedEvents).toHaveLength(0);
 
       const cleanAudit = auditStaticResource({
         resourceId,
@@ -187,7 +187,7 @@ describe('local audit finding projection', () => {
     }
   });
 
-  it('does not truncate canonical LocalEvent history used by audit finding detail links', async () => {
+  it('retains pending offline-sync event rows used by audit finding detail links', async () => {
     const temp = await tempRoot();
     try {
       const paths = await initializeAppDataLayout(temp.root);

@@ -453,6 +453,78 @@ describe('phase 3 Kit transaction service', () => {
     }
   });
 
+  it('blocks Kit package deletion while managed applications remain unless removing them together', async () => {
+    const temp = await tempRoot();
+    try {
+      const context = await kitContext(temp.root);
+      const skillPath = path.join(context.paths.root, 'agents', 'codex', 'skills', 'deletable');
+      await mkdir(skillPath, { recursive: true });
+      await context.repo.recordAgentResource({
+        resourceType: LocalResourceTypes.SKILL,
+        sourceId: 'skill.delete',
+        name: 'Delete Skill',
+        agentId: 'codex',
+        targetPath: skillPath,
+        status: 'enabled'
+      });
+      const skillRow = context.repo.listResources().rows.find((row) => row.resource.sourceId === 'skill.delete');
+      expect(skillRow).toBeTruthy();
+      const manifest = kitManifest({
+        kitId: 'kit.delete',
+        resources: [{
+          refId: 'SKILL:skill.delete',
+          resourceType: LocalResourceTypes.SKILL,
+          resourceId: skillRow?.resource.id,
+          bindingId: skillRow?.binding?.id,
+          required: true,
+          metadata: {}
+        }]
+      });
+      await context.service.importManifest({ manifest, requestID: 'kit-delete-import' });
+      const applyResult = await context.service.apply({
+        kitId: 'kit.delete',
+        target: { scopeType: ResourceScopeTypes.AGENT_GLOBAL, agentId: 'codex' },
+        requestID: 'kit-delete-apply'
+      });
+      expect(applyResult.status).toBe('success');
+
+      const blockedDelete = await context.service.deleteManifest({
+        kitId: 'kit.delete',
+        requestID: 'kit-delete-blocked'
+      });
+
+      expect(blockedDelete.status).toBe('failure');
+      expect(blockedDelete.resourceResults[0]).toMatchObject({
+        status: 'failure',
+        failureReason: 'kit_has_managed_applications'
+      });
+      expect(context.db.query<{ count: number }>('SELECT COUNT(*) as count FROM local_resources WHERE type = ? AND source_id = ?', [LocalResourceTypes.KIT, 'kit.delete'])[0].count).toBe(1);
+      expect(context.db.query<{ count: number }>("SELECT COUNT(*) as count FROM resource_bindings WHERE metadata_json LIKE '%kit.delete%'")[0].count).toBeGreaterThan(0);
+
+      const deleteResult = await context.service.deleteManifest({
+        kitId: 'kit.delete',
+        removeApplications: true,
+        requestID: 'kit-delete-with-applications'
+      });
+
+      expect(deleteResult.status).toBe('success');
+      expect(deleteResult.resourceResults[0]).toMatchObject({
+        status: 'success',
+        metadata: expect.objectContaining({ removedBindingCount: expect.any(Number) })
+      });
+      expect(context.db.query<{ count: number }>('SELECT COUNT(*) as count FROM local_resources WHERE type = ? AND source_id = ?', [LocalResourceTypes.KIT, 'kit.delete'])[0].count).toBe(0);
+      expect(context.db.query<{ count: number }>("SELECT COUNT(*) as count FROM resource_bindings WHERE metadata_json LIKE '%kit.delete%'")[0].count).toBe(0);
+      expect(context.db.query<{ count: number }>('SELECT COUNT(*) as count FROM resource_bindings WHERE resource_id = ?', [skillRow!.resource.id])[0].count).toBe(1);
+      expect(context.db.query<{ result: string }>(
+        'SELECT result FROM local_events WHERE event_type = ? ORDER BY created_at DESC',
+        [LocalEventTypes.KIT_DELETED]
+      ).map((row) => row.result)).toEqual(expect.arrayContaining(['FAILURE', 'SUCCESS']));
+      await context.db.close();
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
   it('exports Kit manifest files through ExecutionPlan and records drift findings without executing local tools', async () => {
     const temp = await tempRoot();
     try {

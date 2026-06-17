@@ -247,7 +247,8 @@ describe('renderer app view', () => {
     });
     expect(html).toContain('当前离线');
     expect(html).toContain('重新扫描');
-    expect(html).toContain('待同步事件 0');
+    expect(html).toContain('失败状态 0');
+    expect(html).not.toContain('待同步事件');
     expect(html).toContain('Skill One');
     expect(html).toContain('名称');
     expect(html).toContain('智能体/项目');

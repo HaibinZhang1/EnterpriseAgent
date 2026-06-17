@@ -34,6 +34,7 @@ export const IPC_CHANNELS = {
   kitGenerateFromProject: 'kit.generateFromProject',
   kitApply: 'kit.apply',
   kitRemoveApplication: 'kit.removeApplication',
+  kitDeleteManifest: 'kit.deleteManifest',
   kitCheckDrift: 'kit.checkDrift',
   kitStaticAudit: 'kit.staticAudit',
   settingsGetLocalConfig: 'settings.getLocalConfig',

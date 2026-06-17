@@ -69,13 +69,23 @@ describe('LocalInventoryScanner', () => {
     }
   });
 
-  it('detects Codex skills from known local tool paths without scanning the whole disk', async () => {
+  it('deduplicates Codex skills by the SKILL.md manifest name instead of the parent folder name', async () => {
     const temp = await tempRoot();
     try {
       const paths = await initializeAppDataLayout(path.join(temp.root, 'app-data'));
-      const codexSkillDir = path.join(temp.root, 'home', '.codex', 'skills', 'daily-helper');
+      const codexSkillDir = path.join(temp.root, 'home', '.codex', 'skills', 'folder-daily-helper');
+      const skillFile = path.join(codexSkillDir, 'SKILL.md');
       await mkdir(codexSkillDir, { recursive: true });
-      await writeFile(path.join(codexSkillDir, 'SKILL.md'), '# Daily Helper\n\nHelps with local tasks.\n');
+      await writeFile(skillFile, [
+        '---',
+        'name: daily-helper',
+        'description: Helps with local tasks.',
+        '---',
+        '# Folder Daily Helper',
+        '',
+        'Body copy should not replace frontmatter metadata.',
+        ''
+      ].join('\n'));
 
       const db = new LocalDatabase(paths.localDbFile);
       await db.initialize();
@@ -87,8 +97,14 @@ describe('LocalInventoryScanner', () => {
       expect(summary.discovered.skills).toBe(1);
       expect(summary.discovered.tools).toBe(1);
       expect(summary.discovered.total).toBeGreaterThanOrEqual(summary.discovered.skills + summary.discovered.tools);
-      expect(snapshot.extensions).toMatchObject([{ extensionId: 'codex.skill.daily-helper', name: 'Daily Helper', status: 'scanned' }]);
+      expect(snapshot.extensions).toMatchObject([{ name: 'daily-helper', summary: 'Helps with local tasks.', status: 'scanned' }]);
+      expect(snapshot.extensions.map((row) => row.extensionId)).not.toContain('codex.skill.folder-daily-helper');
       expect(snapshot.tools).toMatchObject([{ extensionId: 'tool.codex', toolName: 'Codex', status: 'scanned' }]);
+      const skillRows = resources.rows.filter((row) => row.resource.type === 'SKILL' && row.binding?.targetPath === skillFile);
+      expect(skillRows).toHaveLength(1);
+      expect(skillRows[0].resource.name).toBe('daily-helper');
+      expect(skillRows[0].binding?.targetPath).toBe(skillFile);
+      expect(resources.rows.some((row) => row.resource.type === 'SKILL' && row.resource.name === 'folder-daily-helper')).toBe(false);
       expect(resources.resources.map((row) => row.sourceType)).toEqual(expect.arrayContaining(['NATIVE_AGENT_DIRECTORY']));
       expect(resources.resources.map((row) => row.type)).toEqual(expect.arrayContaining(['SKILL']));
       expect(resources.resources.some((row) => row.type === 'KIT')).toBe(false);
@@ -117,7 +133,7 @@ describe('LocalInventoryScanner', () => {
       const failureRow = resources.rows.find((row) => row.resource.sourceId?.includes('manifest_parse_failed'));
       expect(failureRow?.status.label).toBe('操作失败');
       expect(failureRow?.binding?.detectionStatus).toBe('SCAN_FAILED');
-      expect(resources.events).toContainEqual(expect.objectContaining({ eventType: 'CONFIG_SCAN_FAILED', status: 'failure', errorCode: 'manifest_parse_failed' }));
+      expect(resources.events).toEqual([]);
       await db.close();
     } finally {
       await temp.cleanup();
@@ -199,7 +215,7 @@ describe('LocalInventoryScanner', () => {
         path.join(projectDir, '.codex', 'config.toml')
       ]));
       expect(projectRows.every((row) => row.binding?.scopeType === 'AGENT_PROJECT')).toBe(true);
-      expect(resources.events.some((event) => event.projectId === 'project.alpha' && event.agentId === 'codex')).toBe(true);
+      expect(resources.events).toEqual([]);
       await db.close();
     } finally {
       await temp.cleanup();
@@ -276,12 +292,7 @@ describe('LocalInventoryScanner', () => {
         sourceType: 'CUSTOM_DIRECTORY',
         type: 'AGENT_CONFIG'
       });
-      expect(resources.events).toContainEqual(expect.objectContaining({
-        eventType: 'CONFIG_SCAN_FAILED',
-        errorCode: 'agent_profiles_invalid',
-        status: 'failure',
-        failureReason: expect.stringContaining('reserved')
-      }));
+      expect(resources.events).toEqual([]);
       await db.close();
     } finally {
       await temp.cleanup();

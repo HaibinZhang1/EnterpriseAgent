@@ -132,15 +132,18 @@ export class LocalEventQueue {
   async enqueue(input: LocalEventInput): Promise<LocalEventRecord> {
     rejectForbiddenRuntimeEvent(input.eventType);
     const key = input.idempotencyKey ?? `event_${randomUUID()}`;
-    const existing = this.findByIdempotencyKey(key);
-    if (existing) return existing;
-
     const now = input.createdAt ?? new Date().toISOString();
     const updatedAt = input.updatedAt ?? now;
     const id = `local_event_${randomUUID()}`;
     const offlineCreated = input.offlineCreated ?? false;
     const syncStatus = input.syncStatus ?? SyncStatuses.PENDING_SYNC;
-    const queueStatus = input.status ?? (syncStatus === SyncStatuses.LOCAL_ONLY ? 'accepted' : 'pending');
+    const queueStatus = input.status ?? localQueueStatusFor(syncStatus);
+    if (!isOfflineSyncQueueRecord(syncStatus, queueStatus)) {
+      throw new Error(`LocalEventQueue only stores offline sync records: ${input.eventType}`);
+    }
+    const existing = this.findByIdempotencyKey(key);
+    if (existing) return existing;
+
     const payloadJson = JSON.stringify(redactForLog(input.payload ?? {}));
     await this.db.run(
       `INSERT INTO local_events(
@@ -182,8 +185,8 @@ export class LocalEventQueue {
   }
 
   list(filters: LocalEventFilters = {}): LocalEventRecord[] {
-    const clauses: string[] = [];
-    const params: Array<string | number> = [];
+    const clauses: string[] = [`status IN ('pending', 'retryable')`, `sync_status IN (?, ?)`];
+    const params: Array<string | number> = [SyncStatuses.PENDING_SYNC, SyncStatuses.SYNC_FAILED];
     addFilter(clauses, params, 'resource_type', filters.resourceType);
     addFilter(clauses, params, 'resource_id', filters.resourceID);
     addFilter(clauses, params, 'binding_id', filters.bindingID);
@@ -219,19 +222,23 @@ export class LocalEventQueue {
 
   listPending(): LocalEventRecord[] {
     return this.db.query<LocalEventRow>(
-      `SELECT * FROM local_events WHERE status IN ('pending', 'retryable') ORDER BY created_at ASC`
+      `SELECT * FROM local_events
+       WHERE status IN ('pending', 'retryable')
+         AND sync_status IN (?, ?)
+       ORDER BY created_at ASC`,
+      [SyncStatuses.PENDING_SYNC, SyncStatuses.SYNC_FAILED]
     ).map(mapRow);
   }
 
-  async markSynced(id: string, result: LocalEventSyncResult): Promise<void> {
-    const now = new Date().toISOString();
-    await this.db.run(
-      `UPDATE local_events SET status = ?, sync_status = ?, server_ack_status = ?, synced_at = ?, updated_at = ? WHERE id = ?`,
-      [result, result === 'rejected' ? SyncStatuses.SERVER_REJECTED : SyncStatuses.SYNCED, result, now, now, id]
-    );
+  async markSynced(id: string, _result: LocalEventSyncResult): Promise<void> {
+    await this.db.run(`DELETE FROM local_events WHERE id = ?`, [id]);
   }
 
   async markFailed(id: string, errorCode: string, retryable: boolean): Promise<void> {
+    if (!retryable) {
+      await this.db.run(`DELETE FROM local_events WHERE id = ?`, [id]);
+      return;
+    }
     const now = new Date().toISOString();
     await this.db.run(
       `UPDATE local_events SET status = ?, sync_status = ?, error_code = ?, failure_reason = ?, attempt_count = attempt_count + 1, last_error = ?, updated_at = ? WHERE id = ?`,
@@ -240,7 +247,13 @@ export class LocalEventQueue {
   }
 
   findByIdempotencyKey(idempotencyKey: string): LocalEventRecord | undefined {
-    return this.db.query<LocalEventRow>(`SELECT * FROM local_events WHERE idempotency_key = ?`, [idempotencyKey]).map(mapRow)[0];
+    return this.db.query<LocalEventRow>(
+      `SELECT * FROM local_events
+       WHERE idempotency_key = ?
+         AND status IN ('pending', 'retryable')
+         AND sync_status IN (?, ?)`,
+      [idempotencyKey, SyncStatuses.PENDING_SYNC, SyncStatuses.SYNC_FAILED]
+    ).map(mapRow)[0];
   }
 }
 
@@ -253,6 +266,18 @@ function addFilter(clauses: string[], params: Array<string | number>, column: st
   if (!value) return;
   clauses.push(`${column} = ?`);
   params.push(value);
+}
+
+function localQueueStatusFor(syncStatus: SyncStatus): LocalEventStatus {
+  if (syncStatus === SyncStatuses.SYNC_FAILED) return 'retryable';
+  if (syncStatus === SyncStatuses.SERVER_REJECTED) return 'rejected';
+  if (syncStatus === SyncStatuses.SYNCED || syncStatus === SyncStatuses.LOCAL_ONLY) return 'accepted';
+  return 'pending';
+}
+
+function isOfflineSyncQueueRecord(syncStatus: SyncStatus, status: LocalEventStatus): boolean {
+  return (syncStatus === SyncStatuses.PENDING_SYNC || syncStatus === SyncStatuses.SYNC_FAILED)
+    && (status === 'pending' || status === 'retryable');
 }
 
 function mapRow(row: LocalEventRow): LocalEventRecord {

@@ -407,6 +407,62 @@ export class LocalKitService {
     });
   }
 
+  async deleteManifest(input: { kitId: string; removeApplications?: boolean; requestID?: string; dryRun?: boolean }): Promise<Phase3OperationResult> {
+    const manifest = this.requireStoredManifest(input.kitId, input.requestID);
+    const resourceId = resourceIdFor(LocalResourceTypes.KIT, manifest.kitId);
+    const snapshot = this.options.lifecycleRepository.listResources();
+    const managedBindings = snapshot.bindings.filter((binding) => binding.kitId === manifest.kitId || binding.metadata.managedByKitId === manifest.kitId);
+    const policy = createPhase3OperationPolicyDecision({
+      surface: 'toolkits',
+      operation: 'kit.remove',
+      resources: [{ resourceId, resourceType: LocalResourceTypes.KIT, kitId: manifest.kitId, name: manifest.name }],
+      metadata: { kitId: manifest.kitId, removeApplications: input.removeApplications, managedBindingCount: managedBindings.length }
+    });
+    return this.executeMetadata({
+      manifest,
+      policy,
+      operation: LocalEventTypes.KIT_DELETED,
+      summaryTitle: '删除 Kit 包记录',
+      summaryDescription: '删除 EnterpriseAgentHub 本地 Kit manifest 记录；用户原始资源文件不会被删除。',
+      requestID: input.requestID,
+      dryRun: input.dryRun,
+      apply: async () => {
+        if (managedBindings.length > 0 && !input.removeApplications) {
+          return [{
+            resourceId,
+            resourceType: LocalResourceTypes.KIT,
+            kitId: manifest.kitId,
+            status: 'failure',
+            message: 'Kit 仍有关联托管应用，需先移除应用或勾选同时移除。',
+            failureReason: 'kit_has_managed_applications',
+            suggestion: '先执行从项目移除，或在删除确认中勾选同时移除所有 Kit 托管应用。',
+            rollbackStatus: 'not_needed',
+            metadata: { managedBindingCount: managedBindings.length }
+          }];
+        }
+        const removedBindings = input.removeApplications
+          ? await this.options.lifecycleRepository.removeKitApplication({
+            kitId: manifest.kitId,
+            operationId: LocalEventTypes.KIT_DELETED
+          })
+          : [];
+        const deleted = await this.options.lifecycleRepository.deleteKitManifestRecord({ kitId: manifest.kitId });
+        return [{
+          resourceId,
+          resourceType: LocalResourceTypes.KIT,
+          kitId: manifest.kitId,
+          status: deleted ? 'success' : 'failure',
+          message: deleted
+            ? `Kit 包记录已删除；移除 ${removedBindings.length} 个 Kit 托管绑定。`
+            : 'Kit 包记录未找到，未执行删除。',
+          failureReason: deleted ? undefined : 'kit_manifest_not_found',
+          rollbackStatus: 'not_needed',
+          metadata: { removedBindingCount: removedBindings.length }
+        }];
+      }
+    });
+  }
+
   async checkDrift(input: { kitId: string; requestID?: string; dryRun?: boolean }): Promise<Phase3OperationResult> {
     const manifest = this.requireStoredManifest(input.kitId, input.requestID);
     const resourceId = resourceIdFor(LocalResourceTypes.KIT, manifest.kitId);

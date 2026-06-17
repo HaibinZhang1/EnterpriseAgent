@@ -1,18 +1,22 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { isValidElement, type ReactElement, type ReactNode } from 'react';
+import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { Button } from '../src/renderer/components/Button';
 import {
+  AgentConfigEntryRow,
   AuditFindingDetailSection,
   FilePreviewSection,
-  LocalEventDetailSection,
+  KitEditorForm,
   LocalPage,
   LocalResourceDrawer,
+  agentConfigEntryPayload,
   buildCustomAgentProfile,
   phase3OperationMessage,
-  rowForEvent,
   staticAuditRunMessage,
-  upsertAgentProfile
+  upsertAgentProfile,
+  type AgentConfigEntry
 } from '../src/renderer/pages/LocalPage';
 import {
   aggregateResourceStatus,
@@ -55,6 +59,11 @@ describe('local resource page', () => {
     const marker = `data-testid=\"${testId}\"`;
     const start = html.indexOf(marker);
     expect(start).toBeGreaterThanOrEqual(0);
+    const sectionEnd = html.indexOf('</section>', start);
+    if (sectionEnd !== -1) {
+      const sectionStart = html.lastIndexOf('<section', start);
+      return html.slice(sectionStart >= 0 ? sectionStart : start, sectionEnd + '</section>'.length);
+    }
     const nextRegion = html.indexOf('data-testid=\"local-', start + marker.length);
     return html.slice(start, nextRegion === -1 ? undefined : nextRegion);
   }
@@ -65,6 +74,32 @@ describe('local resource page', () => {
     expect(controls).toBeLessThanOrEqual(maxControls);
   }
 
+  type ButtonElement = ReactElement<{ children?: ReactNode; onClick?: (event: unknown) => void; disabled?: boolean; title?: string }>;
+
+  function collectButtonElements(node: ReactNode, result: ButtonElement[] = []): ButtonElement[] {
+    if (Array.isArray(node)) {
+      for (const child of node) collectButtonElements(child, result);
+      return result;
+    }
+    if (!isValidElement(node)) return result;
+    if (node.type === Button) result.push(node as ButtonElement);
+    collectButtonElements((node.props as { children?: ReactNode }).children, result);
+    return result;
+  }
+
+  function findButtonByText(buttons: ButtonElement[], label: string): ButtonElement {
+    const button = buttons.find((candidate) => nodeText(candidate.props.children) === label);
+    expect(button).toBeDefined();
+    return button as ButtonElement;
+  }
+
+  function nodeText(node: ReactNode): string {
+    if (typeof node === 'string' || typeof node === 'number') return String(node);
+    if (Array.isArray(node)) return node.map(nodeText).join('');
+    if (isValidElement(node)) return nodeText((node.props as { children?: ReactNode }).children);
+    return '';
+  }
+
 
   it('removes stale local filter grid CSS so the old heavy filter card cannot return by style only', () => {
     const css = readFileSync(resolve(__dirname, '../src/renderer/styles/app.css'), 'utf8');
@@ -73,7 +108,18 @@ describe('local resource page', () => {
     expect(css).not.toContain('filter-bar local-filter-grid');
     expect(css).toContain('.local-page-header');
     expect(css).toContain('.local-tab-toolbar');
+    expect(css).toContain('.local-tab-toolbar .local-filter-control');
+    expect(css).toContain('height: 36px;');
     expect(css).toContain('.local-split-layout');
+    expect(css).toContain('.agent-selector-icon');
+    expect(css).toContain('.agent-config-browser');
+    expect(css).not.toContain('harnesskit-icons.png');
+    expect(css).not.toContain('agent-icon-svg');
+
+    const source = readFileSync(resolve(__dirname, '../src/renderer/pages/LocalPage.tsx'), 'utf8');
+    for (const copiedPathNeedle of ['M22.2819', 'M22.106', 'M20.616', 'M507.28']) {
+      expect(source).not.toContain(copiedPathNeedle);
+    }
   });
 
   it('renders phase two navigation entries, unified fields, and disabled write operations', () => {
@@ -95,7 +141,7 @@ describe('local resource page', () => {
     expectNoGlobalLocalFilterGrid(html);
     expectTestId(html, 'local-extensions-toolbar');
     expectToolbarControlBudget(html, 'local-extensions-toolbar');
-    for (const label of ['概览', '智能体', '扩展', '项目', '工具集', '审计与事件']) {
+    for (const label of ['概览', '智能体', '扩展', '项目', '工具集', '审计']) {
       expect(html).toContain(label);
     }
     for (const header of ['名称', '类型', '智能体/项目', '权限', '审计', '状态']) {
@@ -140,6 +186,17 @@ describe('local resource page', () => {
     expect(extensionToolbar).toContain('类型');
     expect(extensionToolbar).toContain('智能体');
     expect(extensionToolbar).toContain('来源');
+    expect(extensionToolbar).not.toContain('sr-only');
+    expect(extensionToolbar.indexOf('<option value="Skill">Skill</option>')).toBeLessThan(extensionToolbar.indexOf('<option value="MCP">MCP</option>'));
+    expect(extensionToolbar.indexOf('<option value="MCP">MCP</option>')).toBeLessThan(extensionToolbar.indexOf('<option value="Plugin">Plugin</option>'));
+    expect(extensionToolbar.indexOf('<option value="Plugin">Plugin</option>')).toBeLessThan(extensionToolbar.indexOf('<option value="Hook">Hook</option>'));
+    expect(extensionToolbar.indexOf('<option value="Hook">Hook</option>')).toBeLessThan(extensionToolbar.indexOf('<option value="CLI">CLI</option>'));
+    const tableStart = extHtml.indexOf('data-testid="local-resource-table"');
+    expect(tableStart).toBeGreaterThanOrEqual(0);
+    expect(extHtml.indexOf('<strong>Deploy CLI</strong>', tableStart)).toBeLessThan(extHtml.indexOf('<strong>Files MCP</strong>', tableStart));
+    expect(extHtml.indexOf('<strong>Files MCP</strong>', tableStart)).toBeLessThan(extHtml.indexOf('<strong>Format Hook</strong>', tableStart));
+    expect(extHtml.indexOf('<strong>Format Hook</strong>', tableStart)).toBeLessThan(extHtml.indexOf('<strong>Theme Plugin</strong>', tableStart));
+    expect(extHtml.indexOf('<strong>Theme Plugin</strong>', tableStart)).toBeLessThan(extHtml.indexOf('<strong>Weather Skill</strong>', tableStart));
     for (const unrelated of ['权限', '平台', '同步', '离线', '时间']) {
       expect(extensionToolbar).not.toContain(unrelated);
     }
@@ -159,7 +216,7 @@ describe('local resource page', () => {
     expectTestId(projectHtml, 'local-project-list');
     expectTestId(projectHtml, 'local-project-detail');
     expect(projectHtml.indexOf('data-testid="local-project-list"')).toBeLessThan(projectHtml.indexOf('data-testid="local-project-detail"'));
-    for (const tabLabel of ['总览', '智能体', '设置', '规则', '记忆', '子智能体', 'Ignore', '扩展', 'Hook', 'CLI', '审计', '事件']) {
+    for (const tabLabel of ['总览', '智能体', '设置', '规则', '记忆', '子智能体', 'Ignore', '扩展', 'Hook', 'CLI', '审计']) {
       expect(projectHtml).toContain(tabLabel);
     }
     expect(projectHtml).toContain('项目路径');
@@ -169,6 +226,23 @@ describe('local resource page', () => {
     expect(projectHtml).toContain('路径异常');
     expect(projectHtml).toContain('不删除真实项目目录');
     expect(projectHtml).toContain('删除管理记录');
+  });
+
+  it('deduplicates stale folder-name Skill records with SKILL.md manifest-name records in the extensions tab', () => {
+    const html = renderToStaticMarkup(
+      <LocalPage
+        snapshot={duplicateCodexSkillSnapshot()}
+        activeTab="extensions"
+        offline={false}
+        localScanState="ready"
+        onChangeTab={() => undefined}
+        onRefreshLocal={() => undefined}
+      />
+    );
+
+    expect(html.match(/<strong>daily-helper<\/strong>/g) ?? []).toHaveLength(1);
+    expect(html.match(/<strong>folder-daily-helper<\/strong>/g) ?? []).toHaveLength(0);
+    expect(html).toContain('data-testid="local-extensions-toolbar"');
   });
 
   it('renders phase three Toolkit Kit detail with manifest resources, drift, and partial results', () => {
@@ -195,10 +269,18 @@ describe('local resource page', () => {
     expect(html).toContain('Hash 异常资源');
     expectNoGlobalLocalFilterGrid(html);
     expectTestId(html, 'local-toolkit-toolbar');
-    expectToolbarControlBudget(html, 'local-toolkit-toolbar');
-    expect(html).toContain('导入 Kit');
-    expect(html).toContain('从智能体生成');
-    expect(html).toContain('从项目生成');
+    expectToolbarControlBudget(html, 'local-toolkit-toolbar', 5);
+    expect(html).toContain('新建 Kit / 导入');
+    expect(html).toContain('搜索工具集');
+    expect(html).toContain('编辑候选资源');
+    expect(html).toContain('路径导入/导出');
+    expectTestId(html, 'kit-folder-grid');
+    expectTestId(html, 'kit-card-kit-dev');
+    expect(html).toContain('安装到项目/智能体');
+    expect(html).toContain('从项目移除');
+    expect(html).toContain('编辑');
+    expect(html).toContain('导出');
+    expect(html).toContain('删除');
     expect(html).not.toContain('KitManifest JSON');
     expect(html).not.toContain('data-testid="kit-workbench"');
     expect(html).toContain('kit.codex');
@@ -209,10 +291,21 @@ describe('local resource page', () => {
     expect(html).toContain('2 智能体 / 1 项目');
     expect(html).toContain('授权收缩');
     expect(html).toContain('manifest Hash 与本地资源记录不一致');
-    expect(html).toContain('部分成功');
+    expect(html).toContain('资源变更结果');
+    expect(html).toContain('Kit 必需资源在本机不存在');
     expect(html).toContain('Kit 操作');
     expect(html).not.toContain('CLI_EXECUTED');
     expect(html).not.toContain('HOOK_TRIGGERED');
+  });
+
+  it('keeps manual Kit editing aligned with generated manifests for Plugin, Hook, and CLI assets', () => {
+    const html = renderToStaticMarkup(<KitEditorForm snapshot={phase3Snapshot()} />);
+
+    expectTestId(html, 'kit-editor-skills');
+    for (const asset of ['Weather Skill', 'Theme Plugin', 'Format Hook', 'Deploy CLI']) {
+      expect(html).toContain(asset);
+    }
+    expect(html).not.toContain('Files MCP');
   });
 
   it('keeps compact Kit entry points visible without expanding the full workbench by default', () => {
@@ -229,17 +322,18 @@ describe('local resource page', () => {
 
     expectNoGlobalLocalFilterGrid(html);
     expectTestId(html, 'local-toolkit-toolbar');
-    expectToolbarControlBudget(html, 'local-toolkit-toolbar');
-    expect(html).toContain('导入 Kit');
-    expect(html).toContain('从智能体生成');
-    expect(html).toContain('从项目生成');
+    expectToolbarControlBudget(html, 'local-toolkit-toolbar', 4);
+    expect(html).toContain('新建 Kit / 导入');
+    expect(html).toContain('搜索工具集');
+    expect(html).toContain('编辑候选资源');
+    expect(html).toContain('路径导入/导出');
     expect(html).toContain('暂无工具集资源');
     expect(html).not.toContain('KitManifest JSON');
     expect(html).not.toContain('data-testid="kit-workbench"');
   });
 
   it('renders real empty states for each new navigation entry', () => {
-    for (const tab of ['overview', 'agents', 'extensions', 'projects', 'toolkits', 'audit-events'] as LocalTab[]) {
+    for (const tab of ['overview', 'agents', 'extensions', 'projects', 'toolkits', 'audit'] as LocalTab[]) {
       const html = renderToStaticMarkup(
         <LocalPage
           snapshot={emptySnapshot()}
@@ -281,21 +375,164 @@ describe('local resource page', () => {
     expectNoGlobalLocalFilterGrid(html);
     expectTestId(html, 'local-agent-list');
     expectTestId(html, 'local-agent-detail');
+    expectTestId(html, 'agent-icon-codex');
+    expectTestId(html, 'agent-icon-claude-code');
+    expectTestId(html, 'agent-config-browser');
     expect(html.indexOf('data-testid="local-agent-list"')).toBeLessThan(html.indexOf('data-testid="local-agent-detail"'));
     const listRegion = html.slice(html.indexOf('data-testid="local-agent-list"'), html.indexOf('data-testid="local-agent-detail"'));
     expect(listRegion).toContain('agent-selector-row');
+    expect(listRegion).toContain('agent-selector-icon');
     expect(listRegion).not.toContain('<table');
-    for (const tabLabel of ['总览', '设置', '规则', '子智能体', '记忆', '扩展', 'Hook', 'CLI', '文件', '审计', '事件']) {
+    for (const tabLabel of ['总览', '设置', '规则', '子智能体', '记忆', '扩展', 'Hook', 'CLI', '文件', '审计']) {
       expect(html).toContain(tabLabel);
     }
+    expect(html).toContain('未检测到可浏览的智能体配置文件。');
+    expect(html).not.toContain('data-testid="agent-config-section-settings"');
     expect(html).toContain('macOS / Windows Path Profile');
-    expect(html).toContain('Hook 和 CLI 只展示配置事件');
     expect(html).toContain('自定义路径');
     expect(html).toContain('添加自定义路径');
     expect(html).toContain('在扩展中查看');
     expect(html).not.toContain('data-testid="custom-agent-profile-form"');
     expect(html).not.toContain('HOOK_TRIGGERED');
     expect(html).not.toContain('CLI_EXECUTED');
+  });
+
+  it('renders a HarnessKit-style agent config browser from real file-backed Codex resources', () => {
+    const html = renderToStaticMarkup(
+      <LocalPage
+        snapshot={agentConfigFileSnapshot()}
+        activeTab="agents"
+        offline={false}
+        localScanState="ready"
+        onChangeTab={() => undefined}
+        onRefreshLocal={() => undefined}
+      />
+    );
+
+    expectTestId(html, 'agent-config-browser');
+    for (const sectionId of ['settings', 'rules', 'subagents', 'memory', 'ignore-files']) {
+      expectTestId(html, `agent-config-section-${sectionId}`);
+    }
+    expect(html).not.toContain('data-testid="agent-config-section-hooks"');
+    expect(html).not.toContain('data-testid="agent-config-section-cli"');
+    for (const fileName of ['config.toml', 'hooks.json', 'rules.md', 'qa.md', 'MEMORY.md', '.codexignore']) {
+      expect(html).toContain(fileName);
+    }
+    expect(html).not.toContain('deploy.sh');
+    expect(html).toContain('6 条目 / 6 文件');
+    expect(html).not.toContain('7 条目 / 7 文件');
+    expect(html).toContain('5</strong><span>扩展资源</span>');
+    expect(html).toContain('/Users/alice/.codex/config.toml');
+    expect(html).toContain('FILESYSTEM / SHELL / SECRET');
+    expect(html).toContain('在扩展中查看');
+    expect(html).not.toContain('HOOK_TRIGGERED');
+    expect(html).not.toContain('CLI_COMMAND_EXECUTED');
+    expect(html).not.toContain('harnesskit-icons.png');
+  });
+
+  it('wires agent config entry actions to detail, path check, and redacted preview callbacks', () => {
+    const data = agentConfigFileSnapshot();
+    const row = data.rows.find((candidate) => candidate.resource.type === LocalResourceTypes.AGENT_CONFIG);
+    const file = row?.files[0];
+    expect(row).toBeDefined();
+    expect(file).toBeDefined();
+
+    const entry: AgentConfigEntry = {
+      id: 'codex-config-entry',
+      row: row!,
+      file,
+      title: 'config.toml',
+      path: file!.path
+    };
+    const onSelectResource = vi.fn();
+    const onCheckPath = vi.fn();
+    const onPreviewFile = vi.fn();
+    const onToggle = vi.fn();
+    const element = AgentConfigEntryRow({
+      entry,
+      expanded: true,
+      onToggle,
+      onSelectResource,
+      onCheckPath,
+      onPreviewFile
+    });
+    const buttons = collectButtonElements(element);
+
+    findButtonByText(buttons, '打开详情').props.onClick?.({} as never);
+    findButtonByText(buttons, '检查路径').props.onClick?.({} as never);
+    findButtonByText(buttons, '读取脱敏预览').props.onClick?.({} as never);
+
+    expect(onSelectResource).toHaveBeenCalledWith(expect.objectContaining({ id: expect.stringContaining('file:') }));
+    expect(onCheckPath).toHaveBeenCalledTimes(1);
+    expect(onPreviewFile).toHaveBeenCalledTimes(1);
+    expect(agentConfigEntryPayload(entry)).toEqual({
+      bindingId: row!.binding!.id,
+      resourceId: undefined,
+      targetPath: file!.path
+    });
+
+    const noPreviewEntry: AgentConfigEntry = {
+      ...entry,
+      file: {
+        ...file!,
+        previewAvailable: false
+      }
+    };
+    const noPreviewElement = AgentConfigEntryRow({
+      entry: noPreviewEntry,
+      expanded: true,
+      onToggle,
+      onSelectResource,
+      onCheckPath,
+      onPreviewFile
+    });
+    const noPreviewButtons = collectButtonElements(noPreviewElement);
+    expect(findButtonByText(noPreviewButtons, '读取脱敏预览').props.disabled).toBe(true);
+    expect(renderToStaticMarkup(element)).not.toContain('HOOK_TRIGGERED');
+    expect(renderToStaticMarkup(element)).not.toContain('CLI_COMMAND_EXECUTED');
+  });
+
+  it('disables config file path actions until the row resolves to an owned binding', () => {
+    const resource = resourceRecord(LocalResourceTypes.AGENT_CONFIG, 'codex.unbound', 'Unbound Codex Config', {
+      sourceType: LocalResourceSourceTypes.NATIVE_AGENT_DIRECTORY,
+      sourcePath: '/Users/alice/.codex/unbound.toml',
+      permissionLabel: 'FILESYSTEM'
+    });
+    const row: LocalResourceSnapshot['rows'][number] = {
+      resource,
+      files: [],
+      events: [],
+      findings: [],
+      status: aggregateResourceStatus({}),
+      scopeLabel: 'codex / 未绑定'
+    };
+    const entry: AgentConfigEntry = {
+      id: 'codex-unbound-config',
+      row,
+      title: 'unbound.toml',
+      path: resource.sourcePath
+    };
+    const element = AgentConfigEntryRow({
+      entry,
+      expanded: true,
+      onToggle: vi.fn(),
+      onSelectResource: vi.fn(),
+      onCheckPath: vi.fn(),
+      onPreviewFile: vi.fn()
+    });
+    const buttons = collectButtonElements(element);
+    const checkButton = findButtonByText(buttons, '检查路径');
+    const previewButton = findButtonByText(buttons, '读取脱敏预览');
+
+    expect(checkButton.props.disabled).toBe(true);
+    expect(checkButton.props.title).toBe('需要本地资源绑定后才能检查路径');
+    expect(previewButton.props.disabled).toBe(true);
+    expect(previewButton.props.title).toBe('需要本地资源绑定和可预览文件');
+    expect(agentConfigEntryPayload(entry)).toEqual({
+      bindingId: undefined,
+      resourceId: undefined,
+      targetPath: resource.sourcePath
+    });
   });
 
   it('renders multiple custom Agent Profiles from the shared resource snapshot', () => {
@@ -319,7 +556,7 @@ describe('local resource page', () => {
   it('keeps local tab toolbars isolated by active tab', () => {
     const tabs = [
       ['extensions', 'local-extensions-toolbar', ['local-audit-toolbar', 'local-agent-list', 'local-project-list', 'local-toolkit-toolbar']],
-      ['audit-events', 'local-audit-toolbar', ['local-extensions-toolbar', 'local-agent-list', 'local-project-list', 'local-toolkit-toolbar']],
+      ['audit', 'local-audit-toolbar', ['local-extensions-toolbar', 'local-agent-list', 'local-project-list', 'local-toolkit-toolbar']],
       ['agents', 'local-agent-list', ['local-extensions-toolbar', 'local-audit-toolbar', 'local-project-list', 'local-toolkit-toolbar']],
       ['projects', 'local-project-list', ['local-extensions-toolbar', 'local-audit-toolbar', 'local-agent-list', 'local-toolkit-toolbar']],
       ['toolkits', 'local-toolkit-toolbar', ['local-extensions-toolbar', 'local-audit-toolbar', 'local-agent-list', 'local-project-list']]
@@ -344,11 +581,10 @@ describe('local resource page', () => {
     }
   });
 
-  it('does not render search controls for agents, projects, or toolkits', () => {
+  it('does not render search controls for agents or projects, while toolkits keep HarnessKit-style search', () => {
     for (const [tab, removedLabel] of [
       ['agents', '搜索智能体'],
-      ['projects', '搜索项目'],
-      ['toolkits', '搜索工具集']
+      ['projects', '搜索项目']
     ] as const) {
       const html = renderToStaticMarkup(
         <LocalPage
@@ -363,6 +599,17 @@ describe('local resource page', () => {
 
       expect(html).not.toContain(removedLabel);
     }
+    const toolkitHtml = renderToStaticMarkup(
+      <LocalPage
+        snapshot={phase4AuditEventSnapshot()}
+        activeTab="toolkits"
+        offline={false}
+        localScanState="ready"
+        onChangeTab={() => undefined}
+        onRefreshLocal={() => undefined}
+      />
+    );
+    expect(toolkitHtml).toContain('搜索工具集');
   });
 
   it('does not leave count-only toolbars after removing agent and project search', () => {
@@ -481,16 +728,16 @@ describe('local resource page', () => {
       resourceResults: [],
       failureReason: '静态审计阻断',
       suggestion: '修复风险后重试。'
-    }, 'Kit 静态审计已写入本地事件。');
+    }, 'Kit 静态审计已记录。');
     expect(failed.tone).toBe('error');
     expect(failed.text).toContain('Kit 操作失败');
   });
 
-  it('surfaces scan failures and local events from real snapshot data', () => {
+  it('surfaces scan failures without rendering local events in the audit page', () => {
     const html = renderToStaticMarkup(
       <LocalPage
         snapshot={failureSnapshot()}
-        activeTab="audit-events"
+        activeTab="audit"
         offline
         localScanState="error"
         localScanError={{ message: '本地扫描失败', requestID: 'req-scan' }}
@@ -501,17 +748,17 @@ describe('local resource page', () => {
 
     expect(html).toContain('本地扫描失败');
     expect(html).toContain('req-scan');
-    expect(html).toContain('无法解析本地资源配置');
     expect(html).toContain('失败');
-    expect(html).toContain('CONFIG_SCAN_FAILED');
     expect(html).toContain('当前离线');
+    expect(html).not.toContain('CONFIG_SCAN_FAILED');
+    expect(html).not.toContain('无法解析本地资源配置');
   });
 
   it('renders phase four audit findings with page-specific audit controls only', () => {
     const html = renderToStaticMarkup(
       <LocalPage
         snapshot={phase4AuditEventSnapshot()}
-        activeTab="audit-events"
+        activeTab="audit"
         offline
         localScanState="ready"
         onChangeTab={() => undefined}
@@ -524,6 +771,12 @@ describe('local resource page', () => {
     expectToolbarControlBudget(html, 'local-audit-toolbar');
     const auditToolbar = extractTestIdRegion(html, 'local-audit-toolbar');
     expect(auditToolbar).toContain('审计');
+    expect(auditToolbar).toContain('阻断风险');
+    expect(auditToolbar).toContain('需复核');
+    expect(auditToolbar).not.toContain('Trust');
+    expect(auditToolbar).not.toContain('critical');
+    expect(auditToolbar).not.toContain('high');
+    expect(auditToolbar).not.toContain('medium');
     for (const unrelated of ['权限', '平台', '同步', '离线', '时间']) {
       expect(auditToolbar).not.toContain(unrelated);
     }
@@ -533,14 +786,15 @@ describe('local resource page', () => {
     for (const label of ['配置', '规则', '记忆', '子智能体', 'Ignore', 'Skill', 'MCP', 'Plugin', 'Hook', 'CLI', 'Kit', '项目']) {
       expect(html).toContain(label);
     }
-    expect(html).toContain('Phase4 Hook Risk');
-    expect(html).toContain('规则 EA-AUD-006');
+    expect(html).toContain('Format Hook');
+    expect(html).toContain('1 发现');
     expect(html).toContain('Trust 0');
     expect(html).toContain('阻断风险');
-    expect(html).toContain('ROLLBACK_FAILED');
-    expect(html).toContain('回滚失败');
-    expect(html).toContain('PENDING_SYNC');
-    expect(html).toContain('离线生成');
+    expect(html).not.toContain('Phase4 Hook Risk');
+    expect(html).not.toContain('规则 EA-AUD-006');
+    expect(html).not.toContain('ROLLBACK_FAILED');
+    expect(html).not.toContain('PENDING_SYNC');
+    expect(html).not.toContain('离线生成');
     expect(html).not.toContain('CLI_COMMAND_EXECUTED');
     expect(html).not.toContain('trigger-hook');
   });
@@ -558,10 +812,11 @@ describe('local resource page', () => {
     );
 
     expect(html).toContain('data-testid="local-overview-summary"');
-    for (const label of ['智能体', '扩展', '项目', '工具集', '风险', '事件', '离线状态', '待同步']) {
+    for (const label of ['智能体', '扩展', '项目', '工具集', '风险', '审计发现', '离线状态', '已审计资源']) {
       expect(html).toContain(label);
     }
-    expect(html).toContain('ROLLBACK_FAILED');
+    expect(html).toContain('Phase4 Hook Risk');
+    expect(html).not.toContain('ROLLBACK_FAILED');
     expect(html).toContain('离线');
   });
 
@@ -601,51 +856,6 @@ describe('local resource page', () => {
     expect(unavailable).toContain('文件超过 256 KiB 预览限制');
   });
 
-  it('renders local event detail with reverse resource lookup', () => {
-    const data = phase4AuditEventSnapshot();
-    const event = data.events[0];
-    const row = rowForEvent(data, event);
-
-    expect(row?.resource.type).toBe(LocalResourceTypes.HOOK);
-
-    const html = renderToStaticMarkup(<LocalEventDetailSection event={event} row={row} onOpenResource={() => undefined} />);
-    expect(html).toContain('反查资源');
-    expect(html).toContain('Format Hook');
-    expect(html).toContain('Hook');
-    expect(html).toContain('反查路径');
-    expect(html).toContain('/tmp/phase4-8');
-    expect(html).toContain('反查作用域');
-    expect(html).toContain('project.alpha');
-    expect(html).toContain('kit.dev');
-    expect(html).toContain('打开关联资源');
-  });
-
-  it('resolves event reverse lookup to the exact binding before shared resource matches', () => {
-    const data = phase3Snapshot();
-    const skill = data.resources.find((resource) => resource.sourceId === 'skill.weather');
-    const event = {
-      eventId: 'event-skill-claude',
-      idempotencyKey: 'event-skill-claude',
-      eventType: 'PATH_CHECKED',
-      resourceId: skill?.id,
-      bindingId: 'binding_skill-claude',
-      resourceType: LocalResourceTypes.SKILL,
-      agentId: 'claude-code',
-      projectId: 'project.alpha',
-      status: 'success',
-      message: '路径检查完成',
-      offlineCreated: true,
-      syncStatus: SyncStatuses.PENDING_SYNC,
-      createdAt: '2026-06-15T00:00:00Z',
-      metadata: {}
-    } as any;
-
-    const row = rowForEvent(data, event);
-
-    expect(row?.binding?.id).toBe('binding_skill-claude');
-    expect(row?.binding?.agentId).toBe('claude-code');
-  });
-
   it('renders drawer jumps for binding distribution and audit findings', () => {
     const data = phase3Snapshot();
     const row = data.rows.find((candidate) => candidate.binding?.id === 'binding_skill-codex');
@@ -666,11 +876,22 @@ describe('local resource page', () => {
     const finding = auditData.findings?.find((candidate) => candidate.resourceType === LocalResourceTypes.HOOK);
     const auditRow = auditData.rows.find((candidate) => candidate.binding?.id === finding?.bindingId);
     expect(finding).toBeDefined();
+    expect(auditRow).toBeDefined();
+    const auditDrawerHtml = renderToStaticMarkup(
+      <LocalResourceDrawer
+        item={visibleItemForRow(auditRow!)}
+        snapshot={auditData}
+        onSelectResource={() => undefined}
+        onClose={() => undefined}
+      />
+    );
+    expectTestId(auditDrawerHtml, 'local-audit-findings-panel');
+    expect(auditDrawerHtml).toContain('Phase4 Hook Risk');
+    expect(auditDrawerHtml).toContain('规则 EA-AUD-006');
     const findingHtml = renderToStaticMarkup(
       <AuditFindingDetailSection
         finding={finding!}
         row={auditRow}
-        events={auditData.events}
         onOpenResource={() => undefined}
       />
     );
@@ -843,6 +1064,49 @@ function phase3Snapshot(): LocalResourceSnapshot {
     events: [],
     rows,
     summary: { resourceCount: resources.length, bindingCount: bindings.length, fileCount: 0, eventCount: 0, pendingSyncEvents: 0, failureCount: 0, lastScannedAt: generatedAt, generatedAt }
+  };
+}
+
+function duplicateCodexSkillSnapshot(): LocalResourceSnapshot {
+  const generatedAt = '2026-06-15T00:00:00Z';
+  const skillFile = '/Users/alice/.codex/skills/folder-daily-helper/SKILL.md';
+  const skillDirectory = '/Users/alice/.codex/skills/folder-daily-helper';
+  const staleFolderResource = resourceRecord(LocalResourceTypes.SKILL, 'codex.skill.folder-daily-helper', 'folder-daily-helper', {
+    sourceType: LocalResourceSourceTypes.NATIVE_AGENT_DIRECTORY,
+    sourcePath: skillDirectory,
+    metadata: { source: 'known_tool_scan', skillFile, skillDirectory }
+  });
+  const manifestNameResource = resourceRecord(LocalResourceTypes.SKILL, 'codex:skills:stable-skill-file', 'daily-helper', {
+    sourceType: LocalResourceSourceTypes.NATIVE_AGENT_DIRECTORY,
+    sourcePath: skillFile,
+    metadata: { source: 'known_tool_scan', skillFile, skillDirectory }
+  });
+  const staleBinding = bindingRecord(staleFolderResource, 'stale-folder-skill', {
+    agentId: 'codex',
+    scopeType: ResourceScopeTypes.AGENT_GLOBAL,
+    targetPath: skillDirectory,
+    metadata: { skillFile, skillDirectory }
+  });
+  const manifestBinding = bindingRecord(manifestNameResource, 'manifest-name-skill', {
+    agentId: 'codex',
+    scopeType: ResourceScopeTypes.AGENT_GLOBAL,
+    targetPath: skillFile,
+    metadata: { skillFile, skillDirectory }
+  });
+  const resources = [staleFolderResource, manifestNameResource];
+  const bindings = [staleBinding, manifestBinding];
+  const rows = [
+    { resource: staleFolderResource, binding: staleBinding, files: [], events: [], findings: [], status: aggregateResourceStatus(staleBinding), scopeLabel: 'codex / 智能体全局' },
+    { resource: manifestNameResource, binding: manifestBinding, files: [], events: [], findings: [], status: aggregateResourceStatus(manifestBinding), scopeLabel: 'codex / 智能体全局' }
+  ];
+  return {
+    resources,
+    bindings,
+    files: [],
+    events: [],
+    findings: [],
+    rows,
+    summary: { resourceCount: resources.length, bindingCount: bindings.length, fileCount: 0, eventCount: 0, pendingSyncEvents: 0, failureCount: 0, generatedAt }
   };
 }
 
@@ -1027,6 +1291,171 @@ function multipleCustomAgentSnapshot(): LocalResourceSnapshot {
   };
 }
 
+function agentConfigFileSnapshot(): LocalResourceSnapshot {
+  const generatedAt = '2026-06-16T09:00:00Z';
+  const resources = [
+    resourceRecord(LocalResourceTypes.AGENT_CONFIG, 'codex.config', 'Codex Settings', {
+      sourceType: LocalResourceSourceTypes.NATIVE_AGENT_DIRECTORY,
+      sourcePath: '/Users/alice/.codex/config.toml',
+      permissionLabel: 'FILESYSTEM / SHELL / SECRET'
+    }),
+    resourceRecord(LocalResourceTypes.AGENT_CONFIG, 'codex.hooks.settings', 'Codex Hook Settings', {
+      sourceType: LocalResourceSourceTypes.NATIVE_AGENT_DIRECTORY,
+      sourcePath: '/Users/alice/.codex/hooks.json',
+      permissionLabel: 'FILESYSTEM / SHELL'
+    }),
+    resourceRecord(LocalResourceTypes.RULE, 'codex.rules', 'Codex Rules', {
+      sourceType: LocalResourceSourceTypes.NATIVE_AGENT_DIRECTORY,
+      sourcePath: '/Users/alice/.codex/rules.md',
+      permissionLabel: 'FILESYSTEM'
+    }),
+    resourceRecord(LocalResourceTypes.SUBAGENT, 'codex.subagent.qa', 'QA Subagent', {
+      sourceType: LocalResourceSourceTypes.NATIVE_AGENT_DIRECTORY,
+      sourcePath: '/Users/alice/.codex/agents/qa.md',
+      permissionLabel: 'FILESYSTEM'
+    }),
+    resourceRecord(LocalResourceTypes.MEMORY, 'codex.memory', 'Codex Memory', {
+      sourceType: LocalResourceSourceTypes.NATIVE_AGENT_DIRECTORY,
+      sourcePath: '/Users/alice/.codex/memories/MEMORY.md',
+      permissionLabel: 'FILESYSTEM / SECRET'
+    }),
+    resourceRecord(LocalResourceTypes.IGNORE_FILE, 'codex.ignore', 'Codex Ignore', {
+      sourceType: LocalResourceSourceTypes.NATIVE_AGENT_DIRECTORY,
+      sourcePath: '/Users/alice/.codex/.codexignore',
+      permissionLabel: 'FILESYSTEM'
+    }),
+    resourceRecord(LocalResourceTypes.HOOK, 'codex.hooks', 'Codex Hooks', {
+      sourceType: LocalResourceSourceTypes.NATIVE_AGENT_DIRECTORY,
+      sourcePath: '/Users/alice/.codex/hooks.json',
+      permissionLabel: 'FILESYSTEM / SHELL'
+    }),
+    resourceRecord(LocalResourceTypes.CLI_COMMAND, 'codex.cli.deploy', 'Deploy CLI', {
+      sourceType: LocalResourceSourceTypes.NATIVE_AGENT_DIRECTORY,
+      sourcePath: '/Users/alice/.codex/cli/deploy.sh',
+      permissionLabel: 'FILESYSTEM / SHELL / ENVIRONMENT'
+    }),
+    resourceRecord(LocalResourceTypes.SKILL, 'codex.skill.review', 'Review Skill', {
+      sourceType: LocalResourceSourceTypes.NATIVE_AGENT_DIRECTORY,
+      sourcePath: '/Users/alice/.codex/skills/review/SKILL.md',
+      permissionLabel: 'FILESYSTEM'
+    }),
+    resourceRecord(LocalResourceTypes.MCP_SERVER, 'codex.mcp.memory', 'Memory MCP', {
+      sourceType: LocalResourceSourceTypes.NATIVE_AGENT_DIRECTORY,
+      sourcePath: '/Users/alice/.codex/config.toml',
+      permissionLabel: 'FILESYSTEM / NETWORK'
+    }),
+    resourceRecord(LocalResourceTypes.PLUGIN, 'codex.plugin.theme', 'Theme Plugin', {
+      sourceType: LocalResourceSourceTypes.NATIVE_AGENT_DIRECTORY,
+      sourcePath: '/Users/alice/.codex/plugins/theme/.codex-plugin/plugin.json',
+      permissionLabel: 'FILESYSTEM'
+    })
+  ];
+  const bindings = resources.map((resource, index) => bindingRecord(resource, `codex-file-${index}`, {
+    agentId: 'codex',
+    scopeType: ResourceScopeTypes.AGENT_GLOBAL,
+    targetPath: resource.sourcePath
+  }));
+  const files = bindings.map((binding, index) => fileRecord(resources[index], binding, resources[index].sourcePath ?? `/tmp/codex-file-${index}`, index === 0 ? 9320 : 2048 + index * 512));
+  const events = [
+    {
+      eventId: 'event-codex-config',
+      idempotencyKey: 'codex:config',
+      eventType: 'CONFIG_DISCOVERED',
+      resourceId: resources[0].id,
+      bindingId: bindings[0].id,
+      resourceType: LocalResourceTypes.AGENT_CONFIG,
+      agentId: 'codex',
+      status: 'success' as const,
+      message: 'Codex 配置文件已记录',
+      offlineCreated: false,
+      syncStatus: SyncStatuses.LOCAL_ONLY,
+      createdAt: generatedAt,
+      metadata: {}
+    },
+    {
+      eventId: 'event-codex-hook',
+      idempotencyKey: 'codex:hook',
+      eventType: 'HOOK_DISCOVERED',
+      resourceId: resources[6].id,
+      bindingId: bindings[6].id,
+      resourceType: LocalResourceTypes.HOOK,
+      agentId: 'codex',
+      status: 'info' as const,
+      message: 'Hook 配置已静态记录',
+      offlineCreated: false,
+      syncStatus: SyncStatuses.LOCAL_ONLY,
+      createdAt: generatedAt,
+      metadata: {}
+    },
+    {
+      eventId: 'event-codex-skill',
+      idempotencyKey: 'codex:skill',
+      eventType: 'SKILL_DISCOVERED',
+      resourceId: resources[8].id,
+      bindingId: bindings[8].id,
+      resourceType: LocalResourceTypes.SKILL,
+      agentId: 'codex',
+      status: 'success' as const,
+      message: 'Skill 已记录',
+      offlineCreated: false,
+      syncStatus: SyncStatuses.LOCAL_ONLY,
+      createdAt: generatedAt,
+      metadata: {}
+    },
+    {
+      eventId: 'event-codex-mcp',
+      idempotencyKey: 'codex:mcp',
+      eventType: 'MCP_DISCOVERED',
+      resourceId: resources[9].id,
+      bindingId: bindings[9].id,
+      resourceType: LocalResourceTypes.MCP_SERVER,
+      agentId: 'codex',
+      status: 'success' as const,
+      message: 'MCP 已记录',
+      offlineCreated: false,
+      syncStatus: SyncStatuses.LOCAL_ONLY,
+      createdAt: generatedAt,
+      metadata: {}
+    },
+    {
+      eventId: 'event-codex-plugin',
+      idempotencyKey: 'codex:plugin',
+      eventType: 'PLUGIN_DISCOVERED',
+      resourceId: resources[10].id,
+      bindingId: bindings[10].id,
+      resourceType: LocalResourceTypes.PLUGIN,
+      agentId: 'codex',
+      status: 'success' as const,
+      message: 'Plugin 已记录',
+      offlineCreated: false,
+      syncStatus: SyncStatuses.LOCAL_ONLY,
+      createdAt: generatedAt,
+      metadata: {}
+    }
+  ];
+  const rows = bindings.map((binding, index) => {
+    const rowEvents = events.filter((event) => event.bindingId === binding.id);
+    return {
+      resource: resources[index],
+      binding,
+      files: [files[index]],
+      events: rowEvents,
+      findings: [],
+      status: aggregateResourceStatus(binding),
+      scopeLabel: `${binding.agentId} / 智能体全局`
+    };
+  });
+  return {
+    resources,
+    bindings,
+    files,
+    events,
+    findings: [],
+    rows,
+    summary: { resourceCount: resources.length, bindingCount: bindings.length, fileCount: files.length, eventCount: events.length, pendingSyncEvents: 0, failureCount: 0, generatedAt }
+  };
+}
+
 function phase4AuditEventSnapshot(): LocalResourceSnapshot {
   const generatedAt = '2026-06-16T08:00:00Z';
   const resources = [
@@ -1194,5 +1623,33 @@ function bindingRecord(resource: ReturnType<typeof resourceRecord>, suffix: stri
     lastKnownHash: options.lastKnownHash,
     metadata: options.metadata ?? {},
     updatedAt: generatedAt
+  };
+}
+
+function fileRecord(resource: ReturnType<typeof resourceRecord>, binding: ReturnType<typeof bindingRecord>, path: string, size: number): LocalResourceSnapshot['files'][number] {
+  const generatedAt = '2026-06-15T00:00:00Z';
+  const contentType = path.endsWith('.toml')
+    ? 'toml'
+    : path.endsWith('.json')
+      ? 'json'
+      : path.endsWith('.md')
+        ? 'markdown'
+        : path.endsWith('.sh')
+          ? 'script'
+          : 'text';
+  return {
+    resourceId: resource.id,
+    bindingId: binding.id,
+    path,
+    contentType,
+    size,
+    lastKnownMtime: generatedAt,
+    lastKnownSize: size,
+    lastKnownHash: `sha256:${resource.sourceId}`,
+    currentHash: `sha256:${resource.sourceId}`,
+    externalModified: false,
+    drifted: false,
+    previewAvailable: true,
+    metadata: {}
   };
 }

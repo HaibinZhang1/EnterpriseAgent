@@ -23,7 +23,7 @@ describe('LocalEventSyncService M7 status mapping', () => {
       const summary = await sync.syncPending();
       expect(summary.accepted).toBe(1);
       expect(summary.serverStateHints[0].state).toBe('SCOPE_REDUCED');
-      expect(queue.findByIdempotencyKey('ack-upper')?.status).toBe('accepted');
+      expect(queue.findByIdempotencyKey('ack-upper')).toBeUndefined();
       await db.close();
     } finally {
       await temp.cleanup();

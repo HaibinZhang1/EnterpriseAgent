@@ -280,6 +280,15 @@ export function createDesktopIpcRouter(services: DesktopIpcServices): IpcRouter 
       requestID: context.requestID
     });
   });
+  router.register(IPC_CHANNELS.kitDeleteManifest, (payload, context) => {
+    const record = assertRecord(payload, context.requestID);
+    return services.localKitService.deleteManifest({
+      kitId: requiredString(record, 'kitId', context.requestID),
+      removeApplications: optionalBoolean(record, 'removeApplications', context.requestID) ?? false,
+      dryRun: optionalBoolean(record, 'dryRun', context.requestID) ?? false,
+      requestID: context.requestID
+    });
+  });
   router.register(IPC_CHANNELS.kitCheckDrift, (payload, context) => {
     const record = assertRecord(payload, context.requestID);
     return services.localKitService.checkDrift({

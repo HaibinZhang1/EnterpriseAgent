@@ -570,7 +570,8 @@ function makeFinding(
   if (!definition) throw new Error(`Unknown audit rule ${ruleId}`);
   const trustScoreImpact = definition.blocker ? 100 : definition.deduction;
   const lineKey = evidence.lineStart ? `:${evidence.lineStart}` : '';
-  const evidenceKey = stableHash(`${runId}:${input.resourceId}:${ruleId}:${input.path ?? ''}${lineKey}:${evidence.evidence}`);
+  const snippetKey = evidence.snippet ? `:${hashAuditSnippet(evidence.snippet)}` : '';
+  const evidenceKey = stableHash(`${runId}:${input.resourceId}:${ruleId}:${input.path ?? ''}${lineKey}${snippetKey}:${evidence.evidence}`);
   return {
     id: `finding_${evidenceKey}`,
     runId,

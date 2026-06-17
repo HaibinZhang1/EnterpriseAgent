@@ -8,6 +8,7 @@ import type {
   AgentPathProfileSourceLevel,
   AgentResourceKind
 } from '../tool-adapters/types';
+import { AGENT_RESOURCE_KINDS } from '../../shared/agent-resource-taxonomy';
 
 export const BUILT_IN_AGENT_IDS = [
   'claude-code',
@@ -82,21 +83,9 @@ const COMMON_CAPABILITIES: AgentAdapterCapability[] = [
   'rollback'
 ];
 
-const ALL_RESOURCE_KINDS: AgentResourceKind[] = [
-  'settings',
-  'rules',
-  'memory',
-  'subagents',
-  'ignore-files',
-  'skills',
-  'mcp',
-  'plugins',
-  'hooks',
-  'cli',
-  'files'
-];
+const ALL_RESOURCE_KINDS: readonly AgentResourceKind[] = AGENT_RESOURCE_KINDS;
 
-const fallbackKinds = ['skills', 'mcp', 'plugins', 'hooks', 'cli'] as AgentResourceKind[];
+const fallbackKinds = ['skills', 'mcp', 'plugins'] as AgentResourceKind[];
 
 export function listBuiltInAgentManifests(): AgentAdapterManifest[] {
   return BUILT_IN_AGENT_IDS.map((agentId) => buildManifest(agentId));
@@ -299,6 +288,10 @@ interface ProfileSeed {
   detectionRoots: string[];
   globalResourcePaths: string[];
   projectResourcePaths: string[];
+  settingsResourcePaths?: string[];
+  mcpResourcePaths?: string[];
+  hookResourcePaths?: string[];
+  cliResourcePaths?: string[];
   notes?: string[];
 }
 
@@ -309,14 +302,16 @@ const agentDefinitions: Record<BuiltInAgentId, AgentDefinition> = {
     sourceLevels: ['OFFICIAL_VERIFIED'],
     macos: {
       detectionRoots: ['${HOME}/.claude'],
-      globalResourcePaths: ['${HOME}/.claude/settings.json', '${HOME}/.claude/CLAUDE.md', '${HOME}/.claude/rules/*.md', '${HOME}/.claude/skills/*/SKILL.md', '${HOME}/.claude/commands/*.md', '${HOME}/.claude/agents/*.md', '${HOME}/.claude/plugins/', '${HOME}/.claude/projects/<project>/memory/'],
-      projectResourcePaths: ['<project>/CLAUDE.md', '<project>/.claude/settings.json', '<project>/.claude/settings.local.json', '<project>/.claude/rules/*.md', '<project>/.claude/skills/*/SKILL.md', '<project>/.claude/commands/*.md', '<project>/.claude/agents/*.md', '<project>/.mcp.json', '<project>/.worktreeinclude'],
-      notes: ['Hooks are static settings.json entries; MCP command configs are never executed.']
+      globalResourcePaths: ['${HOME}/.claude/CLAUDE.md', '${HOME}/.claude/rules/*.md', '${HOME}/.claude/projects/*/memory/*.md', '${HOME}/.claude.json', '${HOME}/.claude/settings.json', '${HOME}/.claude/settings.local.json', '${HOME}/.claude/keybindings.json', '${HOME}/.claude/commands/*.md', '${HOME}/.claude/output-styles/*.md', '${HOME}/.claude/agents/*.md', '${HOME}/.claude/skills/*/SKILL.md', '${HOME}/.claude/plugins/'],
+      projectResourcePaths: ['<project>/CLAUDE.md', '<project>/.claude/CLAUDE.md', '<project>/.claude/rules/*.md', '<project>/.claude/settings.json', '<project>/.claude/settings.local.json', '<project>/.mcp.json', '<project>/.claude/commands/*.md', '<project>/.claude/agents/*.md', '<project>/.claude/skills/*/SKILL.md'],
+      hookResourcePaths: ['${HOME}/.claude/settings.json', '<project>/.claude/settings.json'],
+      notes: ['Hooks are parsed from settings.json entries; MCP command configs are never executed.']
     },
     windows: {
       detectionRoots: ['%USERPROFILE%\\.claude'],
-      globalResourcePaths: ['%USERPROFILE%\\.claude\\settings.json', '%USERPROFILE%\\.claude\\CLAUDE.md', '%USERPROFILE%\\.claude\\rules\\*.md', '%USERPROFILE%\\.claude\\skills\\*\\SKILL.md', '%USERPROFILE%\\.claude\\commands\\*.md', '%USERPROFILE%\\.claude\\agents\\*.md', '%USERPROFILE%\\.claude\\plugins\\', '%USERPROFILE%\\.claude\\projects\\<project>\\memory\\'],
-      projectResourcePaths: ['<project>\\CLAUDE.md', '<project>\\.claude\\settings.json', '<project>\\.claude\\settings.local.json', '<project>\\.claude\\rules\\*.md', '<project>\\.claude\\skills\\*\\SKILL.md', '<project>\\.claude\\commands\\*.md', '<project>\\.claude\\agents\\*.md', '<project>\\.mcp.json', '<project>\\.worktreeinclude']
+      globalResourcePaths: ['%USERPROFILE%\\.claude\\CLAUDE.md', '%USERPROFILE%\\.claude\\rules\\*.md', '%USERPROFILE%\\.claude\\projects\\*\\memory\\*.md', '%USERPROFILE%\\.claude.json', '%USERPROFILE%\\.claude\\settings.json', '%USERPROFILE%\\.claude\\settings.local.json', '%USERPROFILE%\\.claude\\keybindings.json', '%USERPROFILE%\\.claude\\commands\\*.md', '%USERPROFILE%\\.claude\\output-styles\\*.md', '%USERPROFILE%\\.claude\\agents\\*.md', '%USERPROFILE%\\.claude\\skills\\*\\SKILL.md', '%USERPROFILE%\\.claude\\plugins\\'],
+      projectResourcePaths: ['<project>\\CLAUDE.md', '<project>\\.claude\\CLAUDE.md', '<project>\\.claude\\rules\\*.md', '<project>\\.claude\\settings.json', '<project>\\.claude\\settings.local.json', '<project>\\.mcp.json', '<project>\\.claude\\commands\\*.md', '<project>\\.claude\\agents\\*.md', '<project>\\.claude\\skills\\*\\SKILL.md'],
+      hookResourcePaths: ['%USERPROFILE%\\.claude\\settings.json', '<project>\\.claude\\settings.json']
     }
   },
   codex: {
@@ -325,13 +320,19 @@ const agentDefinitions: Record<BuiltInAgentId, AgentDefinition> = {
     sourceLevels: ['OFFICIAL_VERIFIED', 'EA_MANAGED'],
     macos: {
       detectionRoots: ['${HOME}/.codex'],
-      globalResourcePaths: ['${HOME}/.codex/config.toml', '${HOME}/.codex/AGENTS.md', '${HOME}/.codex/<profile>.config.toml'],
-      projectResourcePaths: ['<project>/.codex/config.toml', '<project>/AGENTS.md', '<project>/AGENTS.override.md']
+      globalResourcePaths: ['${HOME}/.codex/AGENTS.override.md', '${HOME}/.codex/AGENTS.md', '${HOME}/.codex/TEAM_GUIDE.md', '${HOME}/.codex/.agents.md', '${HOME}/.codex/memories/*.md', '${HOME}/.codex/agents/*.toml', '${HOME}/.codex/config.toml', '${HOME}/.codex/hooks.json', '${HOME}/.codex/skills/*/SKILL.md', '${HOME}/.agents/skills/*/SKILL.md', '${HOME}/.codex/plugins/cache/*/*/*/.codex-plugin/plugin.json'],
+      projectResourcePaths: ['<project>/AGENTS.override.md', '<project>/AGENTS.md', '<project>/TEAM_GUIDE.md', '<project>/.agents.md', '<project>/.codex/agents/*.toml', '<project>/.codex/config.toml', '<project>/.codex/hooks.json', '<project>/.agents/skills/*/SKILL.md'],
+      settingsResourcePaths: ['${HOME}/.codex/config.toml', '${HOME}/.codex/hooks.json', '<project>/.codex/config.toml'],
+      mcpResourcePaths: ['${HOME}/.codex/config.toml', '<project>/.codex/config.toml'],
+      hookResourcePaths: ['${HOME}/.codex/hooks.json', '<project>/.codex/hooks.json']
     },
     windows: {
       detectionRoots: ['%USERPROFILE%\\.codex'],
-      globalResourcePaths: ['%USERPROFILE%\\.codex\\config.toml', '%USERPROFILE%\\.codex\\AGENTS.md', '%USERPROFILE%\\.codex\\<profile>.config.toml'],
-      projectResourcePaths: ['<project>\\.codex\\config.toml', '<project>\\AGENTS.md', '<project>\\AGENTS.override.md']
+      globalResourcePaths: ['%USERPROFILE%\\.codex\\AGENTS.override.md', '%USERPROFILE%\\.codex\\AGENTS.md', '%USERPROFILE%\\.codex\\TEAM_GUIDE.md', '%USERPROFILE%\\.codex\\.agents.md', '%USERPROFILE%\\.codex\\memories\\*.md', '%USERPROFILE%\\.codex\\agents\\*.toml', '%USERPROFILE%\\.codex\\config.toml', '%USERPROFILE%\\.codex\\hooks.json', '%USERPROFILE%\\.codex\\skills\\*\\SKILL.md', '%USERPROFILE%\\.agents\\skills\\*\\SKILL.md', '%USERPROFILE%\\.codex\\plugins\\cache\\*\\*\\*\\.codex-plugin\\plugin.json'],
+      projectResourcePaths: ['<project>\\AGENTS.override.md', '<project>\\AGENTS.md', '<project>\\TEAM_GUIDE.md', '<project>\\.agents.md', '<project>\\.codex\\agents\\*.toml', '<project>\\.codex\\config.toml', '<project>\\.codex\\hooks.json', '<project>\\.agents\\skills\\*\\SKILL.md'],
+      settingsResourcePaths: ['%USERPROFILE%\\.codex\\config.toml', '%USERPROFILE%\\.codex\\hooks.json', '<project>\\.codex\\config.toml'],
+      mcpResourcePaths: ['%USERPROFILE%\\.codex\\config.toml', '<project>\\.codex\\config.toml'],
+      hookResourcePaths: ['%USERPROFILE%\\.codex\\hooks.json', '<project>\\.codex\\hooks.json']
     }
   },
   'gemini-cli': {
@@ -339,13 +340,15 @@ const agentDefinitions: Record<BuiltInAgentId, AgentDefinition> = {
     sourceLevels: ['OFFICIAL_VERIFIED', 'EA_MANAGED'],
     macos: {
       detectionRoots: ['${HOME}/.gemini'],
-      globalResourcePaths: ['${HOME}/.gemini/settings.json', '${HOME}/.gemini/GEMINI.md', '${HOME}/.gemini/commands/*.toml'],
-      projectResourcePaths: ['<project>/.gemini/settings.json', '<project>/GEMINI.md', '<project>/.gemini/commands/*.toml']
+      globalResourcePaths: ['${HOME}/.gemini/GEMINI.md', '${HOME}/.gemini/settings.json', '${HOME}/.gemini/.env', '${HOME}/.gemini/commands/*.toml', '${HOME}/.gemini/policies/*.toml', '${HOME}/.gemini/agents/*.md'],
+      projectResourcePaths: ['<project>/GEMINI.md', '<project>/*/GEMINI.md', '<project>/*/*/GEMINI.md', '<project>/.gemini/settings.json', '<project>/.gemini/agents/*.md', '<project>/.geminiignore'],
+      hookResourcePaths: ['${HOME}/.gemini/settings.json', '<project>/.gemini/settings.json']
     },
     windows: {
       detectionRoots: ['%USERPROFILE%\\.gemini'],
-      globalResourcePaths: ['%USERPROFILE%\\.gemini\\settings.json', '%USERPROFILE%\\.gemini\\GEMINI.md', '%USERPROFILE%\\.gemini\\commands\\*.toml'],
-      projectResourcePaths: ['<project>\\.gemini\\settings.json', '<project>\\GEMINI.md', '<project>\\.gemini\\commands\\*.toml']
+      globalResourcePaths: ['%USERPROFILE%\\.gemini\\GEMINI.md', '%USERPROFILE%\\.gemini\\settings.json', '%USERPROFILE%\\.gemini\\.env', '%USERPROFILE%\\.gemini\\commands\\*.toml', '%USERPROFILE%\\.gemini\\policies\\*.toml', '%USERPROFILE%\\.gemini\\agents\\*.md'],
+      projectResourcePaths: ['<project>\\GEMINI.md', '<project>\\*\\GEMINI.md', '<project>\\*\\*\\GEMINI.md', '<project>\\.gemini\\settings.json', '<project>\\.gemini\\agents\\*.md', '<project>\\.geminiignore'],
+      hookResourcePaths: ['%USERPROFILE%\\.gemini\\settings.json', '<project>\\.gemini\\settings.json']
     }
   },
   cursor: {
@@ -353,58 +356,68 @@ const agentDefinitions: Record<BuiltInAgentId, AgentDefinition> = {
     sourceLevels: ['PRODUCT_DOC_UNSTRUCTURED', 'DOC_OR_COMMUNITY_VERIFIED', 'EA_MANAGED'],
     macos: {
       detectionRoots: ['<project>/.cursor', '${HOME}/.cursor'],
-      globalResourcePaths: ['${HOME}/.cursor/mcp.json'],
-      projectResourcePaths: ['<project>/.cursor/rules/*.mdc', '<project>/.cursor/mcp.json', '<project>/.cursorrules'],
+      globalResourcePaths: ['${HOME}/.cursor/mcp.json', '${HOME}/.cursor/permissions.json', '${HOME}/.cursor/hooks.json', '${HOME}/.cursor/agents/*.md'],
+      projectResourcePaths: ['<project>/.cursorrules', '<project>/.cursor/rules/*.mdc', '<project>/.cursor/rules/*.md', '<project>/AGENTS.md', '<project>/.cursor/notepads/*.md', '<project>/.cursor/mcp.json', '<project>/.cursor/agents/*.md', '<project>/.cursorignore', '<project>/.cursorindexingignore', '<project>/.cursor/hooks.json'],
+      settingsResourcePaths: ['${HOME}/.cursor/mcp.json', '${HOME}/.cursor/permissions.json', '${HOME}/.cursor/hooks.json', '<project>/.cursor/mcp.json'],
+      hookResourcePaths: ['${HOME}/.cursor/hooks.json', '<project>/.cursor/hooks.json'],
       notes: ['Global settings are external discovery unless the user configures a path.']
     },
     windows: {
       detectionRoots: ['<project>\\.cursor', '%USERPROFILE%\\.cursor'],
-      globalResourcePaths: ['%USERPROFILE%\\.cursor\\mcp.json'],
-      projectResourcePaths: ['<project>\\.cursor\\rules\\*.mdc', '<project>\\.cursor\\mcp.json', '<project>\\.cursorrules']
+      globalResourcePaths: ['%USERPROFILE%\\.cursor\\mcp.json', '%USERPROFILE%\\.cursor\\permissions.json', '%USERPROFILE%\\.cursor\\hooks.json', '%USERPROFILE%\\.cursor\\agents\\*.md'],
+      projectResourcePaths: ['<project>\\.cursorrules', '<project>\\.cursor\\rules\\*.mdc', '<project>\\.cursor\\rules\\*.md', '<project>\\AGENTS.md', '<project>\\.cursor\\notepads\\*.md', '<project>\\.cursor\\mcp.json', '<project>\\.cursor\\agents\\*.md', '<project>\\.cursorignore', '<project>\\.cursorindexingignore', '<project>\\.cursor\\hooks.json'],
+      settingsResourcePaths: ['%USERPROFILE%\\.cursor\\mcp.json', '%USERPROFILE%\\.cursor\\permissions.json', '%USERPROFILE%\\.cursor\\hooks.json', '<project>\\.cursor\\mcp.json'],
+      hookResourcePaths: ['%USERPROFILE%\\.cursor\\hooks.json', '<project>\\.cursor\\hooks.json']
     }
   },
   antigravity: {
     displayName: 'Antigravity',
     sourceLevels: ['DOC_OR_COMMUNITY_VERIFIED', 'OFFICIAL_VERIFIED', 'EA_MANAGED'],
     macos: {
-      detectionRoots: ['${HOME}/.gemini', '<project>/.agent', '<project>/.agents'],
-      globalResourcePaths: ['${HOME}/.gemini/GEMINI.md', '${HOME}/.gemini/antigravity/global_workflows/*.md'],
-      projectResourcePaths: ['<project>/.agent/rules/', '<project>/.agent/workflows/', '<project>/AGENTS.md', '<project>/.agents/skills/*/SKILL.md']
+      detectionRoots: ['${HOME}/.gemini/antigravity', '<project>/.agent', '<project>/.agents'],
+      globalResourcePaths: ['${HOME}/.gemini/GEMINI.md', '${HOME}/.gemini/antigravity/mcp_config.json'],
+      projectResourcePaths: ['<project>/.agents/rules/*.md', '<project>/.agent/rules/*.md', '<project>/.geminiignore', '<project>/.agents/skills/*/SKILL.md']
     },
     windows: {
-      detectionRoots: ['%USERPROFILE%\\.gemini', '<project>\\.agent', '<project>\\.agents'],
-      globalResourcePaths: ['%USERPROFILE%\\.gemini\\GEMINI.md', '%USERPROFILE%\\.gemini\\antigravity\\global_workflows\\*.md'],
-      projectResourcePaths: ['<project>\\.agent\\rules\\', '<project>\\.agent\\workflows\\', '<project>\\AGENTS.md', '<project>\\.agents\\skills\\*\\SKILL.md']
+      detectionRoots: ['%USERPROFILE%\\.gemini\\antigravity', '<project>\\.agent', '<project>\\.agents'],
+      globalResourcePaths: ['%USERPROFILE%\\.gemini\\GEMINI.md', '%USERPROFILE%\\.gemini\\antigravity\\mcp_config.json'],
+      projectResourcePaths: ['<project>\\.agents\\rules\\*.md', '<project>\\.agent\\rules\\*.md', '<project>\\.geminiignore', '<project>\\.agents\\skills\\*\\SKILL.md']
     }
   },
   copilot: {
     displayName: 'Copilot',
     sourceLevels: ['OFFICIAL_VERIFIED', 'EA_MANAGED'],
     macos: {
-      detectionRoots: ['<project>/.github', '<project>/.vscode', '${HOME}/Library/Application Support/Code/User'],
-      globalResourcePaths: ['${HOME}/Library/Application Support/Code/User/settings.json'],
-      projectResourcePaths: ['<project>/.github/copilot-instructions.md', '<project>/.github/instructions/*.instructions.md', '<project>/AGENTS.md', '<project>/CLAUDE.md', '<project>/.vscode/mcp.json'],
+      detectionRoots: ['<project>/.github', '<project>/.vscode', '${HOME}/.copilot', '${HOME}/Library/Application Support/Code/User'],
+      globalResourcePaths: ['${HOME}/.copilot/copilot-instructions.md', '${HOME}/.copilot/config.json', '${HOME}/Library/Application Support/Code/User/mcp.json', '${HOME}/.copilot/hooks/*.json', '${HOME}/.copilot/agents/*.agent.md'],
+      projectResourcePaths: ['<project>/.github/copilot-instructions.md', '<project>/.github/instructions/*.instructions.md', '<project>/.vscode/mcp.json', '<project>/.github/hooks/*.json', '<project>/.github/agents/*.agent.md', '<project>/.copilotignore'],
+      settingsResourcePaths: ['${HOME}/.copilot/config.json', '${HOME}/Library/Application Support/Code/User/mcp.json', '${HOME}/.copilot/hooks/*.json', '<project>/.vscode/mcp.json', '<project>/.github/hooks/*.json'],
+      hookResourcePaths: ['${HOME}/.copilot/hooks/*.json', '<project>/.github/hooks/*.json'],
       notes: ['VS Code user profile is external discovery unless user-configured.']
     },
     windows: {
-      detectionRoots: ['<project>\\.github', '<project>\\.vscode', '%USERPROFILE%\\AppData\\Roaming\\Code\\User'],
-      globalResourcePaths: ['%USERPROFILE%\\AppData\\Roaming\\Code\\User\\settings.json'],
-      projectResourcePaths: ['<project>\\.github\\copilot-instructions.md', '<project>\\.github\\instructions\\*.instructions.md', '<project>\\AGENTS.md', '<project>\\CLAUDE.md', '<project>\\.vscode\\mcp.json']
+      detectionRoots: ['<project>\\.github', '<project>\\.vscode', '%USERPROFILE%\\.copilot', '%USERPROFILE%\\AppData\\Roaming\\Code\\User'],
+      globalResourcePaths: ['%USERPROFILE%\\.copilot\\copilot-instructions.md', '%USERPROFILE%\\.copilot\\config.json', '%USERPROFILE%\\AppData\\Roaming\\Code\\User\\mcp.json', '%USERPROFILE%\\.copilot\\hooks\\*.json', '%USERPROFILE%\\.copilot\\agents\\*.agent.md'],
+      projectResourcePaths: ['<project>\\.github\\copilot-instructions.md', '<project>\\.github\\instructions\\*.instructions.md', '<project>\\.vscode\\mcp.json', '<project>\\.github\\hooks\\*.json', '<project>\\.github\\agents\\*.agent.md', '<project>\\.copilotignore'],
+      settingsResourcePaths: ['%USERPROFILE%\\.copilot\\config.json', '%USERPROFILE%\\AppData\\Roaming\\Code\\User\\mcp.json', '%USERPROFILE%\\.copilot\\hooks\\*.json', '<project>\\.vscode\\mcp.json', '<project>\\.github\\hooks\\*.json'],
+      hookResourcePaths: ['%USERPROFILE%\\.copilot\\hooks\\*.json', '<project>\\.github\\hooks\\*.json']
     }
   },
   windsurf: {
     displayName: 'Windsurf',
     sourceLevels: ['OFFICIAL_VERIFIED', 'EA_MANAGED'],
     macos: {
-      detectionRoots: ['<project>/.windsurf'],
-      globalResourcePaths: [],
-      projectResourcePaths: ['<project>/.windsurf/rules/'],
-      notes: ['Global rules and memories require user-configured export paths.']
+      detectionRoots: ['${HOME}/.codeium/windsurf', '<project>/.windsurf'],
+      globalResourcePaths: ['${HOME}/.codeium/windsurf/global_rules.md', '${HOME}/.codeium/windsurf/memories/*.md', '${HOME}/.codeium/windsurf/mcp_config.json', '${HOME}/.codeium/windsurf/hooks.json', '${HOME}/.codeium/windsurf/global_workflows/*.md'],
+      projectResourcePaths: ['<project>/.windsurfrules', '<project>/.windsurf/rules/*.md', '<project>/.windsurf/memories/*.md', '<project>/.windsurf/mcp_config.json', '<project>/.windsurf/hooks.json', '<project>/.windsurf/workflows/*.md', '<project>/.codeiumignore'],
+      hookResourcePaths: ['${HOME}/.codeium/windsurf/hooks.json', '<project>/.windsurf/hooks.json'],
+      notes: ['Rules, memories, workflows, MCP, and hooks follow the Windsurf config root.']
     },
     windows: {
-      detectionRoots: ['<project>\\.windsurf'],
-      globalResourcePaths: [],
-      projectResourcePaths: ['<project>\\.windsurf\\rules\\']
+      detectionRoots: ['%USERPROFILE%\\.codeium\\windsurf', '<project>\\.windsurf'],
+      globalResourcePaths: ['%USERPROFILE%\\.codeium\\windsurf\\global_rules.md', '%USERPROFILE%\\.codeium\\windsurf\\memories\\*.md', '%USERPROFILE%\\.codeium\\windsurf\\mcp_config.json', '%USERPROFILE%\\.codeium\\windsurf\\hooks.json', '%USERPROFILE%\\.codeium\\windsurf\\global_workflows\\*.md'],
+      projectResourcePaths: ['<project>\\.windsurfrules', '<project>\\.windsurf\\rules\\*.md', '<project>\\.windsurf\\memories\\*.md', '<project>\\.windsurf\\mcp_config.json', '<project>\\.windsurf\\hooks.json', '<project>\\.windsurf\\workflows\\*.md', '<project>\\.codeiumignore'],
+      hookResourcePaths: ['%USERPROFILE%\\.codeium\\windsurf\\hooks.json', '<project>\\.windsurf\\hooks.json']
     }
   },
   opencode: {
@@ -412,14 +425,14 @@ const agentDefinitions: Record<BuiltInAgentId, AgentDefinition> = {
     envOverrides: ['OPENCODE_CONFIG_DIR'],
     sourceLevels: ['OFFICIAL_VERIFIED', 'EA_MANAGED'],
     macos: {
-      detectionRoots: ['${HOME}/.config/opencode', '<project>/.opencode'],
-      globalResourcePaths: ['${HOME}/.config/opencode/opencode.json', '${HOME}/.config/opencode/AGENTS.md', '${HOME}/.config/opencode/skills/*/SKILL.md', '${HOME}/.opencode.json'],
-      projectResourcePaths: ['<project>/AGENTS.md', '<project>/CLAUDE.md', '<project>/.opencode/opencode.json', '<project>/.opencode/skills/*/SKILL.md', '<project>/.claude/skills/*/SKILL.md', '<project>/.agents/skills/*/SKILL.md']
+      detectionRoots: ['${HOME}/.config/opencode', '<project>/.opencode', '<project>/opencode.json', '<project>/opencode.jsonc'],
+      globalResourcePaths: ['${HOME}/.config/opencode/AGENTS.md', '${HOME}/.config/opencode/opencode.jsonc', '${HOME}/.config/opencode/opencode.json', '${HOME}/.config/opencode/modes/*.md', '${HOME}/.config/opencode/themes/*.json', '${HOME}/.config/opencode/commands/*.md', '${HOME}/.config/opencode/agents/*.md'],
+      projectResourcePaths: ['<project>/AGENTS.md', '<project>/opencode.json', '<project>/opencode.jsonc', '<project>/.opencode/commands/*.md', '<project>/.opencode/agents/*.md', '<project>/.opencode/plugins/*', '<project>/.opencode/skills/*/SKILL.md']
     },
     windows: {
-      detectionRoots: ['%USERPROFILE%\\.config\\opencode', '<project>\\.opencode'],
-      globalResourcePaths: ['%USERPROFILE%\\.config\\opencode\\opencode.json', '%USERPROFILE%\\.config\\opencode\\AGENTS.md', '%USERPROFILE%\\.config\\opencode\\skills\\*\\SKILL.md', '%USERPROFILE%\\.opencode.json'],
-      projectResourcePaths: ['<project>\\AGENTS.md', '<project>\\CLAUDE.md', '<project>\\.opencode\\opencode.json', '<project>\\.opencode\\skills\\*\\SKILL.md', '<project>\\.claude\\skills\\*\\SKILL.md', '<project>\\.agents\\skills\\*\\SKILL.md']
+      detectionRoots: ['%USERPROFILE%\\.config\\opencode', '<project>\\.opencode', '<project>\\opencode.json', '<project>\\opencode.jsonc'],
+      globalResourcePaths: ['%USERPROFILE%\\.config\\opencode\\AGENTS.md', '%USERPROFILE%\\.config\\opencode\\opencode.jsonc', '%USERPROFILE%\\.config\\opencode\\opencode.json', '%USERPROFILE%\\.config\\opencode\\modes\\*.md', '%USERPROFILE%\\.config\\opencode\\themes\\*.json', '%USERPROFILE%\\.config\\opencode\\commands\\*.md', '%USERPROFILE%\\.config\\opencode\\agents\\*.md'],
+      projectResourcePaths: ['<project>\\AGENTS.md', '<project>\\opencode.json', '<project>\\opencode.jsonc', '<project>\\.opencode\\commands\\*.md', '<project>\\.opencode\\agents\\*.md', '<project>\\.opencode\\plugins\\*', '<project>\\.opencode\\skills\\*\\SKILL.md']
     }
   },
   hermes: {
@@ -427,13 +440,15 @@ const agentDefinitions: Record<BuiltInAgentId, AgentDefinition> = {
     sourceLevels: ['OFFICIAL_VERIFIED', 'EA_MANAGED'],
     macos: {
       detectionRoots: ['${HOME}/.hermes'],
-      globalResourcePaths: ['${HOME}/.hermes/config.yaml', '${HOME}/.hermes/.env', '${HOME}/.hermes/auth.json', '${HOME}/.hermes/SOUL.md', '${HOME}/.hermes/memories/', '${HOME}/.hermes/skills/', '${HOME}/.hermes/cron/'],
-      projectResourcePaths: ['<project>/AGENTS.md', '<project>/SOUL.md', '<project>/.cursorrules']
+      globalResourcePaths: ['${HOME}/.hermes/SOUL.md', '${HOME}/.hermes/memories/*', '${HOME}/.hermes/config.yaml'],
+      projectResourcePaths: [],
+      hookResourcePaths: ['${HOME}/.hermes/config.yaml']
     },
     windows: {
       detectionRoots: ['%USERPROFILE%\\.hermes'],
-      globalResourcePaths: ['%USERPROFILE%\\.hermes\\config.yaml', '%USERPROFILE%\\.hermes\\.env', '%USERPROFILE%\\.hermes\\auth.json', '%USERPROFILE%\\.hermes\\SOUL.md', '%USERPROFILE%\\.hermes\\memories\\', '%USERPROFILE%\\.hermes\\skills\\', '%USERPROFILE%\\.hermes\\cron\\'],
-      projectResourcePaths: ['<project>\\AGENTS.md', '<project>\\SOUL.md', '<project>\\.cursorrules']
+      globalResourcePaths: ['%USERPROFILE%\\.hermes\\SOUL.md', '%USERPROFILE%\\.hermes\\memories\\*', '%USERPROFILE%\\.hermes\\config.yaml'],
+      projectResourcePaths: [],
+      hookResourcePaths: ['%USERPROFILE%\\.hermes\\config.yaml']
     }
   }
 };
@@ -464,7 +479,7 @@ function createResourcePaths(seed: ProfileSeed, fallbackRoot: string, platform: 
   const fallback = (kind: AgentResourceKind) => `${fallbackRoot}${kind}${joiner}`;
   return Object.fromEntries(ALL_RESOURCE_KINDS.map((kind) => {
     const nativePaths = resourcePathsFromSeed(kind, seed);
-    const paths = nativePaths.length > 0 ? nativePaths : eaKinds.includes(kind) ? [fallback(kind)] : [];
+    const paths = [...nativePaths, ...(eaKinds.includes(kind) ? [fallback(kind)] : [])];
     return [kind, paths];
   })) as Partial<Record<AgentResourceKind, string[]>>;
 }
@@ -473,25 +488,27 @@ function resourcePathsFromSeed(kind: AgentResourceKind, seed: ProfileSeed): stri
   const all = [...seed.globalResourcePaths, ...seed.projectResourcePaths];
   switch (kind) {
     case 'settings':
-      return all.filter((item) => /settings|config|opencode\.json|mcp\.json/i.test(item));
+      if (seed.settingsResourcePaths) return seed.settingsResourcePaths;
+      return all.filter((item) => /(^|[\\/])(\.env|[^\\/]*(settings|config|hooks|mcp|keybindings|permissions|opencode\.jsonc?|mcp_config)[^\\/]*)$/i.test(item));
     case 'rules':
-      return all.filter((item) => /AGENTS|CLAUDE|GEMINI|SOUL|rules|instructions|cursorrules|workflows|worktreeinclude/i.test(item));
+      return all.filter((item) => /(^|[\\/])(AGENTS(?:\.override)?\.md|TEAM_GUIDE\.md|\.agents\.md|CLAUDE\.md|GEMINI\.md|SOUL\.md|\.cursorrules|[^\\/]*(rules|instructions)[^\\/]*)$/i.test(item) || /[\\/]rules[\\/]/i.test(item));
     case 'memory':
       return all.filter((item) => /memory|memories/i.test(item));
     case 'subagents':
-      return all.filter((item) => /agents/i.test(item));
+      return all.filter((item) => /(^|[\\/])agents[\\/]/i.test(item) && !/\.agents\.md$/i.test(item));
     case 'ignore-files':
-      return all.filter((item) => /ignore|worktreeinclude/i.test(item));
+      return all.filter((item) => /ignore/i.test(item));
     case 'skills':
       return all.filter((item) => /skills/i.test(item));
     case 'mcp':
+      if (seed.mcpResourcePaths) return seed.mcpResourcePaths;
       return all.filter((item) => /mcp/i.test(item));
     case 'plugins':
       return all.filter((item) => /plugins/i.test(item));
     case 'hooks':
-      return all.filter((item) => /settings|config/i.test(item));
+      return seed.hookResourcePaths ?? all.filter((item) => /hooks/i.test(item));
     case 'cli':
-      return all.filter((item) => /commands|cron|config|settings|opencode\.json/i.test(item));
+      return seed.cliResourcePaths ?? [];
     case 'files':
       return all;
     default:

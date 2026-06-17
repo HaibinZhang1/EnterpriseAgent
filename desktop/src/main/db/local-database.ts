@@ -336,6 +336,7 @@ export class LocalDatabase {
         sync_status: "TEXT NOT NULL DEFAULT 'PENDING_SYNC'",
         server_ack_status: 'TEXT'
       });
+      this.deleteNonSyncLocalEvents();
       await this.persist();
     } catch (error) {
       throw new DesktopErrorException(makeDesktopError('db_error', 'Failed to initialize local SQLite database', undefined, error));
@@ -444,6 +445,14 @@ export class LocalDatabase {
       if (existing.has(name)) continue;
       this.ensureDb().exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
     }
+  }
+
+  private deleteNonSyncLocalEvents(): void {
+    this.runStatement(
+      `DELETE FROM local_events
+       WHERE status NOT IN ('pending', 'retryable')
+          OR sync_status NOT IN ('PENDING_SYNC', 'SYNC_FAILED')`
+    );
   }
 }
 

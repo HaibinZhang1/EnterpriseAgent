@@ -414,8 +414,8 @@ async function scanCodexSkills(directory: string, failures: LocalInventoryScanFa
   const items: ScannedExtensionItem[] = [];
   for (const entry of entries) {
     if (entry.isSymbolicLink() || !entry.isDirectory() || entry.name === '.system') continue;
-    const target = path.join(directory, entry.name);
-    const skillFile = path.join(target, 'SKILL.md');
+    const skillDirectory = path.join(directory, entry.name);
+    const skillFile = path.join(skillDirectory, 'SKILL.md');
     let skillMarkdown: string | undefined;
     try {
       skillMarkdown = await readTextFile(skillFile);
@@ -424,18 +424,20 @@ async function scanCodexSkills(directory: string, failures: LocalInventoryScanFa
       continue;
     }
     if (!skillMarkdown) continue;
-    const skillId = `codex.skill.${entry.name}`;
-    const title = firstHeading(skillMarkdown) ?? entry.name;
+    const manifest = parseSkillFrontmatter(skillMarkdown);
+    const title = manifest.name ?? firstHeading(skillMarkdown) ?? '未命名 Skill';
     items.push({
       kind: 'skill',
-      extensionId: skillId,
+      extensionId: `codex:skills:${stablePathId(skillFile)}`,
       name: title,
-      summary: firstParagraph(skillMarkdown),
-      target,
+      summary: manifest.description ?? firstParagraph(skillMarkdown),
+      target: skillFile,
       metadata: {
         source: 'known_tool_scan',
         adapterId: 'codex',
         managed: false,
+        directoryName: entry.name,
+        skillDirectory,
         hasSkillMd: true,
         hash: sha256(skillMarkdown),
         skillFile
@@ -522,22 +524,55 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
+function parseSkillFrontmatter(markdown: string): { name?: string; description?: string } {
+  if (!markdown.startsWith('---')) return {};
+  const match = markdown.match(/^---\s*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) return {};
+  const metadata: { name?: string; description?: string } = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const parsed = line.match(/^([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*)$/);
+    if (!parsed) continue;
+    const key = parsed[1].toLowerCase();
+    const value = unquoteYamlScalar(parsed[2].trim());
+    if (!value) continue;
+    if (key === 'name') metadata.name = value;
+    if (key === 'description') metadata.description = value;
+  }
+  return metadata;
+}
+
+function unquoteYamlScalar(value: string): string {
+  const trimmed = value.trim();
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
 function firstHeading(markdown: string): string | undefined {
-  const line = markdown.split(/\r?\n/).find((value) => /^#\s+/.test(value));
+  const line = stripFrontmatter(markdown).split(/\r?\n/).find((value) => /^#\s+/.test(value));
   return line?.replace(/^#\s+/, '').trim();
 }
 
 function firstParagraph(markdown: string): string | undefined {
-  const paragraph = markdown
+  const paragraph = stripFrontmatter(markdown)
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .find((line) => line.length > 0 && !line.startsWith('#') && !line.startsWith('---'));
+    .find((line) => line.length > 0 && !line.startsWith('#'));
   if (!paragraph) return undefined;
   return paragraph.length > 160 ? `${paragraph.slice(0, 157)}...` : paragraph;
 }
 
+function stripFrontmatter(markdown: string): string {
+  return markdown.replace(/^---\s*\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '');
+}
+
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function stablePathId(filePath: string): string {
+  return createHash('sha256').update(filePath).digest('hex').slice(0, 16);
 }
 
 function isMissingFileError(error: unknown): boolean {

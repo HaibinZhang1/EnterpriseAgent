@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Button } from '../components/Button';
 import { Drawer } from '../components/Drawer';
 import { EmptyState } from '../components/EmptyState';
@@ -6,6 +6,7 @@ import { ErrorState } from '../components/ErrorState';
 import { StatusBadge } from '../components/StatusBadge';
 import { asText, compactDate } from '../lib/formatting';
 import { desktopApi } from '../lib/api';
+import { kitOperationResults } from '../lib/kit-operation-results';
 import { auditRuleDefinition, type AuditFindingRecord } from '../../shared/local-audit';
 import type { Phase3OperationResult, Phase3OperationResultStatus, ResourceChangeStatus } from '../../shared/local-phase3-operations';
 import { redactForLog } from '../../shared/redaction';
@@ -16,29 +17,36 @@ import {
   LocalResourceTypes,
   PathStatuses,
   ResourceScopeTypes,
-  SyncStatuses,
   auditStatusLabel,
+  createEmptyPermissionSummary,
+  createNotAuditedSummary,
   extractKitManifest,
   localResourceTypeLabel,
   type AggregatedResourceStatus,
   type FileBackedResource,
   type KitManifest,
+  type KitResourceKind,
   type KitResourceRef,
-  type LocalEventRecord,
   type LocalResourceRow,
   type LocalResourceSnapshot,
   type LocalResourceType,
   type PermissionCategory
 } from '../../shared/local-resources';
+import {
+  AGENT_CONFIG_BROWSER_SECTIONS,
+  AGENT_EXTENSION_RESOURCE_TYPES,
+  resourceTypesForAgentResourceKind,
+  type AgentConfigBrowserSection
+} from '../../shared/agent-resource-taxonomy';
 import type { LoadState, LocalInventoryScanSummary, LocalTab, UiError } from '../types/desktop';
 
-const NAV_ITEMS: Array<{ id: LocalTab; label: string; resourceTypes?: LocalResourceType[]; includeEvents?: boolean }> = [
+const NAV_ITEMS: Array<{ id: LocalTab; label: string; resourceTypes?: LocalResourceType[] }> = [
   { id: 'overview', label: '概览' },
   { id: 'agents', label: '智能体', resourceTypes: [LocalResourceTypes.AGENT, LocalResourceTypes.AGENT_CONFIG, LocalResourceTypes.RULE, LocalResourceTypes.MEMORY, LocalResourceTypes.SUBAGENT, LocalResourceTypes.IGNORE_FILE] },
   { id: 'extensions', label: '扩展', resourceTypes: [LocalResourceTypes.SKILL, LocalResourceTypes.MCP_SERVER, LocalResourceTypes.PLUGIN, LocalResourceTypes.HOOK, LocalResourceTypes.CLI_COMMAND] },
   { id: 'projects', label: '项目', resourceTypes: [LocalResourceTypes.PROJECT] },
   { id: 'toolkits', label: '工具集', resourceTypes: [LocalResourceTypes.KIT] },
-  { id: 'audit-events', label: '审计与事件', resourceTypes: [LocalResourceTypes.AUDIT_FINDING, LocalResourceTypes.LOCAL_EVENT], includeEvents: true }
+  { id: 'audit', label: '审计' }
 ];
 
 const BUILT_IN_AGENT_DEFINITIONS = [
@@ -72,8 +80,7 @@ const AGENT_DETAIL_TABS = [
   { id: 'hooks', label: 'Hook', resourceTypes: [LocalResourceTypes.HOOK] },
   { id: 'cli', label: 'CLI', resourceTypes: [LocalResourceTypes.CLI_COMMAND] },
   { id: 'files', label: '文件' },
-  { id: 'audit', label: '审计' },
-  { id: 'events', label: '事件' }
+  { id: 'audit', label: '审计' }
 ] as const;
 
 const PROJECT_DETAIL_TABS = [
@@ -87,11 +94,12 @@ const PROJECT_DETAIL_TABS = [
   { id: 'extensions', label: '扩展', resourceTypes: [LocalResourceTypes.SKILL, LocalResourceTypes.MCP_SERVER, LocalResourceTypes.PLUGIN] },
   { id: 'hooks', label: 'Hook', resourceTypes: [LocalResourceTypes.HOOK] },
   { id: 'cli', label: 'CLI', resourceTypes: [LocalResourceTypes.CLI_COMMAND] },
-  { id: 'audit', label: '审计' },
-  { id: 'events', label: '事件' }
+  { id: 'audit', label: '审计' }
 ] as const;
 
-const EXTENSION_RESOURCE_TYPES: LocalResourceType[] = [LocalResourceTypes.SKILL, LocalResourceTypes.MCP_SERVER, LocalResourceTypes.PLUGIN, LocalResourceTypes.HOOK, LocalResourceTypes.CLI_COMMAND];
+const EXTENSION_RESOURCE_TYPES: readonly LocalResourceType[] = AGENT_EXTENSION_RESOURCE_TYPES;
+const EXTENSION_TYPE_FILTER_ORDER = ['Skill', 'MCP', 'Plugin', 'Hook'] as const;
+const NAME_COLLATOR = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' });
 const PROJECT_BLOCKING_RESOURCE_TYPES: LocalResourceType[] = [
   LocalResourceTypes.AGENT_CONFIG,
   LocalResourceTypes.SKILL,
@@ -106,6 +114,21 @@ const PROJECT_BLOCKING_RESOURCE_TYPES: LocalResourceType[] = [
   LocalResourceTypes.KIT
 ];
 
+const AUDIT_FILTER_OPTIONS = ['全部', '阻断风险', '高风险', '需复核', '低风险', '正常', '未审计'] as const;
+
+const AGENT_ICON_TEXT: Record<string, string> = {
+  'claude-code': 'CL',
+  codex: 'CX',
+  'gemini-cli': 'GM',
+  cursor: 'CR',
+  antigravity: 'AG',
+  copilot: 'CP',
+  windsurf: 'WS',
+  opencode: 'OC',
+  hermes: 'HM',
+  'custom-directory': 'AI'
+};
+
 type AgentDashboardTab = typeof AGENT_DETAIL_TABS[number]['id'];
 type ProjectDetailTab = typeof PROJECT_DETAIL_TABS[number]['id'];
 type AgentDefinition = { id: string; label: string; builtIn: boolean };
@@ -114,7 +137,7 @@ type VisibleItem = {
   id: string;
   name: string;
   typeLabel: string;
-  type: LocalResourceType | 'EVENT' | 'FINDING';
+  type: LocalResourceType;
   scopeLabel: string;
   permissionLabel: string;
   permissionCategories: PermissionCategory[];
@@ -127,8 +150,6 @@ type VisibleItem = {
   updatedAt?: string;
   source?: string;
   row?: LocalResourceRow;
-  event?: LocalEventRecord;
-  finding?: AuditFindingRecord;
   agentId?: string;
   agentIds?: string[];
   projectId?: string;
@@ -137,12 +158,7 @@ type VisibleItem = {
   kitIds?: string[];
   platforms?: string[];
   builtIn?: boolean;
-  syncStatus?: string;
-  offlineCreated?: boolean;
   createdAt?: string;
-  eventType?: string;
-  severity?: string;
-  ruleId?: string;
 };
 
 export function LocalPage({
@@ -172,6 +188,8 @@ export function LocalPage({
   const [extensionSourceFilter, setExtensionSourceFilter] = useState('全部');
   const [auditQuery, setAuditQuery] = useState('');
   const [auditTierFilter, setAuditTierFilter] = useState('全部');
+  const [kitQuery, setKitQuery] = useState('');
+  const [kitScopeFilter, setKitScopeFilter] = useState('全部');
   const [kitWorkbenchOpen, setKitWorkbenchOpen] = useState(false);
   const [selected, setSelected] = useState<VisibleItem | undefined>();
   const [selectedKitId, setSelectedKitId] = useState<string | undefined>();
@@ -187,7 +205,7 @@ export function LocalPage({
   const projectItems = useMemo(() => createProjectItems(snapshot), [snapshot]);
   const kitItems = useMemo(() => createKitItems(snapshot), [snapshot]);
   const overviewItems = useMemo(() => createVisibleItems(snapshot, activeNav), [activeNav, snapshot]);
-  const auditItems = useMemo(() => createVisibleItems(snapshot, activeNav), [activeNav, snapshot]);
+  const auditItems = useMemo(() => createAuditItems(snapshot), [snapshot]);
 
   const filteredItems = useMemo(() => {
     if (activeTab === 'agents') return agentItems;
@@ -197,28 +215,43 @@ export function LocalPage({
         && (extensionTypeFilter === '全部' || item.typeLabel === extensionTypeFilter)
         && (extensionAgentFilter === '全部' || item.agentId === extensionAgentFilter || (item.agentIds ?? []).includes(extensionAgentFilter))
         && (extensionSourceFilter === '全部' || item.source === extensionSourceFilter)
-      ));
+      )).sort(compareVisibleItemsByName);
     }
     if (activeTab === 'projects') return projectItems;
-    if (activeTab === 'toolkits') return kitItems;
-    if (activeTab === 'audit-events') {
-      return auditItems.filter((item) => matchesQuery(item, auditQuery) && (auditTierFilter === '全部' || item.auditLabel === auditTierFilter || item.severity === auditTierFilter || item.status.label === auditTierFilter));
+    if (activeTab === 'toolkits') {
+      return kitItems.filter((item) => (
+        matchesQuery(item, kitQuery)
+        && (kitScopeFilter === '全部' || kitScopeFilterLabel(item) === kitScopeFilter)
+      )).sort(compareKitItems);
+    }
+    if (activeTab === 'audit') {
+      return auditItems.filter((item) => matchesQuery(item, auditQuery) && matchesAuditFilter(item, auditTierFilter));
     }
     return overviewItems;
-  }, [activeTab, agentItems, auditItems, auditQuery, auditTierFilter, extensionAgentFilter, extensionItems, extensionQuery, extensionSourceFilter, extensionTypeFilter, kitItems, overviewItems, projectItems]);
+  }, [activeTab, agentItems, auditItems, auditQuery, auditTierFilter, extensionAgentFilter, extensionItems, extensionQuery, extensionSourceFilter, extensionTypeFilter, kitItems, kitQuery, kitScopeFilter, overviewItems, projectItems]);
 
   const counts = useMemo(() => Object.fromEntries(NAV_ITEMS.map((item) => [item.id,
     item.id === 'agents' ? agentItems.length
       : item.id === 'extensions' ? extensionItems.length
         : item.id === 'projects' ? projectItems.length
           : item.id === 'toolkits' ? kitItems.length
+            : item.id === 'audit' ? auditItems.length
           : createVisibleItems(snapshot, item).length
-  ])), [agentItems.length, extensionItems.length, kitItems.length, projectItems.length, snapshot]);
+  ])), [agentItems.length, auditItems.length, extensionItems.length, kitItems.length, projectItems.length, snapshot]);
 
-  const extensionTypeOptions = uniqueOptions(extensionItems.map((item) => item.typeLabel));
+  const extensionTypeOptions = orderedExtensionTypeOptions(extensionItems.map((item) => item.typeLabel));
   const extensionAgentOptions = uniqueOptions(extensionItems.flatMap((item) => item.agentIds ?? (item.agentId ? [item.agentId] : [])));
   const extensionSourceOptions = uniqueOptions(extensionItems.map((item) => item.source).filter((item): item is string => Boolean(item)));
-  const auditTierOptions = uniqueOptions(auditItems.flatMap((item) => [item.auditLabel, item.severity, item.status.label].filter((value): value is string => Boolean(value))));
+  const auditTierOptions = useMemo(() => auditFilterOptions(auditItems), [auditItems]);
+  const kitScopeOptions = useMemo(() => kitScopeFilterOptions(kitItems), [kitItems]);
+
+  useEffect(() => {
+    if (!auditTierOptions.includes(auditTierFilter)) setAuditTierFilter('全部');
+  }, [auditTierFilter, auditTierOptions]);
+
+  useEffect(() => {
+    if (!kitScopeOptions.includes(kitScopeFilter)) setKitScopeFilter('全部');
+  }, [kitScopeFilter, kitScopeOptions]);
 
   const switchTab = (tab: LocalTab) => {
     onChangeTab(tab);
@@ -250,6 +283,10 @@ export function LocalPage({
     if (typeof document !== 'undefined') {
       document.querySelector('[data-testid="kit-workbench"]')?.scrollIntoView({ block: 'start' });
     }
+  };
+  const clearKitFilters = () => {
+    setKitQuery('');
+    setKitScopeFilter('全部');
   };
 
   return (
@@ -284,8 +321,8 @@ export function LocalPage({
             <h2>{activeNav.label}</h2>
             <span className="meta" data-testid="local-scan-summary">{formatScanSummary(localScanState, localScanSummary, snapshot)}</span>
             <p className="muted">
-              {offline ? '当前离线：新增服务端动作已暂停。' : '在线状态可用；当前展示真实扫描、Path Profile、审计摘要和本地事件。'}
-              {' '}待同步事件 {snapshot.summary.pendingSyncEvents}，失败状态 {snapshot.summary.failureCount}。
+              {offline ? '当前离线：新增服务端动作已暂停。' : '在线状态可用；当前展示真实扫描、Path Profile 和审计摘要。'}
+              {' '}失败状态 {snapshot.summary.failureCount}。
             </p>
             {localAction.text ? <p className="muted" role="status" style={messageStyle(localAction.tone)}>{localAction.text}</p> : null}
           </div>
@@ -310,6 +347,9 @@ export function LocalPage({
           auditQuery={auditQuery}
           auditTierFilter={auditTierFilter}
           auditTierOptions={auditTierOptions}
+          kitQuery={kitQuery}
+          kitScopeFilter={kitScopeFilter}
+          kitScopeOptions={kitScopeOptions}
           kitWorkbenchOpen={kitWorkbenchOpen}
           onExtensionQuery={setExtensionQuery}
           onExtensionTypeFilter={setExtensionTypeFilter}
@@ -317,6 +357,8 @@ export function LocalPage({
           onExtensionSourceFilter={setExtensionSourceFilter}
           onAuditQuery={setAuditQuery}
           onAuditTierFilter={setAuditTierFilter}
+          onKitQuery={setKitQuery}
+          onKitScopeFilter={setKitScopeFilter}
           onToggleKitWorkbench={() => setKitWorkbenchOpen((open) => !open)}
         />
 
@@ -364,9 +406,11 @@ export function LocalPage({
               snapshot={snapshot}
               selectedKitId={selectedKitId}
               workbenchOpen={kitWorkbenchOpen}
+              filterActive={Boolean(kitQuery.trim()) || kitScopeFilter !== '全部'}
               onSelectKit={setSelectedKitId}
               onSelectResource={setSelected}
               onRefreshLocal={onRefreshLocal}
+              onClearFilters={clearKitFilters}
             />
           ) : filteredItems.length === 0 ? (
             <EmptyState title={`暂无${activeNav.label}资源`} message={emptyMessage(activeTab, localScanState, snapshot)} />
@@ -385,7 +429,7 @@ function FilterSelect({ label, value, options, onChange, testId }: { label: stri
   return (
     <label className="local-filter-select">
       <span className="filter-label">{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)} data-testid={testId} disabled={options.length <= 1}>
+      <select className="select local-filter-control" value={value} onChange={(event) => onChange(event.target.value)} data-testid={testId} disabled={options.length <= 1}>
         {options.map((option) => <option key={option} value={option}>{option}</option>)}
       </select>
     </label>
@@ -405,6 +449,9 @@ function LocalTabToolbar({
   auditQuery,
   auditTierFilter,
   auditTierOptions,
+  kitQuery,
+  kitScopeFilter,
+  kitScopeOptions,
   kitWorkbenchOpen,
   onExtensionQuery,
   onExtensionTypeFilter,
@@ -412,6 +459,8 @@ function LocalTabToolbar({
   onExtensionSourceFilter,
   onAuditQuery,
   onAuditTierFilter,
+  onKitQuery,
+  onKitScopeFilter,
   onToggleKitWorkbench
 }: {
   activeTab: LocalTab;
@@ -426,6 +475,9 @@ function LocalTabToolbar({
   auditQuery: string;
   auditTierFilter: string;
   auditTierOptions: string[];
+  kitQuery: string;
+  kitScopeFilter: string;
+  kitScopeOptions: string[];
   kitWorkbenchOpen: boolean;
   onExtensionQuery: (value: string) => void;
   onExtensionTypeFilter: (value: string) => void;
@@ -433,12 +485,13 @@ function LocalTabToolbar({
   onExtensionSourceFilter: (value: string) => void;
   onAuditQuery: (value: string) => void;
   onAuditTierFilter: (value: string) => void;
+  onKitQuery: (value: string) => void;
+  onKitScopeFilter: (value: string) => void;
   onToggleKitWorkbench: () => void;
 }) {
   if (activeTab === 'extensions') {
     return (
       <section className="local-tab-toolbar" data-testid="local-extensions-toolbar" aria-label="扩展页工具栏">
-        <span className="sr-only">类型 智能体 来源</span>
         <SearchControl label="搜索扩展" value={extensionQuery} onChange={onExtensionQuery} />
         <CompactSelect label="类型" value={extensionTypeFilter} options={extensionTypeOptions} onChange={onExtensionTypeFilter} testId="local-extension-type-filter" />
         {extensionAgentOptions.length > 1 ? <CompactSelect label="智能体" value={extensionAgentFilter} options={extensionAgentOptions} onChange={onExtensionAgentFilter} testId="local-extension-agent-filter" /> : null}
@@ -447,10 +500,10 @@ function LocalTabToolbar({
       </section>
     );
   }
-  if (activeTab === 'audit-events') {
+  if (activeTab === 'audit') {
     return (
-      <section className="local-tab-toolbar" data-testid="local-audit-toolbar" aria-label="审计与事件工具栏">
-        <SearchControl label="搜索审计与事件" value={auditQuery} onChange={onAuditQuery} />
+      <section className="local-tab-toolbar" data-testid="local-audit-toolbar" aria-label="审计工具栏">
+        <SearchControl label="搜索审计" value={auditQuery} onChange={onAuditQuery} />
         <CompactSelect label="风险" value={auditTierFilter} options={auditTierOptions} onChange={onAuditTierFilter} testId="local-audit-tier-filter" />
         <span className="meta">{filteredCount} 项</span>
       </section>
@@ -465,11 +518,13 @@ function LocalTabToolbar({
   if (activeTab === 'toolkits') {
     return (
       <section className="local-tab-toolbar" data-testid="local-toolkit-toolbar" aria-label="工具集工具栏">
-        <Button onClick={onToggleKitWorkbench}>{kitWorkbenchOpen ? '收起 Kit 生成与导入' : '展开导入 Kit'}</Button>
+        <Button tone="primary" onClick={onToggleKitWorkbench}>{kitWorkbenchOpen ? '收起新建/导入' : '新建 Kit / 导入'}</Button>
+        <SearchControl label="搜索工具集" value={kitQuery} onChange={onKitQuery} />
+        <CompactSelect label="范围" value={kitScopeFilter} options={kitScopeOptions} onChange={onKitScopeFilter} testId="local-kit-scope-filter" />
         {!kitWorkbenchOpen ? (
           <>
-            <Button onClick={onToggleKitWorkbench}>生成 Kit：从智能体生成</Button>
-            <Button onClick={onToggleKitWorkbench}>生成 Kit：从项目生成</Button>
+            <Button onClick={onToggleKitWorkbench}>编辑候选资源</Button>
+            <Button onClick={onToggleKitWorkbench}>路径导入/导出</Button>
           </>
         ) : null}
         <span className="meta">{filteredCount} 项</span>
@@ -481,9 +536,14 @@ function LocalTabToolbar({
 
 function SearchControl({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
-    <label className="local-filter-select">
+    <label className="local-filter-select local-search-filter">
       <span className="filter-label">{label}</span>
-      <input className="input" type="search" aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} />
+      <span className="local-search-input-wrap">
+        <input className="input local-filter-control" type="search" aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} />
+        {value ? (
+          <button type="button" className="local-search-clear" aria-label={`清空${label}`} onClick={() => onChange('')}>×</button>
+        ) : null}
+      </span>
     </label>
   );
 }
@@ -529,6 +589,93 @@ function VisibleItemsTable({ items, onSelect }: { items: VisibleItem[]; onSelect
   );
 }
 
+function compareAuditFindingsByRisk(left: AuditFindingRecord, right: AuditFindingRecord): number {
+  const rankDiff = auditFindingRiskRank(right) - auditFindingRiskRank(left);
+  if (rankDiff !== 0) return rankDiff;
+  const timeDiff = Date.parse(right.detectedAt) - Date.parse(left.detectedAt);
+  if (Number.isFinite(timeDiff) && timeDiff !== 0) return timeDiff;
+  return NAME_COLLATOR.compare(left.title, right.title);
+}
+
+function auditFindingRiskRank(finding: AuditFindingRecord): number {
+  if (finding.blocker || finding.auditStatus === AuditStatuses.SECURITY_RISK) return 5;
+  if (finding.auditStatus === AuditStatuses.HIGH_RISK) return 4;
+  switch (finding.severity) {
+    case 'critical': return 5;
+    case 'high': return 4;
+    case 'medium': return 3;
+    case 'low': return 2;
+    default: return 1;
+  }
+}
+
+function rowHasAuditEvidence(row: LocalResourceRow): boolean {
+  return row.resource.auditSummary.status !== AuditStatuses.NOT_AUDITED
+    || row.resource.auditSummary.findingCount > 0
+    || (row.findings ?? []).length > 0;
+}
+
+function createAuditItems(snapshot: LocalResourceSnapshot): VisibleItem[] {
+  return (snapshot.rows ?? [])
+    .filter(rowHasAuditEvidence)
+    .map(rowToAuditItem)
+    .sort(compareAuditItemsByRisk);
+}
+
+function rowToAuditItem(row: LocalResourceRow): VisibleItem {
+  const item = rowToItem(row);
+  const summary = row.resource.auditSummary;
+  const findings = row.findings ?? [];
+  const findingCount = summary.findingCount || findings.length;
+  const trustLabel = summary.trustScore === undefined ? undefined : `Trust ${summary.trustScore}`;
+  const countLabel = findingCount > 0 ? `${findingCount} 发现` : undefined;
+  return {
+    ...item,
+    id: `audit:${item.id}`,
+    auditLabel: [auditRiskFilterLabel(item), trustLabel, countLabel].filter(Boolean).join(' / '),
+    updatedAt: latestAuditDetectedAt(row) ?? item.updatedAt
+  };
+}
+
+function compareAuditItemsByRisk(left: VisibleItem, right: VisibleItem): number {
+  const rankDiff = auditItemRiskRank(right) - auditItemRiskRank(left);
+  if (rankDiff !== 0) return rankDiff;
+  const timeDiff = Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? '');
+  if (Number.isFinite(timeDiff) && timeDiff !== 0) return timeDiff;
+  return compareVisibleItemsByName(left, right);
+}
+
+function auditItemRiskRank(item: VisibleItem): number {
+  if (auditRiskFilterLabel(item) === '阻断风险') return 5;
+  if (item.auditStatus === AuditStatuses.HIGH_RISK || item.status.label === '高风险') return 4;
+  if (item.auditStatus === AuditStatuses.NEEDS_REVIEW || item.status.label === '需复核') return 3;
+  if (item.auditStatus === AuditStatuses.LOW_RISK) return 2;
+  if (item.auditStatus === AuditStatuses.SAFE) return 1;
+  return 0;
+}
+
+function auditRiskFilterLabel(item: VisibleItem): typeof AUDIT_FILTER_OPTIONS[number] {
+  if (item.auditStatus === AuditStatuses.SECURITY_RISK || item.status.label === '阻断风险') return '阻断风险';
+  if (item.auditStatus === AuditStatuses.HIGH_RISK || item.status.label === '高风险') return '高风险';
+  if (item.auditStatus === AuditStatuses.NEEDS_REVIEW || item.status.label === '需复核') return '需复核';
+  if (item.auditStatus === AuditStatuses.LOW_RISK) return '低风险';
+  if (item.auditStatus === AuditStatuses.SAFE) return '正常';
+  return '未审计';
+}
+
+function matchesAuditFilter(item: VisibleItem, filter: string): boolean {
+  return filter === '全部' || auditRiskFilterLabel(item) === filter;
+}
+
+function auditFilterOptions(items: VisibleItem[]): string[] {
+  return AUDIT_FILTER_OPTIONS.filter((option) => option === '全部' || items.some((item) => auditRiskFilterLabel(item) === option));
+}
+
+function latestAuditDetectedAt(row: LocalResourceRow): string | undefined {
+  return [...(row.findings ?? [])]
+    .sort((left, right) => Date.parse(right.detectedAt) - Date.parse(left.detectedAt))[0]?.detectedAt;
+}
+
 function LocalOverview({ snapshot, offline, items, onSelectResource }: { snapshot: LocalResourceSnapshot; offline: boolean; items: VisibleItem[]; onSelectResource: (item: VisibleItem) => void }) {
   const agentCount = unique((snapshot.bindings ?? []).flatMap((binding) => binding.agentId ? [binding.agentId] : [])).length
     || (snapshot.resources ?? []).filter((resource) => resource.type === LocalResourceTypes.AGENT).length;
@@ -540,7 +687,8 @@ function LocalOverview({ snapshot, offline, items, onSelectResource }: { snapsho
   const kitCount = (snapshot.resources ?? []).filter((resource) => resource.type === LocalResourceTypes.KIT).length;
   const riskCount = items.filter((item) => item.status.tone === 'danger' || item.auditStatus === AuditStatuses.HIGH_RISK || item.auditStatus === AuditStatuses.SECURITY_RISK).length
     || (snapshot.findings ?? []).filter((finding) => finding.blocker || finding.severity === 'critical' || finding.severity === 'high').length;
-  const recentEvents = (snapshot.events ?? []).slice(0, 5);
+  const auditFindings = [...(snapshot.findings ?? [])].sort(compareAuditFindingsByRisk).slice(0, 6);
+  const auditedCount = (snapshot.rows ?? []).filter((row) => row.resource.auditSummary.status !== AuditStatuses.NOT_AUDITED).length;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }} data-testid="local-overview-summary">
       <section className="panel">
@@ -562,29 +710,29 @@ function LocalOverview({ snapshot, offline, items, onSelectResource }: { snapsho
             <tr>
               <td>风险</td>
               <td>{riskCount}</td>
-              <td>事件</td>
-              <td>{snapshot.summary.eventCount}</td>
+              <td>审计发现</td>
+              <td>{snapshot.findings?.length ?? 0}</td>
             </tr>
             <tr>
               <td>离线状态</td>
               <td>{offline ? '离线' : '在线'}</td>
-              <td>待同步</td>
-              <td>{snapshot.summary.pendingSyncEvents}</td>
+              <td>已审计资源</td>
+              <td>{auditedCount}</td>
             </tr>
           </tbody>
         </table>
       </section>
       <section className="panel">
-        <h3>风险与最近事件</h3>
-        {recentEvents.length === 0 ? <p className="muted">暂无本地事件。</p> : (
+        <h3>审计风险</h3>
+        {auditFindings.length === 0 ? <p className="muted">暂无审计发现。</p> : (
           <table className="table compact-table">
             <tbody>
-              {recentEvents.map((event) => (
-                <tr key={event.eventId}>
-                  <td>{event.eventType}</td>
-                  <td>{event.status}</td>
-                  <td>{event.message}</td>
-                  <td>{compactDate(event.createdAt)}</td>
+              {auditFindings.map((finding) => (
+                <tr key={finding.id}>
+                  <td>{finding.title}</td>
+                  <td>{finding.severity}</td>
+                  <td>{auditStatusLabel(finding.auditStatus)}</td>
+                  <td>{compactDate(finding.detectedAt)}</td>
                 </tr>
               ))}
             </tbody>
@@ -629,7 +777,6 @@ function AgentDashboard({
   const selectedAgent = agentItems.find((item) => item.agentId === (selectedAgentId ?? defaultAgentId)) ?? agentItems[0];
   const detailAgentId = selectedAgent.agentId ?? AGENT_DEFINITIONS[0].id;
   const detailRows = rowsForAgent(snapshot, detailAgentId);
-  const detailEvents = eventsForAgent(snapshot, detailAgentId);
   const definition = definitionForAgent(detailAgentId);
 
   return (
@@ -674,7 +821,6 @@ function AgentDashboard({
           agent={selectedAgent}
           definition={definition}
           rows={detailRows}
-          events={detailEvents}
           snapshot={snapshot}
           activeTab={activeDetailTab}
           settingsConfig={settingsConfig}
@@ -714,6 +860,7 @@ function AgentSelectorList({
               else onSelectResource(item);
             }}
           >
+            <AgentIcon agentId={item.agentId} label={item.name} />
             <span className="agent-selector-main">
               <span className="agent-selector-name">{item.name}</span>
               <span className="agent-selector-meta">{item.agentId ?? item.source ?? 'unknown'} · {item.builtIn ? '内置' : '自定义'}</span>
@@ -726,11 +873,25 @@ function AgentSelectorList({
   );
 }
 
+function AgentIcon({ agentId, label }: { agentId?: string; label: string }) {
+  const iconId = agentId ?? label.toLowerCase();
+  const testId = `agent-icon-${safeId(iconId)}`;
+  return (
+    <span className={`agent-selector-icon agent-selector-icon-${safeId(iconId)}`} data-testid={testId} aria-hidden="true">
+      <span className="agent-icon-letter">{AGENT_ICON_TEXT[iconId] ?? agentIconFallbackText(label)}</span>
+    </span>
+  );
+}
+
+function agentIconFallbackText(label: string): string {
+  const compact = label.trim().replace(/\s+/g, '');
+  return compact.slice(0, 2).toUpperCase() || 'AI';
+}
+
 function AgentTabContent({
   agent,
   definition,
   rows,
-  events,
   snapshot,
   activeTab,
   settingsConfig,
@@ -741,7 +902,6 @@ function AgentTabContent({
   agent: VisibleItem;
   definition?: AgentDefinition;
   rows: LocalResourceRow[];
-  events: LocalEventRecord[];
   snapshot: LocalResourceSnapshot;
   activeTab: AgentDashboardTab;
   settingsConfig: Record<string, unknown>;
@@ -751,16 +911,13 @@ function AgentTabContent({
 }) {
   const tabDefinition = AGENT_DETAIL_TABS.find((tab) => tab.id === activeTab);
   if (activeTab === 'overview') {
-    return <AgentOverview agent={agent} definition={definition} rows={rows} events={events} snapshot={snapshot} settingsConfig={settingsConfig} onSelectResource={onSelectResource} onOpenAgentExtensions={onOpenAgentExtensions} onRefreshLocal={onRefreshLocal} />;
+    return <AgentOverview agent={agent} definition={definition} rows={rows} snapshot={snapshot} settingsConfig={settingsConfig} onSelectResource={onSelectResource} onOpenAgentExtensions={onOpenAgentExtensions} onRefreshLocal={onRefreshLocal} />;
   }
   if (activeTab === 'files') {
     return <AgentFilesTable rows={rows} onSelectResource={onSelectResource} />;
   }
-  if (activeTab === 'events') {
-    return <AgentEventsTable events={events} onSelectResource={onSelectResource} />;
-  }
   if (activeTab === 'audit') {
-    const auditRows = rows.filter((row) => row.resource.auditSummary.status !== AuditStatuses.NOT_AUDITED || row.events.some((event) => event.eventType.includes('AUDIT') || event.status === 'failure'));
+    const auditRows = rows.filter(rowHasAuditEvidence);
     return <AgentRowsTable rows={auditRows.length > 0 ? auditRows : rows} emptyTitle="暂无审计记录" emptyMessage="该智能体当前没有审计发现；未审计状态会保持可见，不会默认正常。" onSelectResource={onSelectResource} />;
   }
   const resourceTypes = (tabDefinition && 'resourceTypes' in tabDefinition ? tabDefinition.resourceTypes : undefined) as readonly LocalResourceType[] | undefined;
@@ -779,7 +936,6 @@ function AgentOverview({
   agent,
   definition,
   rows,
-  events,
   snapshot,
   settingsConfig,
   onSelectResource,
@@ -789,7 +945,6 @@ function AgentOverview({
   agent: VisibleItem;
   definition?: AgentDefinition;
   rows: LocalResourceRow[];
-  events: LocalEventRecord[];
   snapshot: LocalResourceSnapshot;
   settingsConfig: Record<string, unknown>;
   onSelectResource: (item: VisibleItem) => void;
@@ -805,7 +960,7 @@ function AgentOverview({
   const capabilityStatus = asRecord(profile?.capabilityStatus);
   const auditSummary = summarizeAudit(rows);
   const permissionSummary = summarizePermissions(rows);
-  const recentEvents = events.slice(0, 4);
+  const findingCount = rows.reduce((count, row) => count + row.resource.auditSummary.findingCount, 0);
   const hasConfiguredCustomProfile = Boolean(configuredProfile) || (!definition?.builtIn && Boolean(agentResource?.metadata.customProfileConfigured ?? rows.some((row) => row.resource.type !== LocalResourceTypes.AGENT)));
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
 
@@ -815,6 +970,12 @@ function AgentOverview({
         rows={rows}
         agentId={detailAgentId}
         onOpenAgentExtensions={onOpenAgentExtensions}
+      />
+
+      <AgentConfigBrowser
+        rows={rows}
+        onSelectResource={onSelectResource}
+        onRefreshLocal={onRefreshLocal}
       />
 
       <table className="table compact-table" data-testid="agent-overview-matrix">
@@ -834,8 +995,8 @@ function AgentOverview({
           <tr>
             <td>审计摘要</td>
             <td>{auditSummary}</td>
-            <td>最近事件</td>
-            <td>{recentEvents.length > 0 ? `${recentEvents.length} 条配置事件` : '暂无事件'}</td>
+            <td>审计发现</td>
+            <td>{findingCount}</td>
           </tr>
           <tr>
             <td>Path Profile</td>
@@ -896,11 +1057,6 @@ function AgentOverview({
         <h3>最近资源</h3>
         <AgentRowsTable rows={rows.slice(0, 5)} emptyTitle="暂无智能体资源" emptyMessage="该智能体尚未扫描到配置、规则、扩展或文件。" onSelectResource={onSelectResource} />
       </div>
-
-      <div>
-        <h3>最近事件</h3>
-        <AgentEventsTable events={recentEvents} onSelectResource={onSelectResource} />
-      </div>
     </div>
   );
 }
@@ -938,6 +1094,200 @@ function AgentExtensionSummary({
   );
 }
 
+export type AgentConfigEntry = {
+  id: string;
+  row: LocalResourceRow;
+  file?: FileBackedResource;
+  title: string;
+  path?: string;
+};
+
+function AgentConfigBrowser({
+  rows,
+  onSelectResource,
+  onRefreshLocal
+}: {
+  rows: LocalResourceRow[];
+  onSelectResource: (item: VisibleItem) => void;
+  onRefreshLocal?: () => void;
+}) {
+  const [sectionOverrides, setSectionOverrides] = useState<Record<string, boolean>>({});
+  const [expandedEntries, setExpandedEntries] = useState<Record<string, boolean>>({});
+  const [pathChecks, setPathChecks] = useState<Record<string, { busy: boolean; tone: UiMessageTone; text?: string }>>({});
+  const [previews, setPreviews] = useState<Record<string, { busy: boolean; tone: UiMessageTone; text?: string; content?: string }>>({});
+  const sectionsWithEntries = AGENT_CONFIG_BROWSER_SECTIONS.map((section) => ({
+    section,
+    entries: agentConfigEntriesForSection(rows, section)
+  })).filter(({ entries }) => entries.length > 0);
+  const browserCounts = agentConfigBrowserCounts(sectionsWithEntries.flatMap(({ entries }) => entries));
+
+  const toggleSection = (sectionId: string, baseExpanded: boolean) => {
+    setSectionOverrides((current) => ({ ...current, [sectionId]: !(current[sectionId] ?? baseExpanded) }));
+  };
+  const toggleEntry = (entryId: string) => {
+    setExpandedEntries((current) => ({ ...current, [entryId]: !current[entryId] }));
+  };
+  const checkEntryPath = async (entry: AgentConfigEntry) => {
+    if (!agentConfigEntryCanCheck(entry)) return;
+    setPathChecks((current) => ({ ...current, [entry.id]: { busy: true, tone: 'info', text: '正在检查真实路径状态。' } }));
+    try {
+      const result = await desktopApi.local.checkPath(agentConfigEntryPayload(entry)) as { pathStatus: string; message: string; drifted?: boolean };
+      setPathChecks((current) => ({
+        ...current,
+        [entry.id]: {
+          busy: false,
+          tone: result.pathStatus === PathStatuses.OK ? 'success' : 'error',
+          text: `${result.message}${result.drifted ? ' 检测到 Hash 漂移。' : ''}`
+        }
+      }));
+      onRefreshLocal?.();
+    } catch (error) {
+      setPathChecks((current) => ({
+        ...current,
+        [entry.id]: { busy: false, tone: 'error', text: error instanceof Error ? error.message : '路径检查失败' }
+      }));
+    }
+  };
+  const previewEntryFile = async (entry: AgentConfigEntry) => {
+    if (!agentConfigEntryCanPreview(entry)) return;
+    setPreviews((current) => ({ ...current, [entry.id]: { busy: true, tone: 'info', text: '正在读取本地文件预览。' } }));
+    try {
+      const result = await desktopApi.local.previewFile(agentConfigEntryPayload(entry)) as { previewAvailable: boolean; redactedContent?: string; failureReason?: string; suggestion?: string; contentType?: string; size?: number };
+      setPreviews((current) => ({
+        ...current,
+        [entry.id]: result.previewAvailable
+          ? {
+            busy: false,
+            tone: 'success',
+            text: `文件预览已脱敏：${result.contentType ?? entry.file?.contentType ?? 'text'} / ${result.size ?? entry.file?.size ?? 0} bytes。`,
+            content: result.redactedContent ?? ''
+          }
+          : {
+            busy: false,
+            tone: 'error',
+            text: `${result.failureReason ?? '文件预览不可用'}${result.suggestion ? ` ${result.suggestion}` : ''}`
+          }
+      }));
+      onRefreshLocal?.();
+    } catch (error) {
+      setPreviews((current) => ({
+        ...current,
+        [entry.id]: { busy: false, tone: 'error', text: error instanceof Error ? error.message : '文件预览失败' }
+      }));
+    }
+  };
+
+  return (
+    <section className="agent-config-browser" data-testid="agent-config-browser">
+      <header className="section-header">
+        <div>
+          <h3>配置文件浏览</h3>
+          <p className="muted">{browserCounts.entryCount} 条目 / {browserCounts.fileCount} 文件</p>
+        </div>
+      </header>
+      <div className="agent-config-sections">
+        {sectionsWithEntries.length === 0 ? <p className="agent-config-empty">未检测到可浏览的智能体配置文件。</p> : sectionsWithEntries.map(({ section, entries }) => {
+          const expanded = sectionOverrides[section.id] ?? entries.length > 0;
+          return (
+            <section className="agent-config-section" key={section.id} data-testid={`agent-config-section-${section.id}`}>
+              <button
+                type="button"
+                className="agent-config-section-header"
+                aria-expanded={expanded}
+                onClick={() => toggleSection(section.id, entries.length > 0)}
+              >
+                <span className="agent-config-chevron">{expanded ? '⌄' : '›'}</span>
+                <strong>{section.label}</strong>
+                <span className="pill">{entries.length}</span>
+              </button>
+              {expanded ? (
+                <div className="agent-config-entry-list">
+                  {entries.map((entry) => {
+                    const entryExpanded = Boolean(expandedEntries[entry.id]);
+                    return (
+                      <AgentConfigEntryRow
+                        key={entry.id}
+                        entry={entry}
+                        expanded={entryExpanded}
+                        pathCheck={pathChecks[entry.id]}
+                        preview={previews[entry.id]}
+                        onToggle={() => toggleEntry(entry.id)}
+                        onSelectResource={onSelectResource}
+                        onCheckPath={() => checkEntryPath(entry)}
+                        onPreviewFile={() => previewEntryFile(entry)}
+                      />
+                    );
+                  })}
+                </div>
+              ) : null}
+            </section>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+export function AgentConfigEntryRow({
+  entry,
+  expanded,
+  pathCheck,
+  preview,
+  onToggle,
+  onSelectResource,
+  onCheckPath,
+  onPreviewFile
+}: {
+  entry: AgentConfigEntry;
+  expanded: boolean;
+  pathCheck?: { busy: boolean; tone: UiMessageTone; text?: string };
+  preview?: { busy: boolean; tone: UiMessageTone; text?: string; content?: string };
+  onToggle: () => void;
+  onSelectResource: (item: VisibleItem) => void;
+  onCheckPath: () => void;
+  onPreviewFile: () => void;
+}) {
+  const canCheck = agentConfigEntryCanCheck(entry);
+  const canPreview = agentConfigEntryCanPreview(entry);
+  const detailItem = entry.file ? fileToItem(entry.file, entry.row) : rowToItem(entry.row);
+  const pathActionTitle = canCheck ? '真实读取绑定路径状态并记录检查结果' : '需要本地资源绑定后才能检查路径';
+  const previewActionTitle = canPreview ? '真实读取绑定文件并脱敏展示' : '需要本地资源绑定和可预览文件';
+  return (
+    <div className="agent-config-entry" data-testid={`agent-config-entry-${safeId(entry.id)}`}>
+      <button
+        type="button"
+        className="agent-config-entry-main"
+        aria-expanded={expanded}
+        onClick={onToggle}
+      >
+        <span className="agent-config-chevron">{expanded ? '⌄' : '›'}</span>
+        <span className="agent-config-entry-title">{entry.title}</span>
+        <span className="scope-pill">{entry.row.scopeLabel}</span>
+        <span className="agent-config-entry-path">{entry.path ?? '未绑定路径'}</span>
+        <StatusBadge tone={entry.row.status.tone}>{entry.row.status.label}</StatusBadge>
+        <span className="agent-config-entry-size">{entry.file ? fileSizeLabel(entry.file.size) : localResourceTypeLabel(entry.row.resource.type)}</span>
+      </button>
+      {expanded ? (
+        <div className="agent-config-entry-detail">
+          <div className="agent-config-entry-meta">
+            <DetailLine label="权限" value={entry.row.resource.permissionSummary.label || '未声明'} />
+            <DetailLine label="审计" value={auditStatusLabel(entry.row.resource.auditSummary.status)} />
+            <DetailLine label="Hash" value={entry.file?.currentHash ?? entry.file?.lastKnownHash ?? entry.row.binding?.currentHash ?? entry.row.resource.sha256} />
+          </div>
+          <div className="card-action-row">
+            <Button onClick={() => onSelectResource(detailItem)}>打开详情</Button>
+            <Button disabled={!canCheck || pathCheck?.busy} title={pathActionTitle} onClick={onCheckPath}>{pathCheck?.busy ? '检查中' : '检查路径'}</Button>
+            <Button disabled={!canPreview || preview?.busy} title={previewActionTitle} onClick={onPreviewFile}>{preview?.busy ? '预览中' : '读取脱敏预览'}</Button>
+          </div>
+          {pathCheck?.text ? <p className="muted" style={messageStyle(pathCheck.tone)} role="status">{pathCheck.text}</p> : null}
+          {preview?.text ? <p className="muted" style={messageStyle(preview.tone)} role="status">{preview.text}</p> : null}
+          {preview?.content !== undefined ? <pre className="agent-config-preview">{preview.content}</pre> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function AgentRowsTable({ rows, emptyTitle, emptyMessage, onSelectResource }: { rows: LocalResourceRow[]; emptyTitle: string; emptyMessage: string; onSelectResource: (item: VisibleItem) => void }) {
   if (rows.length === 0) return <EmptyState title={emptyTitle} message={emptyMessage} />;
   return <VisibleItemsTable items={rows.map(rowToItem)} onSelect={onSelectResource} />;
@@ -949,13 +1299,6 @@ function AgentFilesTable({ rows, onSelectResource }: { rows: LocalResourceRow[];
     return <EmptyState title="暂无文件资源" message="未扫描到可预览文件；目录缺失、权限不足或不适用会保持明确状态。" />;
   }
   return <VisibleItemsTable items={fileItems} onSelect={onSelectResource} />;
-}
-
-function AgentEventsTable({ events, onSelectResource }: { events: LocalEventRecord[]; onSelectResource: (item: VisibleItem) => void }) {
-  if (events.length === 0) {
-    return <EmptyState title="暂无事件" message="该智能体没有统一 LocalEvent 记录；Hook 和 CLI 只展示配置事件，不展示运行时触发或调用事件。" />;
-  }
-  return <VisibleItemsTable items={events.map(eventToItem)} onSelect={onSelectResource} />;
 }
 
 function ProjectPage({
@@ -985,7 +1328,6 @@ function ProjectPage({
   const selectedProject = projectItems.find((item) => item.projectId === selectedProjectId) ?? projectItems[0];
   const projectId = selectedProject.projectId ?? selectedProject.row?.binding?.projectId ?? selectedProject.row?.resource.sourceId ?? selectedProject.id;
   const projectRows = rowsForProject(snapshot, projectId);
-  const projectEvents = eventsForProject(snapshot, projectId);
 
   return (
     <div className="local-split-layout" data-testid="project-page">
@@ -1026,7 +1368,6 @@ function ProjectPage({
           project={selectedProject}
           projectId={projectId}
           rows={projectRows}
-          events={projectEvents}
           snapshot={snapshot}
           activeTab={activeDetailTab}
           onSelectResource={onSelectResource}
@@ -1041,7 +1382,6 @@ function ProjectTabContent({
   project,
   projectId,
   rows,
-  events,
   snapshot,
   activeTab,
   onSelectResource,
@@ -1050,22 +1390,16 @@ function ProjectTabContent({
   project: VisibleItem;
   projectId: string;
   rows: LocalResourceRow[];
-  events: LocalEventRecord[];
   snapshot: LocalResourceSnapshot;
   activeTab: ProjectDetailTab;
   onSelectResource: (item: VisibleItem) => void;
   onRefreshLocal?: () => void;
 }) {
   if (activeTab === 'overview') {
-    return <ProjectOverview project={project} projectId={projectId} rows={rows} events={events} snapshot={snapshot} onSelectResource={onSelectResource} onRefreshLocal={onRefreshLocal} />;
-  }
-  if (activeTab === 'events') {
-    return events.length === 0
-      ? <EmptyState title="暂无项目事件" message="该项目没有本地事件；路径异常、删除尝试、Kit 应用和写入失败会进入 LocalEvent。" />
-      : <VisibleItemsTable items={events.map(eventToItem)} onSelect={onSelectResource} />;
+    return <ProjectOverview project={project} projectId={projectId} rows={rows} snapshot={snapshot} onSelectResource={onSelectResource} onRefreshLocal={onRefreshLocal} />;
   }
   if (activeTab === 'audit') {
-    const auditRows = rows.filter((row) => row.resource.auditSummary.status !== AuditStatuses.NOT_AUDITED || row.events.some((event) => event.eventType.includes('AUDIT') || event.status === 'failure'));
+    const auditRows = rows.filter(rowHasAuditEvidence);
     return <AgentRowsTable rows={auditRows.length > 0 ? auditRows : rows.filter((row) => row.resource.type !== LocalResourceTypes.PROJECT)} emptyTitle="暂无项目审计" emptyMessage="未审计状态保持可见，不会默认显示为正常。" onSelectResource={onSelectResource} />;
   }
   if (activeTab === 'agents') {
@@ -1103,7 +1437,6 @@ function ProjectOverview({
   project,
   projectId,
   rows,
-  events,
   snapshot,
   onSelectResource,
   onRefreshLocal
@@ -1111,7 +1444,6 @@ function ProjectOverview({
   project: VisibleItem;
   projectId: string;
   rows: LocalResourceRow[];
-  events: LocalEventRecord[];
   snapshot: LocalResourceSnapshot;
   onSelectResource: (item: VisibleItem) => void;
   onRefreshLocal?: () => void;
@@ -1120,7 +1452,7 @@ function ProjectOverview({
   const associatedRows = rows.filter((row) => row.resource.type !== LocalResourceTypes.PROJECT);
   const agents = unique(associatedRows.map((row) => row.binding?.agentId).filter((value): value is string => Boolean(value)));
   const auditRisk = summarizeAudit(associatedRows.length > 0 ? associatedRows : rows);
-  const pendingEvents = events.filter((event) => event.syncStatus === SyncStatuses.PENDING_SYNC);
+  const findingCount = associatedRows.reduce((count, row) => count + row.resource.auditSummary.findingCount, 0);
   const blockers = projectRemovalBlockers(rows);
   const pathStatus = projectRow?.binding?.pathStatus;
   const pathMissing = pathStatus === PathStatuses.MISSING || pathStatus === PathStatuses.INVALID || pathStatus === PathStatuses.NOT_WRITABLE || pathStatus === PathStatuses.CONFLICT;
@@ -1161,12 +1493,8 @@ function ProjectOverview({
           <tr>
             <td>审计风险</td>
             <td>{auditRisk}</td>
-            <td>待同步事件</td>
-            <td>{pendingEvents.length}</td>
-          </tr>
-          <tr>
-            <td>最近事件</td>
-            <td colSpan={3}>{events.length > 0 ? `${events.slice(0, 3).map((event) => event.eventType).join(' / ')}` : '暂无事件'}</td>
+            <td>审计发现</td>
+            <td>{findingCount}</td>
           </tr>
         </tbody>
       </table>
@@ -1221,48 +1549,183 @@ function ToolkitPage({
   snapshot,
   selectedKitId,
   workbenchOpen,
+  filterActive,
   onSelectKit,
   onSelectResource,
-  onRefreshLocal
+  onRefreshLocal,
+  onClearFilters
 }: {
   kitItems: VisibleItem[];
   snapshot: LocalResourceSnapshot;
   selectedKitId?: string;
   workbenchOpen: boolean;
+  filterActive: boolean;
   onSelectKit: (kitId: string) => void;
   onSelectResource: (item: VisibleItem) => void;
   onRefreshLocal?: () => void;
+  onClearFilters: () => void;
 }) {
+  const [selectedKitIds, setSelectedKitIds] = useState<string[]>([]);
+  const [dialog, setDialog] = useState<KitDialogState>();
   const selectedKit = kitItems.find((item) => item.kitId === selectedKitId) ?? kitItems[0];
   const manifest = selectedKit ? extractKitManifest(selectedKit.row?.resource.metadata) : undefined;
   const compactKitActions = compactKitActionSummary(snapshot, manifest);
+  const selectedManifests = kitItems
+    .filter((item) => item.kitId && selectedKitIds.includes(item.kitId))
+    .flatMap((item) => {
+      const candidate = extractKitManifest(item.row?.resource.metadata);
+      return candidate ? [candidate] : [];
+    });
+  const closeDialog = () => setDialog(undefined);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }} data-testid="toolkit-page">
-      {workbenchOpen ? <KitWorkbench snapshot={snapshot} selectedManifest={manifest} onRefreshLocal={onRefreshLocal} /> : compactKitActions ? <p className="muted">{compactKitActions}</p> : null}
+      {workbenchOpen ? (
+        <KitWorkbench snapshot={snapshot} selectedManifest={manifest} onRefreshLocal={onRefreshLocal} />
+      ) : compactKitActions ? <p className="muted">{compactKitActions}</p> : null}
       {kitItems.length === 0 ? (
-        <EmptyState title="暂无工具集资源" message="没有符合当前页面和筛选条件的真实本地资源；可通过上方 Kit 生成与导入操作展开真实 IPC 导入入口。" />
+        <section className="panel kit-empty-state" data-testid="kit-empty-state">
+          <EmptyState title={filterActive ? '没有匹配的工具集' : '暂无工具集资源'} message={filterActive ? '当前搜索或范围筛选没有匹配任何 Kit。' : '没有符合当前页面的真实本地资源；可通过上方新建/导入入口创建 KitManifest。'} />
+          {filterActive ? <Button onClick={onClearFilters}>清空筛选</Button> : null}
+        </section>
       ) : (
         <>
-          <VisibleItemsTable
-            items={kitItems}
-            onSelect={(item) => {
-              if (item.kitId) onSelectKit(item.kitId);
-              else onSelectResource(item);
-            }}
+          <KitSelectionBar
+            selectedManifests={selectedManifests}
+            onClear={() => setSelectedKitIds([])}
+            onBatchInstall={() => setDialog({ type: 'batch-install', manifests: selectedManifests })}
           />
-          {manifest && selectedKit ? (
-            <KitDetail
-              item={selectedKit}
-              manifest={manifest}
+          <div className="kit-page-layout">
+            <KitFolderGrid
+              kitItems={kitItems}
+              selectedKitId={selectedKit?.kitId}
+              selectedKitIds={selectedKitIds}
               snapshot={snapshot}
-              onSelectResource={onSelectResource}
+              onSelectKit={(kitId) => {
+                onSelectKit(kitId);
+              }}
+              onToggleKit={(kitId) => setSelectedKitIds((current) => current.includes(kitId) ? current.filter((id) => id !== kitId) : [...current, kitId])}
             />
-          ) : (
-            <EmptyState title="Kit manifest 缺失" message="当前记录没有有效 KitManifest；不会作为工具集运行路径处理。" />
-          )}
+            {manifest && selectedKit ? (
+              <KitDetail
+                item={selectedKit}
+                manifest={manifest}
+                snapshot={snapshot}
+                onSelectResource={onSelectResource}
+                onEdit={() => setDialog({ type: 'edit', manifest })}
+                onExport={() => setDialog({ type: 'export', manifest })}
+                onInstall={() => setDialog({ type: 'install', manifest })}
+                onRemove={() => setDialog({ type: 'remove', manifest })}
+                onDelete={() => setDialog({ type: 'delete', manifest })}
+              />
+            ) : (
+              <EmptyState title="Kit manifest 缺失" message="当前记录没有有效 KitManifest；不会作为工具集运行路径处理。" />
+            )}
+          </div>
+          {dialog?.type === 'edit' ? (
+            <KitEditorDialog snapshot={snapshot} manifest={dialog.manifest} onClose={closeDialog} onRefreshLocal={onRefreshLocal} />
+          ) : null}
+          {dialog?.type === 'install' ? (
+            <KitInstallDialog snapshot={snapshot} manifests={[dialog.manifest]} onClose={closeDialog} onRefreshLocal={onRefreshLocal} />
+          ) : null}
+          {dialog?.type === 'batch-install' ? (
+            <KitInstallDialog snapshot={snapshot} manifests={dialog.manifests} onClose={closeDialog} onRefreshLocal={onRefreshLocal} />
+          ) : null}
+          {dialog?.type === 'remove' ? (
+            <KitRemoveDialog snapshot={snapshot} manifest={dialog.manifest} onClose={closeDialog} onRefreshLocal={onRefreshLocal} />
+          ) : null}
+          {dialog?.type === 'delete' ? (
+            <KitDeleteDialog snapshot={snapshot} manifest={dialog.manifest} onClose={closeDialog} onRefreshLocal={onRefreshLocal} />
+          ) : null}
+          {dialog?.type === 'export' ? (
+            <KitExportDialog manifest={dialog.manifest} onClose={closeDialog} onRefreshLocal={onRefreshLocal} />
+          ) : null}
         </>
       )}
     </div>
+  );
+}
+
+type KitDialogState =
+  | { type: 'edit'; manifest?: KitManifest }
+  | { type: 'install'; manifest: KitManifest }
+  | { type: 'batch-install'; manifests: KitManifest[] }
+  | { type: 'remove'; manifest: KitManifest }
+  | { type: 'delete'; manifest: KitManifest }
+  | { type: 'export'; manifest: KitManifest };
+
+function KitSelectionBar({
+  selectedManifests,
+  onClear,
+  onBatchInstall
+}: {
+  selectedManifests: KitManifest[];
+  onClear: () => void;
+  onBatchInstall: () => void;
+}) {
+  if (selectedManifests.length === 0) return null;
+  const resourceCount = selectedManifests.reduce((sum, manifest) => sum + manifest.resources.length, 0);
+  return (
+    <section className="kit-selection-bar" data-testid="kit-selection-bar" aria-label="已选择工具集">
+      <span>{selectedManifests.length} 个 Kit 已选择</span>
+      <span className="meta">{resourceCount} 个资源将进入批量安装预览</span>
+      <Button tone="primary" onClick={onBatchInstall}>批量安装</Button>
+      <Button tone="ghost" onClick={onClear}>清空选择</Button>
+    </section>
+  );
+}
+
+function KitFolderGrid({
+  kitItems,
+  selectedKitId,
+  selectedKitIds,
+  snapshot,
+  onSelectKit,
+  onToggleKit
+}: {
+  kitItems: VisibleItem[];
+  selectedKitId?: string;
+  selectedKitIds: string[];
+  snapshot: LocalResourceSnapshot;
+  onSelectKit: (kitId: string) => void;
+  onToggleKit: (kitId: string) => void;
+}) {
+  return (
+    <section className="kit-folder-grid" data-testid="kit-folder-grid" aria-label="工具集文件夹">
+      {kitItems.map((item) => {
+        const manifest = extractKitManifest(item.row?.resource.metadata);
+        if (!manifest || !item.kitId) return null;
+        const metrics = kitManifestMetrics(snapshot, manifest);
+        const selected = selectedKitId === item.kitId;
+        const checked = selectedKitIds.includes(item.kitId);
+        return (
+          <article key={item.id} className={`kit-folder-card ${selected ? 'active' : ''}`} data-testid={`kit-card-${safeId(item.kitId)}`}>
+            <div className="kit-folder-card-top">
+              <label className="kit-card-check" aria-label={`选择 ${manifest.name}`}>
+                <input type="checkbox" checked={checked} onChange={() => onToggleKit(item.kitId as string)} />
+              </label>
+              <button type="button" className="kit-folder-open" onClick={() => onSelectKit(item.kitId as string)}>
+                <span className="kit-folder-icon" aria-hidden="true">KIT</span>
+                <span>
+                  <strong>{manifest.name}</strong>
+                  <small>{manifest.kitId}</small>
+                </span>
+              </button>
+            </div>
+            <p className="muted">{manifest.description || '暂无描述'}</p>
+            <div className="kit-card-tags" aria-label="工具集资源统计">
+              <span>{manifest.resources.length} 资源</span>
+              <span>{metrics.skillCount} Skill</span>
+              <span>{metrics.mcpCount} MCP</span>
+              <span>{metrics.configCount} Config</span>
+            </div>
+            <div className="kit-card-footer">
+              <StatusBadge tone={item.status.tone}>{item.status.label}</StatusBadge>
+              <span className="meta">{kitScopeFilterLabel(item)} · v{manifest.version}</span>
+            </div>
+          </article>
+        );
+      })}
+    </section>
   );
 }
 
@@ -1273,6 +1736,252 @@ function compactKitActionSummary(snapshot: LocalResourceSnapshot, manifest?: Kit
     agentId ? `默认智能体生成 ID：kit.${agentId}` : undefined,
     projectId ? `默认项目生成 ID：kit.${projectId}` : undefined
   ].filter(Boolean).join('；');
+}
+
+function kitScopeFilterLabel(item: VisibleItem): string {
+  if (item.status.key === 'kit_unapplied' || item.scopeLabel === '未应用') return '未应用';
+  const hasAgent = (item.agentIds ?? []).length > 0 || Boolean(item.agentId);
+  const hasProject = (item.projectIds ?? []).length > 0 || Boolean(item.projectId);
+  if (hasAgent && hasProject) return '智能体+项目';
+  if (hasProject) return '项目';
+  if (hasAgent) return '智能体';
+  return '本地';
+}
+
+function kitScopeFilterOptions(items: VisibleItem[]): string[] {
+  return ['全部', ...Array.from(new Set(items.map(kitScopeFilterLabel)))];
+}
+
+function compareKitItems(left: VisibleItem, right: VisibleItem): number {
+  const statusDiff = kitStatusRank(right) - kitStatusRank(left);
+  if (statusDiff !== 0) return statusDiff;
+  return compareVisibleItemsByName(left, right);
+}
+
+function kitStatusRank(item: VisibleItem): number {
+  if (item.status.tone === 'danger') return 5;
+  if (item.status.label === '授权收缩') return 4;
+  if (item.status.label === 'Hash 异常') return 3;
+  if (item.status.label === '未应用') return 2;
+  return 1;
+}
+
+function kitManifestMetrics(snapshot: LocalResourceSnapshot, manifest: KitManifest): { skillCount: number; mcpCount: number; configCount: number } {
+  const skillCount = manifest.resources.filter((ref) => ref.resourceType === LocalResourceTypes.SKILL).length;
+  const mcpCount = manifest.resources.filter((ref) => ref.resourceType === LocalResourceTypes.MCP_SERVER).length;
+  const configTypes = new Set<KitResourceKind>([LocalResourceTypes.RULE, LocalResourceTypes.MEMORY, LocalResourceTypes.AGENT_CONFIG, LocalResourceTypes.SUBAGENT, LocalResourceTypes.IGNORE_FILE]);
+  const configCount = manifest.resources.filter((ref) => configTypes.has(ref.resourceType)).length;
+  const resolved = rowsForKitResources(snapshot, manifest).length;
+  return { skillCount, mcpCount, configCount: configCount || Math.max(0, resolved - skillCount - mcpCount) };
+}
+
+function kitEditorCandidates(snapshot: LocalResourceSnapshot, tab: KitEditorTab): KitEditorCandidate[] {
+  const allowed = tab === 'skills'
+    ? new Set<LocalResourceType>([LocalResourceTypes.SKILL, LocalResourceTypes.PLUGIN, LocalResourceTypes.HOOK, LocalResourceTypes.CLI_COMMAND])
+    : tab === 'mcp'
+      ? new Set<LocalResourceType>([LocalResourceTypes.MCP_SERVER])
+      : new Set<LocalResourceType>([LocalResourceTypes.RULE, LocalResourceTypes.MEMORY, LocalResourceTypes.AGENT_CONFIG, LocalResourceTypes.SUBAGENT, LocalResourceTypes.IGNORE_FILE]);
+  const seen = new Set<string>();
+  return (snapshot.rows ?? [])
+    .filter((row) => allowed.has(row.resource.type))
+    .flatMap((row) => {
+      const refId = kitRefIdForRow(row);
+      if (seen.has(refId)) return [];
+      seen.add(refId);
+      return [{
+        refId,
+        row,
+        title: row.resource.displayName || row.resource.name,
+        subtitle: [localResourceTypeLabel(row.resource.type), row.binding?.agentId, row.binding?.projectId, row.binding?.targetPath ?? row.resource.sourcePath].filter(Boolean).join(' / ')
+      }];
+    })
+    .sort((left, right) => NAME_COLLATOR.compare(left.title, right.title));
+}
+
+function buildKitManifestFromSelection(input: {
+  snapshot: LocalResourceSnapshot;
+  existing?: KitManifest;
+  kitId: string;
+  name: string;
+  version: string;
+  description?: string;
+  selectedResourceIds: string[];
+}): KitManifest {
+  const candidates = new Map<string, LocalResourceRow>();
+  for (const tab of KIT_EDITOR_TABS) {
+    for (const candidate of kitEditorCandidates(input.snapshot, tab.id)) {
+      candidates.set(candidate.refId, candidate.row);
+    }
+  }
+  const resources = input.selectedResourceIds.flatMap((refId) => {
+    const row = candidates.get(refId) ?? input.snapshot.rows.find((candidate) => kitRefIdForRow(candidate) === refId);
+    return row && isKitResourceKind(row.resource.type) ? [kitResourceRefFromRow(row)] : [];
+  });
+  const rows = resources.flatMap((ref) => {
+    const row = resolveKitResourceRow(input.snapshot, ref);
+    return row ? [row] : [];
+  });
+  const resourceHashes = Object.fromEntries(resources.flatMap((ref) => {
+    const row = resolveKitResourceRow(input.snapshot, ref);
+    const hash = row?.resource.sha256 ?? row?.resource.packageHash;
+    return hash ? [[ref.refId, hash]] : [];
+  }));
+  return {
+    kitId: input.kitId,
+    name: input.name,
+    version: input.version,
+    description: input.description,
+    sourceType: input.existing?.sourceType ?? 'local',
+    createdAt: input.existing?.createdAt ?? new Date().toISOString(),
+    supportedAgents: unique(rows.map((row) => row.binding?.agentId).filter((value): value is string => Boolean(value))),
+    supportedPlatforms: input.existing?.supportedPlatforms ?? ['macos'],
+    resources,
+    permissionSummary: rows.length > 0 ? mergePermissionSummary(rows) : createEmptyPermissionSummary('未声明'),
+    auditSummary: rows.length > 0 ? mergeAuditSummary(rows) : createNotAuditedSummary(),
+    requiredAuthorizations: input.existing?.requiredAuthorizations ?? [],
+    resourceHashes,
+    dependencies: input.existing?.dependencies ?? [],
+    conflictPolicy: input.existing?.conflictPolicy ?? 'prompt',
+    rollbackPolicy: input.existing?.rollbackPolicy ?? 'best-effort',
+    metadata: {
+      ...(input.existing?.metadata ?? {}),
+      editedFromLocalPage: true,
+      editorResourceCount: resources.length
+    }
+  };
+}
+
+function kitRefIdForRow(row: LocalResourceRow): string {
+  return `${row.resource.type}:${row.resource.sourceId || row.resource.id}`;
+}
+
+function kitResourceRefFromRow(row: LocalResourceRow): KitResourceRef {
+  return {
+    refId: kitRefIdForRow(row),
+    resourceType: row.resource.type as KitResourceKind,
+    resourceId: row.resource.id,
+    sourcePath: row.resource.sourcePath,
+    targetPath: row.binding?.targetPath,
+    bindingId: row.binding?.id,
+    required: true,
+    metadata: {
+      sourceId: row.resource.sourceId,
+      agentId: row.binding?.agentId,
+      projectId: row.binding?.projectId,
+      sourceType: row.resource.sourceType
+    }
+  };
+}
+
+function mergePermissionSummary(rows: LocalResourceRow[]) {
+  const categories = Array.from(new Set(rows.flatMap((row) => row.resource.permissionSummary.categories)));
+  const items = Array.from(new Set(rows.flatMap((row) => row.resource.permissionSummary.items)));
+  return {
+    ...createEmptyPermissionSummary(categories.length > 0 ? categories.join(' / ') : '未声明'),
+    declared: rows.some((row) => row.resource.permissionSummary.declared),
+    categories,
+    items,
+    details: rows.flatMap((row) => row.resource.permissionSummary.details ?? [])
+  };
+}
+
+function mergeAuditSummary(rows: LocalResourceRow[]) {
+  const rank = (status: string) => status === AuditStatuses.SECURITY_RISK ? 5 : status === AuditStatuses.HIGH_RISK ? 4 : status === AuditStatuses.NEEDS_REVIEW ? 3 : status === AuditStatuses.LOW_RISK ? 2 : status === AuditStatuses.SAFE ? 1 : 0;
+  const status = rows.map((row) => row.resource.auditSummary.status).sort((left, right) => rank(right) - rank(left))[0] ?? AuditStatuses.NOT_AUDITED;
+  const findingCount = rows.reduce((sum, row) => sum + row.resource.auditSummary.findingCount, 0);
+  return {
+    status,
+    trustScore: Math.min(...rows.map((row) => row.resource.auditSummary.trustScore ?? 100)),
+    findingCount,
+    criticalCount: rows.reduce((sum, row) => sum + row.resource.auditSummary.criticalCount, 0),
+    highCount: rows.reduce((sum, row) => sum + row.resource.auditSummary.highCount, 0),
+    message: findingCount > 0 ? `${findingCount} 项资源审计发现` : '由本地资源摘要生成'
+  };
+}
+
+type KitConflict = { kind: string; refId: string; message: string };
+
+function kitConflictPreview(snapshot: LocalResourceSnapshot, manifest: KitManifest): KitConflict[] {
+  const missing = manifest.resources.flatMap((ref) => resolveKitResourceRow(snapshot, ref) ? [] : [{
+    kind: ref.required ? '缺失资源' : '可选缺失',
+    refId: ref.refId,
+    message: ref.required ? 'Kit 必需资源在本机不存在。' : '可选资源未在本机解析。'
+  }]);
+  const hash = kitHashAnomalies(manifest, snapshot).map((anomaly) => ({
+    kind: 'Hash 异常',
+    refId: anomaly.ref.refId,
+    message: anomaly.reason
+  }));
+  const auth = rowsForKitResources(snapshot, manifest)
+    .filter((row) => row.binding?.authStatus === AuthStatuses.AUTH_REVOKED || row.binding?.authStatus === AuthStatuses.SECURITY_DELISTED)
+    .map((row) => ({
+      kind: '授权收缩',
+      refId: kitRefIdForRow(row),
+      message: '授权收缩资源会阻断或降级 Kit 安装。'
+    }));
+  const installed = kitApplications(snapshot, manifest).map((application) => ({
+    kind: '已安装记录',
+    refId: application.applicationId,
+    message: `${application.count} 个托管绑定已存在，可选择覆盖或移除后重装。`
+  }));
+  return [...missing, ...hash, ...auth, ...installed];
+}
+
+function kitInstallStepLabel(step: KitInstallStep): string {
+  switch (step) {
+    case 'kit': return '选择 Kit';
+    case 'config': return '安装配置';
+    case 'preview': return '冲突预览';
+    case 'install': return '安装结果';
+  }
+}
+
+function agentOptionsForKit(snapshot: LocalResourceSnapshot): string[] {
+  return unique(snapshot.rows.flatMap((row) => row.binding?.agentId ? [row.binding.agentId] : []));
+}
+
+function projectOptionsForKit(snapshot: LocalResourceSnapshot): string[] {
+  return unique(snapshot.rows.flatMap((row) => row.binding?.projectId ? [row.binding.projectId] : []));
+}
+
+function kitInstallTargets(input: { agentIds: string[]; projectId: string; customPath: string }): Array<{ scopeType: string; agentId?: string; projectId?: string; scopePath?: string }> {
+  const customPath = input.customPath.trim();
+  if (customPath) return [{ scopeType: ResourceScopeTypes.CUSTOM_PATH, scopePath: customPath }];
+  if (input.agentIds.length > 0 && input.projectId) {
+    return input.agentIds.map((agentId) => ({ scopeType: ResourceScopeTypes.AGENT_PROJECT, agentId, projectId: input.projectId }));
+  }
+  if (input.projectId) return [{ scopeType: ResourceScopeTypes.PROJECT, projectId: input.projectId }];
+  return input.agentIds.map((agentId) => ({ scopeType: ResourceScopeTypes.AGENT_GLOBAL, agentId }));
+}
+
+function kitApplications(snapshot: LocalResourceSnapshot, manifest: KitManifest): Array<{ applicationId: string; targets: string[]; count: number }> {
+  const groups = new Map<string, { targets: Set<string>; count: number }>();
+  for (const row of rowsForKit(snapshot, manifest.kitId)) {
+    const applicationId = asText(row.binding?.metadata?.kitApplicationId, '');
+    if (!applicationId) continue;
+    const group = groups.get(applicationId) ?? { targets: new Set<string>(), count: 0 };
+    group.count += 1;
+    group.targets.add([row.binding?.agentId, row.binding?.projectId, row.binding?.targetPath].filter(Boolean).join(' / ') || row.scopeLabel);
+    groups.set(applicationId, group);
+  }
+  return [...groups.entries()].map(([applicationId, group]) => ({
+    applicationId,
+    targets: [...group.targets],
+    count: group.count
+  }));
+}
+
+function isKitResourceKind(type: string): type is KitResourceKind {
+  return type === LocalResourceTypes.SKILL
+    || type === LocalResourceTypes.MCP_SERVER
+    || type === LocalResourceTypes.PLUGIN
+    || type === LocalResourceTypes.HOOK
+    || type === LocalResourceTypes.CLI_COMMAND
+    || type === LocalResourceTypes.RULE
+    || type === LocalResourceTypes.MEMORY
+    || type === LocalResourceTypes.SUBAGENT
+    || type === LocalResourceTypes.AGENT_CONFIG
+    || type === LocalResourceTypes.IGNORE_FILE;
 }
 
 function KitWorkbench({ snapshot, selectedManifest, onRefreshLocal }: { snapshot: LocalResourceSnapshot; selectedManifest?: KitManifest; onRefreshLocal?: () => void }) {
@@ -1327,7 +2036,10 @@ function KitWorkbench({ snapshot, selectedManifest, onRefreshLocal }: { snapshot
 
   return (
     <section className="panel" data-testid="kit-workbench">
-      <h3>Kit 生成与导入</h3>
+      <h3>Kit 新建、编辑与导入</h3>
+      <KitEditorForm snapshot={snapshot} manifest={selectedManifest} onSaved={onRefreshLocal} />
+      <div className="section-divider" />
+      <h3>路径导入与快速生成</h3>
       <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
         <label>
           <span className="filter-label">KitManifest JSON</span>
@@ -1410,27 +2122,175 @@ function KitWorkbench({ snapshot, selectedManifest, onRefreshLocal }: { snapshot
   );
 }
 
+type KitEditorTab = 'skills' | 'mcp' | 'configs';
+const KIT_EDITOR_TABS: Array<{ id: KitEditorTab; label: string }> = [
+  { id: 'skills', label: 'Skills' },
+  { id: 'mcp', label: 'MCP' },
+  { id: 'configs', label: 'Configs' }
+];
+
+type KitEditorCandidate = {
+  refId: string;
+  row: LocalResourceRow;
+  title: string;
+  subtitle: string;
+};
+
+export function KitEditorForm({
+  snapshot,
+  manifest,
+  onSaved,
+  onClose
+}: {
+  snapshot: LocalResourceSnapshot;
+  manifest?: KitManifest;
+  onSaved?: () => void;
+  onClose?: () => void;
+}) {
+  const [activeTab, setActiveTab] = useState<KitEditorTab>('skills');
+  const [kitId, setKitId] = useState(manifest?.kitId ?? `kit.${Date.now()}`);
+  const [name, setName] = useState(manifest?.name ?? 'New Kit');
+  const [version, setVersion] = useState(manifest?.version ?? '1.0.0');
+  const [description, setDescription] = useState(manifest?.description ?? '');
+  const [selectedResourceIds, setSelectedResourceIds] = useState<string[]>(manifest?.resources.map((ref) => ref.refId) ?? []);
+  const [message, setMessage] = useState<UiMessage | undefined>();
+  const [busy, setBusy] = useState(false);
+  const candidates = useMemo(() => kitEditorCandidates(snapshot, activeTab), [activeTab, snapshot]);
+
+  useEffect(() => {
+    setKitId(manifest?.kitId ?? `kit.${Date.now()}`);
+    setName(manifest?.name ?? 'New Kit');
+    setVersion(manifest?.version ?? '1.0.0');
+    setDescription(manifest?.description ?? '');
+    setSelectedResourceIds(manifest?.resources.map((ref) => ref.refId) ?? []);
+  }, [manifest?.kitId]);
+
+  const toggleRef = (refId: string) => {
+    setSelectedResourceIds((current) => current.includes(refId) ? current.filter((value) => value !== refId) : [...current, refId]);
+  };
+  const save = async () => {
+    const trimmedKitId = kitId.trim();
+    const trimmedName = name.trim();
+    if (!trimmedKitId || !trimmedName) {
+      setMessage({ tone: 'error', text: 'Kit ID 和名称不能为空。' });
+      return;
+    }
+    const nextManifest = buildKitManifestFromSelection({
+      snapshot,
+      existing: manifest,
+      kitId: trimmedKitId,
+      name: trimmedName,
+      version: version.trim() || '1.0.0',
+      description: description.trim() || undefined,
+      selectedResourceIds
+    });
+    if (nextManifest.resources.length === 0) {
+      setMessage({ tone: 'error', text: '至少选择一个 Skill、MCP 或配置资源。' });
+      return;
+    }
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const result = await desktopApi.kit.importManifest({ manifest: nextManifest, sourcePath: `kit-editor://${nextManifest.kitId}` });
+      setMessage(phase3OperationMessage(result, manifest ? 'Kit 已更新到本地资源图。' : 'Kit 已新建到本地资源图。'));
+      onSaved?.();
+    } catch (error) {
+      setMessage({ tone: 'error', text: error instanceof Error ? error.message : 'Kit 保存失败' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="kit-editor" data-testid="kit-editor">
+      <div className="grid kit-editor-fields">
+        <label>
+          <span className="filter-label">Kit ID</span>
+          <input className="input" value={kitId} onChange={(event) => setKitId(event.target.value)} />
+        </label>
+        <label>
+          <span className="filter-label">名称</span>
+          <input className="input" value={name} onChange={(event) => setName(event.target.value)} />
+        </label>
+        <label>
+          <span className="filter-label">版本</span>
+          <input className="input" value={version} onChange={(event) => setVersion(event.target.value)} />
+        </label>
+        <label>
+          <span className="filter-label">描述</span>
+          <input className="input" value={description} onChange={(event) => setDescription(event.target.value)} />
+        </label>
+      </div>
+      <div className="segmented kit-editor-tabs" role="tablist" aria-label="Kit 资源类型">
+        {KIT_EDITOR_TABS.map((tab) => (
+          <button key={tab.id} type="button" className={activeTab === tab.id ? 'active' : ''} onClick={() => setActiveTab(tab.id)}>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      <div className="kit-candidate-list" data-testid={`kit-editor-${activeTab}`}>
+        {candidates.length === 0 ? <p className="muted">当前扫描快照没有可加入此分组的资源。</p> : candidates.map((candidate) => (
+          <label key={candidate.refId} className="kit-candidate-row">
+            <input type="checkbox" checked={selectedResourceIds.includes(candidate.refId)} onChange={() => toggleRef(candidate.refId)} />
+            <span>
+              <strong>{candidate.title}</strong>
+              <small>{candidate.subtitle}</small>
+            </span>
+          </label>
+        ))}
+      </div>
+      <div className="kit-editor-selected" aria-label="已选资源">
+        {selectedResourceIds.length === 0 ? <span className="muted">尚未选择资源。</span> : selectedResourceIds.slice(0, 12).map((refId) => <span key={refId}>{refId}</span>)}
+        {selectedResourceIds.length > 12 ? <span>+{selectedResourceIds.length - 12}</span> : null}
+      </div>
+      {message ? <p className="muted" role="status" style={messageStyle(message.tone)}>{message.text}</p> : null}
+      <div className="card-action-row">
+        {onClose ? <Button onClick={onClose}>取消</Button> : null}
+        <Button tone="ghost" onClick={() => setSelectedResourceIds([])}>清空选择</Button>
+        <Button tone="primary" disabled={busy} onClick={save}>{busy ? '保存中' : manifest ? '保存 Kit' : '新建 Kit'}</Button>
+      </div>
+    </section>
+  );
+}
+
+function KitEditorDialog({ snapshot, manifest, onClose, onRefreshLocal }: { snapshot: LocalResourceSnapshot; manifest?: KitManifest; onClose: () => void; onRefreshLocal?: () => void }) {
+  return (
+    <Modal title={manifest ? '编辑 Kit' : '新建 Kit'} onClose={onClose}>
+      <KitEditorForm snapshot={snapshot} manifest={manifest} onSaved={onRefreshLocal} onClose={onClose} />
+    </Modal>
+  );
+}
+
 function KitDetail({
   item,
   manifest,
   snapshot,
-  onSelectResource
+  onSelectResource,
+  onEdit,
+  onExport,
+  onInstall,
+  onRemove,
+  onDelete
 }: {
   item: VisibleItem;
   manifest: KitManifest;
   snapshot: LocalResourceSnapshot;
   onSelectResource: (item: VisibleItem) => void;
+  onEdit: () => void;
+  onExport: () => void;
+  onInstall: () => void;
+  onRemove: () => void;
+  onDelete: () => void;
 }) {
   const kitRows = rowsForKit(snapshot, manifest.kitId);
   const includedRows = rowsForKitResources(snapshot, manifest);
-  const events = eventsForKit(snapshot, manifest.kitId);
   const authShrinkRows = includedRows.filter((row) => row.binding?.authStatus === AuthStatuses.AUTH_REVOKED || row.binding?.authStatus === AuthStatuses.SECURITY_DELISTED);
   const hashAnomalies = kitHashAnomalies(manifest, snapshot);
   const applicationRows = kitRows.filter((row) => row.binding?.metadata?.managedByKitId === manifest.kitId || row.resource.type === LocalResourceTypes.KIT && row.binding?.kitId === manifest.kitId);
-  const operationResults = events.flatMap((event) => operationResultsFromEvent(event));
+  const operationResults = kitOperationResults(snapshot, manifest.kitId);
 
   return (
-    <div aria-label={`${manifest.name}工具集详情`} data-testid={`kit-detail-${safeId(manifest.kitId)}`} style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '16px' }}>
+    <aside className="kit-detail-drawer" aria-label={`${manifest.name}工具集详情`} data-testid={`kit-detail-${safeId(manifest.kitId)}`}>
       <header className="section-header">
         <div>
           <h2>{manifest.name}</h2>
@@ -1438,6 +2298,14 @@ function KitDetail({
         </div>
         <StatusBadge tone={item.status.tone}>{item.status.label}</StatusBadge>
       </header>
+      <p className="muted">{manifest.description || '暂无描述。'}</p>
+      <div className="card-action-row kit-primary-actions">
+        <Button tone="primary" onClick={onInstall}>安装到项目/智能体</Button>
+        <Button onClick={onRemove}>从项目移除</Button>
+        <Button onClick={onEdit}>编辑</Button>
+        <Button onClick={onExport}>导出</Button>
+        <Button tone="danger" onClick={onDelete}>删除</Button>
+      </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
         <table className="table compact-table" data-testid="kit-overview">
@@ -1524,21 +2392,6 @@ function KitDetail({
         </section>
 
         <section className="panel">
-          <h3>最近事件</h3>
-          {events.length === 0 ? <p className="muted">暂无 Kit 事件。</p> : (
-            <table className="table compact-table">
-              <tbody>
-                {events.slice(0, 5).map((event) => (
-                  <tr key={event.eventId}>
-                    <td>{event.eventType}</td>
-                    <td>{event.status}</td>
-                    <td>{event.message}</td>
-                    <td>{compactDate(event.createdAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
           {operationResults.length > 0 ? (
             <>
               <h3>资源变更结果</h3>
@@ -1554,12 +2407,291 @@ function KitDetail({
                 </tbody>
               </table>
             </>
-          ) : null}
+          ) : <p className="muted">暂无可展示的资源变更结果。</p>}
         </section>
 
         <KitActionPanel manifest={manifest} applicationRows={applicationRows} />
       </div>
-    </div>
+    </aside>
+  );
+}
+
+type KitInstallStep = 'kit' | 'config' | 'preview' | 'install';
+
+function KitInstallDialog({
+  snapshot,
+  manifests,
+  onClose,
+  onRefreshLocal
+}: {
+  snapshot: LocalResourceSnapshot;
+  manifests: KitManifest[];
+  onClose: () => void;
+  onRefreshLocal?: () => void;
+}) {
+  const [step, setStep] = useState<KitInstallStep>('config');
+  const [projectId, setProjectId] = useState(projectOptionsForKit(snapshot)[0] ?? '');
+  const [agentIds, setAgentIds] = useState<string[]>(unique(manifests.flatMap((manifest) => manifest.supportedAgents)).slice(0, 1));
+  const [customPath, setCustomPath] = useState('');
+  const [applicationId, setApplicationId] = useState('');
+  const [message, setMessage] = useState<UiMessage | undefined>();
+  const [busy, setBusy] = useState(false);
+  const projectOptions = projectOptionsForKit(snapshot);
+  const agentOptions = unique([...manifests.flatMap((manifest) => manifest.supportedAgents), ...agentOptionsForKit(snapshot)]);
+  const targets = kitInstallTargets({ agentIds, projectId, customPath });
+  const conflicts = manifests.flatMap((manifest) => kitConflictPreview(snapshot, manifest));
+  const install = async () => {
+    if (targets.length === 0) {
+      setMessage({ tone: 'error', text: '请选择项目、智能体或自定义目录后再安装。' });
+      return;
+    }
+    setBusy(true);
+    setMessage(undefined);
+    setStep('install');
+    try {
+      let success = 0;
+      let failed = 0;
+      for (const manifest of manifests) {
+        for (const target of targets) {
+          const result = await desktopApi.kit.apply({
+            kitId: manifest.kitId,
+            target,
+            applicationId: applicationId.trim() || undefined
+          }) as Phase3OperationResult;
+          if (result.status === 'success' || result.status === 'partial_success' || result.status === 'dry_run') success += 1;
+          else failed += 1;
+        }
+      }
+      setMessage({ tone: failed > 0 ? 'warn' : 'success', text: `安装完成：${success} 个目标成功记录，${failed} 个目标失败。` });
+      onRefreshLocal?.();
+    } catch (error) {
+      setMessage({ tone: 'error', text: error instanceof Error ? error.message : 'Kit 安装失败' });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title={manifests.length > 1 ? '批量安装 Kit' : `安装 ${manifests[0]?.name ?? 'Kit'}`} onClose={onClose}>
+      <div className="kit-install-steps" role="tablist" aria-label="Kit 安装步骤">
+        {(['kit', 'config', 'preview', 'install'] as KitInstallStep[]).map((item) => (
+          <button key={item} type="button" className={step === item ? 'active' : ''} onClick={() => setStep(item)}>
+            {kitInstallStepLabel(item)}
+          </button>
+        ))}
+      </div>
+      <section className="panel">
+        <h3>选择 Kit</h3>
+        <div className="kit-editor-selected">
+          {manifests.map((manifest) => <span key={manifest.kitId}>{manifest.name} · {manifest.resources.length} 资源</span>)}
+        </div>
+      </section>
+      <section className="panel" data-testid="kit-install-config">
+        <h3>安装配置</h3>
+        <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+          <label>
+            <span className="filter-label">项目</span>
+            <select className="input" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+              <option value="">不限定项目</option>
+              {projectOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+          </label>
+          <label>
+            <span className="filter-label">自定义目录</span>
+            <input className="input" value={customPath} onChange={(event) => setCustomPath(event.target.value)} />
+          </label>
+          <label>
+            <span className="filter-label">应用 ID</span>
+            <input className="input" value={applicationId} onChange={(event) => setApplicationId(event.target.value)} />
+          </label>
+        </div>
+        <div className="kit-agent-picker" aria-label="智能体选择">
+          {agentOptions.length === 0 ? <p className="muted">当前没有可选智能体；可使用项目或自定义目录安装。</p> : agentOptions.map((agentId) => (
+            <label key={agentId}>
+              <input
+                type="checkbox"
+                checked={agentIds.includes(agentId)}
+                onChange={() => setAgentIds((current) => current.includes(agentId) ? current.filter((value) => value !== agentId) : [...current, agentId])}
+              />
+              {agentId}
+            </label>
+          ))}
+        </div>
+      </section>
+      <KitConflictPreview conflicts={conflicts} targetCount={targets.length} />
+      {message ? <p className="muted" role="status" style={messageStyle(message.tone)}>{message.text}</p> : null}
+      <div className="card-action-row">
+        <Button onClick={onClose}>取消</Button>
+        <Button onClick={() => setStep('preview')}>查看冲突预览</Button>
+        <Button tone="primary" disabled={busy || manifests.length === 0} onClick={install}>{busy ? '安装中' : '安装'}</Button>
+      </div>
+    </Modal>
+  );
+}
+
+function KitConflictPreview({ conflicts, targetCount }: { conflicts: KitConflict[]; targetCount: number }) {
+  return (
+    <section className="panel" data-testid="kit-conflict-preview">
+      <h3>冲突预览</h3>
+      <p className="muted">将预览 {targetCount} 个目标；Hook / CLI / MCP stdio 仍保持静态，不会执行。</p>
+      {conflicts.length === 0 ? <p className="success-text">未发现缺失资源、Hash 异常或授权收缩。</p> : (
+        <table className="table compact-table">
+          <tbody>
+            {conflicts.map((conflict) => (
+              <tr key={`${conflict.kind}:${conflict.refId}:${conflict.message}`}>
+                <td>{conflict.kind}</td>
+                <td>{conflict.refId}</td>
+                <td>{conflict.message}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+function KitRemoveDialog({ snapshot, manifest, onClose, onRefreshLocal }: { snapshot: LocalResourceSnapshot; manifest: KitManifest; onClose: () => void; onRefreshLocal?: () => void }) {
+  const applications = kitApplications(snapshot, manifest);
+  const [applicationId, setApplicationId] = useState(applications[0]?.applicationId ?? '');
+  const [message, setMessage] = useState<UiMessage | undefined>();
+  const [busy, setBusy] = useState(false);
+  const remove = async () => {
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const result = await desktopApi.kit.removeApplication({ kitId: manifest.kitId, applicationId: applicationId || undefined });
+      setMessage(phase3OperationMessage(result, applicationId ? 'Kit 已从选定应用移除。' : 'Kit 托管应用已全部移除。'));
+      onRefreshLocal?.();
+    } catch (error) {
+      setMessage({ tone: 'error', text: error instanceof Error ? error.message : 'Kit 移除失败' });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title="从项目移除 Kit" onClose={onClose}>
+      <section className="panel">
+        <h3>已安装目标</h3>
+        {applications.length === 0 ? <p className="muted">没有发现 Kit 托管应用记录。</p> : (
+          <table className="table compact-table">
+            <tbody>
+              {applications.map((application) => (
+                <tr key={application.applicationId}>
+                  <td>{application.applicationId}</td>
+                  <td>{application.targets.join(' / ') || '未记录目标'}</td>
+                  <td>{application.count} 绑定</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+      <label>
+        <span className="filter-label">应用 ID</span>
+        <select className="input" value={applicationId} onChange={(event) => setApplicationId(event.target.value)}>
+          <option value="">全部 Kit 托管应用</option>
+          {applications.map((application) => <option key={application.applicationId} value={application.applicationId}>{application.applicationId}</option>)}
+        </select>
+      </label>
+      <p className="muted">仅移除 Kit 托管绑定，不删除用户原始配置文件。</p>
+      {message ? <p className="muted" role="status" style={messageStyle(message.tone)}>{message.text}</p> : null}
+      <div className="card-action-row">
+        <Button onClick={onClose}>取消</Button>
+        <Button tone="danger" disabled={busy} onClick={remove}>{busy ? '移除中' : '移除'}</Button>
+      </div>
+    </Modal>
+  );
+}
+
+function KitDeleteDialog({ snapshot, manifest, onClose, onRefreshLocal }: { snapshot: LocalResourceSnapshot; manifest: KitManifest; onClose: () => void; onRefreshLocal?: () => void }) {
+  const [removeApplications, setRemoveApplications] = useState(false);
+  const [message, setMessage] = useState<UiMessage | undefined>();
+  const [busy, setBusy] = useState(false);
+  const applications = kitApplications(snapshot, manifest);
+  const applicationBindingCount = applications.reduce((sum, application) => sum + application.count, 0);
+  const deleteKit = async () => {
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const result = await desktopApi.kit.deleteManifest({ kitId: manifest.kitId, removeApplications });
+      setMessage(phase3OperationMessage(result, removeApplications ? 'Kit 包和托管应用已删除。' : 'Kit 包记录已删除。'));
+      onRefreshLocal?.();
+    } catch (error) {
+      setMessage({ tone: 'error', text: error instanceof Error ? error.message : 'Kit 删除失败' });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title="删除 Kit" onClose={onClose}>
+      <p className="muted">删除只针对 EnterpriseAgentHub 本地 Kit 包记录；用户原始 Skill/MCP/配置文件不会被删除。</p>
+      <section className="panel kit-delete-targets" data-testid="kit-delete-targets">
+        <h3>已安装目标</h3>
+        {applications.length === 0 ? <p className="muted">没有发现 Kit 托管应用记录，可直接删除包记录。</p> : (
+          <>
+            <p className="muted">{applications.length} 个应用记录，{applicationBindingCount} 个 Kit 托管绑定。</p>
+            <table className="table compact-table">
+              <tbody>
+                {applications.map((application) => (
+                  <tr key={application.applicationId}>
+                    <td>{application.applicationId}</td>
+                    <td>{application.targets.join(' / ') || '未记录目标'}</td>
+                    <td>{application.count} 绑定</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+      </section>
+      {applications.length > 0 ? (
+        <label className="kit-candidate-row">
+          <input type="checkbox" checked={removeApplications} onChange={() => setRemoveApplications((value) => !value)} />
+          <span>
+            <strong>同时移除所有 Kit 托管应用</strong>
+            <small>相当于 HarnessKit 的删除前卸载选项；未勾选时会阻止删除，避免留下悬挂应用记录。</small>
+          </span>
+        </label>
+      ) : null}
+      {message ? <p className="muted" role="status" style={messageStyle(message.tone)}>{message.text}</p> : null}
+      <div className="card-action-row">
+        <Button onClick={onClose}>取消</Button>
+        <Button tone="danger" disabled={busy} onClick={deleteKit}>{busy ? '删除中' : '确认删除'}</Button>
+      </div>
+    </Modal>
+  );
+}
+
+function KitExportDialog({ manifest, onClose, onRefreshLocal }: { manifest: KitManifest; onClose: () => void; onRefreshLocal?: () => void }) {
+  const [targetPath, setTargetPath] = useState('');
+  const [message, setMessage] = useState<UiMessage | undefined>();
+  const [busy, setBusy] = useState(false);
+  const exportKit = async () => {
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const result = await desktopApi.kit.exportManifest({ kitId: manifest.kitId, targetPath: targetPath.trim() || undefined });
+      setMessage(phase3OperationMessage(result, targetPath.trim() ? 'Kit manifest 已导出到指定路径。' : 'Kit manifest 数据已导出到操作结果。'));
+      onRefreshLocal?.();
+    } catch (error) {
+      setMessage({ tone: 'error', text: error instanceof Error ? error.message : 'Kit 导出失败' });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title="导出 Kit" onClose={onClose}>
+      <label>
+        <span className="filter-label">导出路径</span>
+        <input className="input" value={targetPath} onChange={(event) => setTargetPath(event.target.value)} />
+      </label>
+      <p className="muted">留空时只返回 manifest 数据；填写路径时通过 LocalExecutor 写入并保留备份/回滚记录。</p>
+      {message ? <p className="muted" role="status" style={messageStyle(message.tone)}>{message.text}</p> : null}
+      <div className="card-action-row">
+        <Button onClick={onClose}>取消</Button>
+        <Button tone="primary" disabled={busy} onClick={exportKit}>{busy ? '导出中' : '导出'}</Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -1609,8 +2741,8 @@ function KitActionPanel({ manifest, applicationRows }: { manifest: KitManifest; 
       {message ? <p className="muted" role="status" style={messageStyle(message.tone)}>{message.text}</p> : null}
       <div className="card-action-row">
         <Button disabled={busy} onClick={() => run(() => desktopApi.kit.exportManifest({ kitId: manifest.kitId }), 'Kit manifest 数据已导出到操作结果。')}>导出数据</Button>
-        <Button disabled={busy} onClick={() => run(() => desktopApi.kit.checkDrift({ kitId: manifest.kitId }), 'Kit 漂移检查已写入本地事件。')}>检查漂移</Button>
-        <Button disabled={busy} onClick={() => run(() => desktopApi.kit.staticAudit({ kitId: manifest.kitId }), 'Kit 静态审计已写入本地事件。')}>静态审计</Button>
+        <Button disabled={busy} onClick={() => run(() => desktopApi.kit.checkDrift({ kitId: manifest.kitId }), 'Kit 漂移检查已记录。')}>检查漂移</Button>
+        <Button disabled={busy} onClick={() => run(() => desktopApi.kit.staticAudit({ kitId: manifest.kitId }), 'Kit 静态审计已记录。')}>静态审计</Button>
         <Button
           disabled={busy || (!agentId && !projectId && !customPath)}
           tone="primary"
@@ -1741,7 +2873,6 @@ export function LocalResourceDrawer({ item, snapshot, onSelectResource, onRefres
   const binding = row?.binding;
   const relatedRows = resource ? snapshot.rows.filter((candidate) => candidate.resource.id === resource.id) : row ? [row] : [];
   const selectedFile = fileForItem(item);
-  const eventRow = item.event ? rowForEvent(snapshot, item.event) : undefined;
   const [pathCheck, setPathCheck] = useState<{ busy: boolean; tone: 'success' | 'error' | 'info'; text?: string }>({ busy: false, tone: 'info' });
   const [filePreview, setFilePreview] = useState<{ busy: boolean; tone: UiMessageTone; text?: string; content?: string }>({ busy: false, tone: 'info' });
   const canCheckPath = Boolean(binding?.id ?? resource?.id ?? item.path);
@@ -1839,35 +2970,16 @@ export function LocalResourceDrawer({ item, snapshot, onSelectResource, onRefres
         canPreview={canPreviewFile}
         onPreview={previewFile}
       />
-      {item.finding ? <AuditFindingDetailSection finding={item.finding} row={row} events={eventsForFinding(snapshot, item.finding)} onOpenResource={row ? () => onSelectResource?.(rowToItem(row)) : undefined} /> : null}
-      {item.event ? <LocalEventDetailSection event={item.event} row={eventRow} onOpenResource={eventRow ? () => onSelectResource?.(rowToItem(eventRow)) : undefined} /> : null}
-      {resource && isExtensionResource(resource.type) ? <ExtensionDetailSections item={item} rows={relatedRows} events={row?.events ?? []} /> : null}
-      <section className="panel">
-        <h3>最近事件</h3>
-        {(item.event ? [item.event] : row?.events ?? []).length === 0 ? (
-          <p className="muted">没有关联本地事件。</p>
-        ) : (
-          <table className="table compact-table">
-            <tbody>
-              {(item.event ? [item.event] : row?.events ?? []).slice(0, 5).map((event) => (
-                <tr key={event.eventId}>
-                  <td>{event.eventType}</td>
-                  <td>{event.message}</td>
-                  <td>{compactDate(event.createdAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      {row ? <AuditFindingsPanel row={row} /> : null}
+      {resource && isExtensionResource(resource.type) ? <ExtensionDetailSections item={item} rows={relatedRows} /> : null}
       <section className="panel">
         <h3>操作边界</h3>
-        <p className="muted">当前提供真实扫描、预览、权限摘要、静态审计和配置事件展示；写入需要 ExecutionPlan、备份和回滚链路，Hook / CLI / MCP stdio 或 command 均不会被启动。</p>
+        <p className="muted">当前提供真实扫描、预览、权限摘要和静态审计；写入需要 ExecutionPlan、备份和回滚链路，Hook / CLI / MCP stdio 或 command 均不会被启动。</p>
         <div className="card-action-row">
           <Button disabled title="需要 ExecutionPlan、备份和回滚接入">启用</Button>
           <Button disabled title="需要 ExecutionPlan、备份和回滚接入">停用</Button>
           <Button disabled={filePreview.busy || !canPreviewFile} title={selectedFile ? '真实读取小型文本文件并脱敏展示' : '没有可预览文件'} onClick={previewFile}>预览文件</Button>
-          <Button disabled={pathCheck.busy || !canCheckPath} title={canCheckPath ? '真实读取路径状态并写入本地事件' : '没有可检查路径'} onClick={checkPath}>检查路径</Button>
+          <Button disabled={pathCheck.busy || !canCheckPath} title={canCheckPath ? '真实读取路径状态并记录检查结果' : '没有可检查路径'} onClick={checkPath}>检查路径</Button>
         </div>
         {pathCheck.text ? <p className={pathCheck.tone === 'error' ? 'error-text' : pathCheck.tone === 'success' ? 'success-text' : 'muted'}>{pathCheck.text}</p> : null}
       </section>
@@ -1904,7 +3016,7 @@ export function FilePreviewSection({
   );
 }
 
-export function AuditFindingDetailSection({ finding, row, events, onOpenResource }: { finding: AuditFindingRecord; row?: LocalResourceRow; events: LocalEventRecord[]; onOpenResource?: () => void }) {
+export function AuditFindingDetailSection({ finding, row, onOpenResource }: { finding: AuditFindingRecord; row?: LocalResourceRow; onOpenResource?: () => void }) {
   const definition = auditRuleDefinition(finding.ruleId);
   const trustScore = row?.resource.auditSummary.trustScore ?? Math.max(0, 100 - finding.trustScoreImpact);
   return (
@@ -1920,55 +3032,42 @@ export function AuditFindingDetailSection({ finding, row, events, onOpenResource
       <DetailLine label="资源定位" value={formatFindingLocation(finding)} />
       <DetailLine label="代码片段" value={finding.snippetHash ? `hash ${finding.snippetHash}` : '未保留明文片段'} />
       {onOpenResource ? <div className="card-action-row"><Button onClick={onOpenResource}>打开关联资源</Button></div> : null}
-      {events.length === 0 ? <p className="muted">暂无关联事件。</p> : (
-        <table className="table compact-table">
-          <tbody>
-            {events.slice(0, 6).map((event) => (
-              <tr key={event.eventId}>
-                <td>{event.eventType}</td>
-                <td>{event.status}</td>
-                <td>{event.message}</td>
-                <td>{compactDate(event.createdAt)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
     </section>
   );
 }
 
-export function LocalEventDetailSection({ event, row, onOpenResource }: { event: LocalEventRecord; row?: LocalResourceRow; onOpenResource?: () => void }) {
+function AuditFindingsPanel({ row }: { row: LocalResourceRow }) {
+  const findings = [...(row.findings ?? [])].sort(compareAuditFindingsByRisk);
+  if (findings.length === 0) return null;
   return (
-    <section className="panel" data-testid={`local-event-detail-${safeId(event.eventId)}`}>
-      <h3>事件详情</h3>
-      <DetailLine label="事件类型" value={event.eventType} />
-      <DetailLine label="操作状态" value={event.status} />
-      <DetailLine label="同步状态" value={event.syncStatus} />
-      <DetailLine label="离线生成" value={event.offlineCreated ? '是' : '否'} />
-      <DetailLine label="服务端回执" value={event.serverAckStatus} />
-      <DetailLine label="资源" value={event.resourceId} />
-      <DetailLine label="绑定" value={event.bindingId} />
-      <DetailLine label="智能体" value={event.agentId} />
-      <DetailLine label="项目" value={event.projectId} />
-      <DetailLine label="工具集" value={event.kitId} />
-      <DetailLine label="失败原因" value={event.failureReason} />
-      <DetailLine label="建议动作" value={event.suggestion} />
-      <DetailLine label="反查资源" value={row ? `${row.resource.displayName || row.resource.name} / ${localResourceTypeLabel(row.resource.type)}` : '未找到关联资源'} />
-      <DetailLine label="反查路径" value={row?.binding?.targetPath ?? row?.resource.sourcePath} />
-      <DetailLine label="反查作用域" value={row?.scopeLabel} />
-      {onOpenResource ? <div className="card-action-row"><Button onClick={onOpenResource}>打开关联资源</Button></div> : null}
+    <section className="panel" data-testid="local-audit-findings-panel">
+      <h3>审计发现</h3>
+      <table className="table compact-table">
+        <tbody>
+          {findings.slice(0, 8).map((finding) => (
+            <tr key={finding.id}>
+              <td>
+                <strong>{finding.title}</strong>
+                <div className="muted">规则 {finding.ruleId} / 风险 {finding.severity}</div>
+              </td>
+              <td>{finding.permissionCategory}</td>
+              <td>{auditStatusLabel(finding.auditStatus)}</td>
+              <td>{compactDate(finding.detectedAt)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {findings.length > 8 ? <p className="muted">还有 {findings.length - 8} 条审计发现，已按风险优先折叠。</p> : null}
     </section>
   );
 }
 
-function ExtensionDetailSections({ item, rows, events }: { item: VisibleItem; rows: LocalResourceRow[]; events: LocalEventRecord[] }) {
+function ExtensionDetailSections({ item, rows }: { item: VisibleItem; rows: LocalResourceRow[] }) {
   const resource = item.row?.resource;
   const metadata = resource?.metadata ?? {};
   const agentIds = unique(rows.map((row) => row.binding?.agentId).filter((value): value is string => Boolean(value)));
   const projectIds = unique(rows.map((row) => row.binding?.projectId).filter((value): value is string => Boolean(value)));
   const authShrink = rows.some((row) => row.binding?.authStatus === AuthStatuses.AUTH_REVOKED || row.binding?.authStatus === AuthStatuses.SECURITY_DELISTED);
-  const configEvents = events.filter((event) => !event.eventType.includes('TRIGGER') && !event.eventType.includes('EXECUT') && !event.eventType.includes('CALL'));
   return (
     <>
       <section className="panel">
@@ -1997,21 +3096,8 @@ function ExtensionDetailSections({ item, rows, events }: { item: VisibleItem; ro
       ) : null}
       {isHookOrCliResource(resource?.type) ? (
         <section className="panel">
-          <h3>配置事件</h3>
-          <p className="muted">Hook 和 CLI 在阶段三只进入配置管理、路径检查、权限摘要、静态审计和配置事件体系，不展示运行时触发或调用记录。</p>
-          {configEvents.length === 0 ? <p className="muted">暂无配置事件。</p> : (
-            <table className="table compact-table">
-              <tbody>
-                {configEvents.slice(0, 5).map((event) => (
-                  <tr key={event.eventId}>
-                    <td>{event.eventType}</td>
-                    <td>{event.message}</td>
-                    <td>{compactDate(event.createdAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+          <h3>Hook / CLI 边界</h3>
+          <p className="muted">Hook 和 CLI 只进入配置管理、路径检查、权限摘要和静态审计体系，不展示运行时触发或调用记录。</p>
         </section>
       ) : null}
     </>
@@ -2023,6 +3109,21 @@ function DetailLine({ label, value }: { label: string; value?: unknown }) {
     <p>
       <strong>{label}：</strong>{asText(value, '未知')}
     </p>
+  );
+}
+
+function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+  return (
+    <>
+      <div className="modal-backdrop" onClick={onClose} />
+      <section className="modal" role="dialog" aria-modal="true" aria-label={title}>
+        <header className="modal-header">
+          <h2>{title}</h2>
+          <Button tone="ghost" onClick={onClose} aria-label="关闭">x</Button>
+        </header>
+        <div className="modal-body">{children}</div>
+      </section>
+    </>
   );
 }
 
@@ -2049,23 +3150,16 @@ function formatImpactScope(scope: Record<string, unknown>): string {
 }
 
 function createVisibleItems(snapshot: LocalResourceSnapshot, nav: typeof NAV_ITEMS[number]): VisibleItem[] {
-  const resourceItems = (snapshot.rows ?? [])
+  return (snapshot.rows ?? [])
     .filter((row) => !nav.resourceTypes || nav.resourceTypes.includes(row.resource.type))
     .map(rowToItem);
-  const findingItems = nav.includeEvents
-    ? (snapshot.findings ?? []).map((finding) => findingToItem(finding, snapshot))
-    : [];
-  const eventItems = nav.includeEvents
-    ? (snapshot.events ?? []).map(eventToItem)
-    : [];
-  return [...resourceItems, ...findingItems, ...eventItems];
 }
 
 function createExtensionItems(snapshot: LocalResourceSnapshot): VisibleItem[] {
-  const resources = uniqueResources((snapshot.rows ?? []).filter((row) => isExtensionResource(row.resource.type)));
-  return resources.map((resource) => {
-    const rows = rowsForResource(snapshot, resource.id);
-    const base = rows[0] ?? { resource, binding: undefined, files: [], events: [], status: { key: 'unknown', label: '未知', tone: 'info' as const, source: 'unknown' }, scopeLabel: '未绑定' };
+  const groupedRows = extensionRowGroups((snapshot.rows ?? []).filter((row) => isExtensionResource(row.resource.type)));
+  return groupedRows.map((rows) => {
+    const base = preferredExtensionRow(rows);
+    const resource = base.resource;
     const item = rowToItem(base);
     const agentIds = unique(rows.map((row) => row.binding?.agentId).filter((value): value is string => Boolean(value)));
     const projectIds = unique(rows.map((row) => row.binding?.projectId).filter((value): value is string => Boolean(value)));
@@ -2082,6 +3176,59 @@ function createExtensionItems(snapshot: LocalResourceSnapshot): VisibleItem[] {
       row: base
     };
   });
+}
+
+function extensionRowGroups(rows: LocalResourceRow[]): LocalResourceRow[][] {
+  const groups = new Map<string, LocalResourceRow[]>();
+  for (const row of rows) {
+    const key = extensionCanonicalKey(row);
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  return [...groups.values()];
+}
+
+function extensionCanonicalKey(row: LocalResourceRow): string {
+  if (row.resource.type !== LocalResourceTypes.SKILL) return row.resource.id;
+  const skillFile = firstText(
+    row.binding?.metadata?.skillFile,
+    row.resource.metadata.skillFile,
+    row.files.find((file) => isSkillManifestPath(file.path))?.path,
+    isSkillManifestPath(row.binding?.targetPath) ? row.binding?.targetPath : undefined,
+    isSkillManifestPath(row.resource.sourcePath) ? row.resource.sourcePath : undefined
+  );
+  if (skillFile) return `skill:${normalizeLocalPath(skillFile)}`;
+  const skillDirectory = firstText(row.binding?.metadata?.skillDirectory, row.resource.metadata.skillDirectory);
+  if (skillDirectory) return `skill:${normalizeLocalPath(`${skillDirectory}/SKILL.md`)}`;
+  return row.resource.id;
+}
+
+function preferredExtensionRow(rows: LocalResourceRow[]): LocalResourceRow {
+  return [...rows].sort((left, right) => extensionRowRank(right) - extensionRowRank(left))[0] ?? rows[0];
+}
+
+function extensionRowRank(row: LocalResourceRow): number {
+  if (row.resource.type !== LocalResourceTypes.SKILL) return 0;
+  const targetPath = row.binding?.targetPath ?? row.resource.sourcePath;
+  if (isSkillManifestPath(targetPath)) return 3;
+  if (firstText(row.binding?.metadata?.skillFile, row.resource.metadata.skillFile)) return 2;
+  if (!String(row.resource.sourceId ?? '').startsWith('codex.skill.')) return 1;
+  return 0;
+}
+
+function firstText(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    const text = asText(value, '');
+    if (text) return text;
+  }
+  return undefined;
+}
+
+function isSkillManifestPath(value: unknown): value is string {
+  return typeof value === 'string' && /(^|[\\/])SKILL\.md$/i.test(value);
+}
+
+function normalizeLocalPath(value: string): string {
+  return value.replace(/\\/g, '/').replace(/\/+/g, '/');
 }
 
 function createProjectItems(snapshot: LocalResourceSnapshot): VisibleItem[] {
@@ -2229,15 +3376,6 @@ function rowsForAgent(snapshot: LocalResourceSnapshot, agentId: string): LocalRe
   return (snapshot.rows ?? []).filter((row) => rowTargetsAgent(row, agentId));
 }
 
-function eventsForAgent(snapshot: LocalResourceSnapshot, agentId: string): LocalEventRecord[] {
-  return (snapshot.events ?? []).filter((event) => (
-    event.agentId === agentId
-    || String(event.resourceId ?? '').includes(agentId)
-    || String(event.metadata?.agentId ?? '') === agentId
-    || String(event.metadata?.targetAgentId ?? '') === agentId
-  ));
-}
-
 function rowTargetsAgent(row: LocalResourceRow, agentId: string): boolean {
   return row.binding?.agentId === agentId
     || row.resource.sourceId === agentId
@@ -2247,10 +3385,6 @@ function rowTargetsAgent(row: LocalResourceRow, agentId: string): boolean {
 
 function targetAgentIdForRow(row: LocalResourceRow): string | undefined {
   return asText(row.binding?.metadata?.targetAgentId ?? row.resource.metadata.targetAgentId, '') || undefined;
-}
-
-function targetAgentIdForEvent(event: LocalEventRecord): string | undefined {
-  return asText(event.metadata?.targetAgentId, '') || undefined;
 }
 
 function isAgentExtensionType(type: LocalResourceType | string): boolean {
@@ -2263,10 +3397,6 @@ function isAgentExtensionType(type: LocalResourceType | string): boolean {
 
 function rowsForProject(snapshot: LocalResourceSnapshot, projectId: string): LocalResourceRow[] {
   return (snapshot.rows ?? []).filter((row) => row.binding?.projectId === projectId || (row.resource.type === LocalResourceTypes.PROJECT && row.resource.sourceId === projectId));
-}
-
-function eventsForProject(snapshot: LocalResourceSnapshot, projectId: string): LocalEventRecord[] {
-  return (snapshot.events ?? []).filter((event) => event.projectId === projectId || String(event.metadata?.projectId ?? '') === projectId);
 }
 
 function rowsForKit(snapshot: LocalResourceSnapshot, kitId: string): LocalResourceRow[] {
@@ -2285,53 +3415,11 @@ function rowsForKitResources(snapshot: LocalResourceSnapshot, manifest: KitManif
   });
 }
 
-function eventsForKit(snapshot: LocalResourceSnapshot, kitId: string): LocalEventRecord[] {
-  const kitResourceIds = new Set((snapshot.resources ?? [])
-    .filter((resource) => resource.type === LocalResourceTypes.KIT && (resource.sourceId === kitId || extractKitManifest(resource.metadata)?.kitId === kitId))
-    .map((resource) => resource.id));
-  return (snapshot.events ?? []).filter((event) => (
-    event.kitId === kitId
-    || (event.resourceId ? kitResourceIds.has(event.resourceId) : false)
-    || String(event.metadata?.kitId ?? '') === kitId
-    || asRecord(event.metadata?.operationResult)?.kitId === kitId
-  ));
-}
-
 function rowForFinding(snapshot: LocalResourceSnapshot, finding: AuditFindingRecord): LocalResourceRow | undefined {
   return (snapshot.rows ?? []).find((row) => (
     row.resource.id === finding.resourceId
     && (!finding.bindingId || row.binding?.id === finding.bindingId)
   )) ?? (snapshot.rows ?? []).find((row) => row.resource.id === finding.resourceId);
-}
-
-function eventsForFinding(snapshot: LocalResourceSnapshot, finding: AuditFindingRecord): LocalEventRecord[] {
-  const relatedIds = new Set(finding.relatedEventIds);
-  return (snapshot.events ?? []).filter((event) => (
-    relatedIds.has(event.eventId)
-    || relatedIds.has(event.idempotencyKey)
-    || event.resourceId === finding.resourceId
-    || Boolean(finding.bindingId && event.bindingId === finding.bindingId)
-    || Boolean(finding.agentId && event.agentId === finding.agentId)
-    || Boolean(finding.projectId && event.projectId === finding.projectId)
-    || Boolean(finding.kitId && event.kitId === finding.kitId)
-  ));
-}
-
-export function rowForEvent(snapshot: LocalResourceSnapshot, event: LocalEventRecord): LocalResourceRow | undefined {
-  const rows = snapshot.rows ?? [];
-  const hasScope = Boolean(event.agentId || event.projectId || event.kitId);
-  const scopedMatch = (row: LocalResourceRow) => {
-    if (!hasScope) return false;
-    return (!event.agentId || row.binding?.agentId === event.agentId)
-      && (!event.projectId || row.binding?.projectId === event.projectId)
-      && (!event.kitId || row.binding?.kitId === event.kitId);
-  };
-  const bindingMatch = event.bindingId ? rows.find((row) => row.binding?.id === event.bindingId) : undefined;
-  if (bindingMatch) return bindingMatch;
-  const scopedResourceMatch = event.resourceId ? rows.find((row) => row.resource.id === event.resourceId && (!hasScope || scopedMatch(row))) : undefined;
-  if (scopedResourceMatch) return scopedResourceMatch;
-  const resourceMatch = event.resourceId ? rows.find((row) => row.resource.id === event.resourceId) : undefined;
-  return resourceMatch ?? rows.find(scopedMatch);
 }
 
 function fileForItem(item: VisibleItem): FileBackedResource | undefined {
@@ -2341,6 +3429,68 @@ function fileForItem(item: VisibleItem): FileBackedResource | undefined {
     if (exact) return exact;
   }
   return item.row.files[0];
+}
+
+function agentConfigEntriesForSection(rows: LocalResourceRow[], section: AgentConfigBrowserSection): AgentConfigEntry[] {
+  return rows
+    .filter((row) => section.resourceTypes.includes(row.resource.type))
+    .flatMap((row) => {
+      if (row.files.length > 0) return row.files.map((file) => agentConfigEntry(row, file));
+      return [agentConfigEntry(row)];
+    });
+}
+
+function agentConfigBrowserCounts(entries: AgentConfigEntry[]): { entryCount: number; fileCount: number } {
+  const files = new Set<string>();
+  for (const entry of entries) {
+    if (entry.file) files.add(`${entry.file.bindingId}:${entry.file.path}`);
+  }
+  return {
+    entryCount: entries.length,
+    fileCount: files.size
+  };
+}
+
+function agentConfigEntry(row: LocalResourceRow, file?: FileBackedResource): AgentConfigEntry {
+  const path = file?.path ?? row.binding?.targetPath ?? row.resource.sourcePath;
+  return {
+    id: [row.resource.id, row.binding?.id ?? 'resource', file?.path ?? 'record'].join(':'),
+    row,
+    file,
+    title: file ? fileBasename(file.path) : row.resource.displayName || row.resource.name,
+    path
+  };
+}
+
+function agentConfigEntryCanCheck(entry: AgentConfigEntry): boolean {
+  return Boolean(agentConfigEntryBindingId(entry));
+}
+
+function agentConfigEntryCanPreview(entry: AgentConfigEntry): boolean {
+  return Boolean(entry.file?.previewAvailable && agentConfigEntryBindingId(entry));
+}
+
+function agentConfigEntryBindingId(entry: AgentConfigEntry): string | undefined {
+  return entry.row.binding?.id ?? entry.file?.bindingId;
+}
+
+export function agentConfigEntryPayload(entry: AgentConfigEntry): { resourceId?: string; bindingId?: string; targetPath?: string } {
+  const bindingId = agentConfigEntryBindingId(entry);
+  return {
+    bindingId,
+    resourceId: undefined,
+    targetPath: entry.path
+  };
+}
+
+function fileBasename(pathValue: string): string {
+  return pathValue.split(/[\\/]/).pop() || pathValue;
+}
+
+function fileSizeLabel(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function definitionForAgent(agentId: string): AgentDefinition | undefined {
@@ -2389,90 +3539,6 @@ function fileToItem(file: FileBackedResource, row: LocalResourceRow): VisibleIte
     updatedAt: file.lastKnownMtime,
     source: file.contentType
   };
-}
-
-function eventToItem(event: LocalEventRecord): VisibleItem {
-  const status = eventStatus(event);
-  const targetAgentId = targetAgentIdForEvent(event);
-  return {
-    id: event.eventId,
-    name: event.message,
-    typeLabel: localResourceTypeLabel(event.resourceType ?? LocalResourceTypes.LOCAL_EVENT),
-    type: 'EVENT',
-    scopeLabel: [event.agentId, event.projectId, event.kitId].filter(Boolean).join(' / ') || '本地事件',
-    permissionLabel: '不适用',
-    permissionCategories: [],
-    auditLabel: auditStatusLabel(AuditStatuses.NOT_AUDITED),
-    auditStatus: AuditStatuses.NOT_AUDITED,
-    status,
-    updatedAt: event.createdAt,
-    source: event.eventType,
-    event,
-    agentId: targetAgentId ?? event.agentId,
-    agentIds: unique([event.agentId, targetAgentId].filter((value): value is string => Boolean(value))),
-    projectId: event.projectId,
-    projectIds: event.projectId ? [event.projectId] : [],
-    kitId: event.kitId,
-    kitIds: event.kitId ? [event.kitId] : [],
-    syncStatus: event.syncStatus,
-    offlineCreated: event.offlineCreated,
-    createdAt: event.createdAt,
-    eventType: event.eventType
-  };
-}
-
-function eventStatus(event: LocalEventRecord): AggregatedResourceStatus {
-  if (event.status === 'rollback_failed') return { key: 'event_rollback_failed', label: '回滚失败', tone: 'danger', source: 'event' };
-  if (event.syncStatus === SyncStatuses.SERVER_REJECTED || event.status === 'failure') return { key: 'event_failure', label: '失败', tone: 'danger', source: 'event' };
-  if (event.status === 'partial_success') return { key: 'event_partial_success', label: '部分成功', tone: 'warn', source: 'event' };
-  if (event.status === 'rolled_back') return { key: 'event_rolled_back', label: '回滚成功', tone: 'info', source: 'event' };
-  if (event.syncStatus === SyncStatuses.PENDING_SYNC) return { key: 'event_pending', label: '待同步', tone: 'info', source: 'event' };
-  if (event.syncStatus === SyncStatuses.SYNC_FAILED) return { key: 'event_sync_failed', label: '同步失败', tone: 'warn', source: 'event' };
-  return { key: 'event_info', label: event.status === 'success' ? '成功' : '事件', tone: event.status === 'success' ? 'ok' : 'info', source: 'event' };
-}
-
-function findingToItem(finding: AuditFindingRecord, snapshot: LocalResourceSnapshot): VisibleItem {
-  const row = rowForFinding(snapshot, finding);
-  const relatedEvents = eventsForFinding(snapshot, finding);
-  const targetAgentId = row ? targetAgentIdForRow(row) : undefined;
-  const trustScore = row?.resource.auditSummary.trustScore ?? Math.max(0, 100 - finding.trustScoreImpact);
-  return {
-    id: finding.id,
-    name: finding.title,
-    typeLabel: localResourceTypeLabel(finding.resourceType),
-    type: 'FINDING',
-    scopeLabel: [finding.agentId, finding.projectId, finding.kitId].filter(Boolean).join(' / ') || row?.scopeLabel || '未绑定',
-    permissionLabel: finding.permissionCategory,
-    permissionCategories: [finding.permissionCategory],
-    auditLabel: `${auditStatusLabel(finding.auditStatus)} / Trust ${trustScore}`,
-    auditStatus: finding.auditStatus,
-    status: findingStatus(finding),
-    path: finding.pathSummary ?? finding.path ?? row?.binding?.targetPath ?? row?.resource.sourcePath,
-    hash: finding.snippetHash,
-    updatedAt: finding.detectedAt,
-    source: finding.ruleId,
-    row,
-    finding,
-    agentId: targetAgentId ?? finding.agentId ?? row?.binding?.agentId,
-    agentIds: unique([finding.agentId, row?.binding?.agentId, targetAgentId].filter((value): value is string => Boolean(value))),
-    projectId: finding.projectId ?? row?.binding?.projectId,
-    projectIds: unique([finding.projectId, row?.binding?.projectId].filter((value): value is string => Boolean(value))),
-    kitId: finding.kitId ?? row?.binding?.kitId,
-    kitIds: unique([finding.kitId, row?.binding?.kitId].filter((value): value is string => Boolean(value))),
-    syncStatus: relatedEvents[0]?.syncStatus,
-    offlineCreated: relatedEvents.some((event) => event.offlineCreated) ? true : undefined,
-    createdAt: finding.detectedAt,
-    severity: finding.severity,
-    ruleId: finding.ruleId
-  };
-}
-
-function findingStatus(finding: AuditFindingRecord): AggregatedResourceStatus {
-  if (finding.blocker || finding.auditStatus === AuditStatuses.SECURITY_RISK) return { key: 'finding_blocker', label: '阻断风险', tone: 'danger', source: 'auditFinding' };
-  if (finding.auditStatus === AuditStatuses.HIGH_RISK || finding.severity === 'critical' || finding.severity === 'high') return { key: 'finding_high', label: '高风险', tone: 'danger', source: 'auditFinding' };
-  if (finding.auditStatus === AuditStatuses.NEEDS_REVIEW || finding.severity === 'medium') return { key: 'finding_review', label: '需复核', tone: 'warn', source: 'auditFinding' };
-  if (finding.auditStatus === AuditStatuses.LOW_RISK || finding.severity === 'low') return { key: 'finding_low', label: '低风险', tone: 'warn', source: 'auditFinding' };
-  return { key: 'finding_safe', label: auditStatusLabel(finding.auditStatus), tone: 'info', source: 'auditFinding' };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -2760,20 +3826,7 @@ function capabilityLabel(value: unknown): string {
 }
 
 function resourceCountForKind(rows: LocalResourceRow[], kind: string): string {
-  const typesByKind: Record<string, LocalResourceType[]> = {
-    settings: [LocalResourceTypes.AGENT_CONFIG],
-    rules: [LocalResourceTypes.RULE],
-    subagents: [LocalResourceTypes.SUBAGENT],
-    memory: [LocalResourceTypes.MEMORY],
-    'ignore-files': [LocalResourceTypes.IGNORE_FILE],
-    skills: [LocalResourceTypes.SKILL],
-    mcp: [LocalResourceTypes.MCP_SERVER],
-    plugins: [LocalResourceTypes.PLUGIN],
-    hooks: [LocalResourceTypes.HOOK],
-    cli: [LocalResourceTypes.CLI_COMMAND],
-    files: [LocalResourceTypes.AGENT_CONFIG, LocalResourceTypes.RULE, LocalResourceTypes.MEMORY, LocalResourceTypes.SUBAGENT, LocalResourceTypes.IGNORE_FILE, LocalResourceTypes.SKILL, LocalResourceTypes.MCP_SERVER, LocalResourceTypes.PLUGIN, LocalResourceTypes.HOOK, LocalResourceTypes.CLI_COMMAND]
-  };
-  const resourceTypes = typesByKind[kind] ?? [];
+  const resourceTypes = resourceTypesForAgentResourceKind(kind);
   const count = rows.filter((row) => resourceTypes.includes(row.resource.type)).length;
   return count > 0 ? `${count} 个资源` : '未检测';
 }
@@ -2928,22 +3981,6 @@ function kitApplicationDistribution(rows: LocalResourceRow[]): string {
   return `${distributionLabel(rows)} / ${applicationIds.length || 1} 应用`;
 }
 
-function operationResultsFromEvent(event: LocalEventRecord): Array<{ resourceRefId?: string; resourceId?: string; status: string; message: string }> {
-  const operationResult = asRecord(event.metadata?.operationResult);
-  const resourceResults = operationResult?.resourceResults;
-  if (!Array.isArray(resourceResults)) return [];
-  return resourceResults.flatMap((result) => {
-    const record = asRecord(result);
-    if (!record) return [];
-    return [{
-      resourceRefId: asText(record.resourceRefId, undefined),
-      resourceId: asText(record.resourceId, undefined),
-      status: asText(record.status, '未知'),
-      message: asText(record.message ?? record.failureReason, '无消息')
-    }];
-  });
-}
-
 function matchesQuery(item: VisibleItem, query: string): boolean {
   const needle = query.trim().toLowerCase();
   if (!needle) return true;
@@ -2959,10 +3996,7 @@ function matchesQuery(item: VisibleItem, query: string): boolean {
     item.version,
     item.agentId,
     item.projectId,
-    item.kitId,
-    item.eventType,
-    item.ruleId,
-    item.severity
+    item.kitId
   ].some((value) => String(value ?? '').toLowerCase().includes(needle));
 }
 
@@ -2970,34 +4004,30 @@ function uniqueOptions(values: string[]): string[] {
   return ['全部', ...Array.from(new Set(values.filter(Boolean)))];
 }
 
-function offlineCreatedLabel(value: boolean | undefined): string {
-  if (value === true) return '离线生成';
-  if (value === false) return '在线生成';
-  return '不适用';
+function orderedExtensionTypeOptions(values: string[]): string[] {
+  const options = Array.from(new Set(values.filter(Boolean)));
+  options.sort((left, right) => {
+    const leftRank = extensionTypeRank(left);
+    const rightRank = extensionTypeRank(right);
+    return leftRank - rightRank || NAME_COLLATOR.compare(left, right);
+  });
+  return ['全部', ...options];
 }
 
-function timeRangeMatches(filter: string, value: string | undefined): boolean {
-  if (filter === '全部') return true;
-  if (!value) return false;
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return false;
-  const ranges: Record<string, number> = {
-    '近24小时': 24 * 60 * 60 * 1000,
-    '近7天': 7 * 24 * 60 * 60 * 1000,
-    '近30天': 30 * 24 * 60 * 60 * 1000
-  };
-  const duration = ranges[filter];
-  if (!duration) return true;
-  return Date.now() - timestamp <= duration;
+function extensionTypeRank(value: string): number {
+  const rank = EXTENSION_TYPE_FILTER_ORDER.findIndex((option) => option.toLowerCase() === value.toLowerCase());
+  return rank === -1 ? EXTENSION_TYPE_FILTER_ORDER.length : rank;
+}
+
+function compareVisibleItemsByName(left: VisibleItem, right: VisibleItem): number {
+  return NAME_COLLATOR.compare(left.name, right.name)
+    || NAME_COLLATOR.compare(left.typeLabel, right.typeLabel)
+    || NAME_COLLATOR.compare(left.path ?? '', right.path ?? '')
+    || NAME_COLLATOR.compare(left.id, right.id);
 }
 
 function resourceSubtext(item: VisibleItem): string {
   const parts = [
-    item.finding ? `规则 ${item.ruleId}` : undefined,
-    item.finding ? `风险 ${item.severity}` : undefined,
-    item.type === 'EVENT' && item.source ? item.source : undefined,
-    item.syncStatus ? `同步 ${item.syncStatus}` : undefined,
-    item.offlineCreated !== undefined ? offlineCreatedLabel(item.offlineCreated) : undefined,
     item.path,
     item.version ? `版本 ${item.version}` : undefined,
     item.hash ? `Hash ${item.hash.slice(0, 12)}` : undefined,
@@ -3017,7 +4047,7 @@ function formatScanSummary(state: LoadState | undefined, summary: LocalInventory
 
 function emptyMessage(tab: LocalTab, state: LoadState | undefined, snapshot: LocalResourceSnapshot): string {
   if (state === 'loading') return '正在读取本地数据库和扫描目录。';
-  if (snapshot.summary.failureCount > 0) return '当前筛选没有匹配项，扫描失败项可在审计与事件中查看。';
+  if (snapshot.summary.failureCount > 0) return '当前筛选没有匹配项，扫描失败项可在审计中查看。';
   if (tab === 'overview') return '已完成本地扫描，未发现可展示资源。';
   return '没有符合当前页面和筛选条件的真实本地资源。';
 }

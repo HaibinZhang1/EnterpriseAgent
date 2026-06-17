@@ -52,6 +52,7 @@ export function createPreloadApi(invoke: PreloadInvoke) {
       generateFromProject: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.kitGenerateFromProject, payload, requestID),
       apply: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.kitApply, payload, requestID),
       removeApplication: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.kitRemoveApplication, payload, requestID),
+      deleteManifest: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.kitDeleteManifest, payload, requestID),
       checkDrift: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.kitCheckDrift, payload, requestID),
       staticAudit: (payload: unknown, requestID?: string) => invoke(IPC_CHANNELS.kitStaticAudit, payload, requestID)
     },

@@ -15,3 +15,4 @@ desktop/dist/
 desktop/coverage/
 web-admin/node_modules/
 web-admin/dist/
+node_modules/
