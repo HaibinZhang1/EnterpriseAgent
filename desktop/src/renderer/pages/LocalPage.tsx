@@ -172,9 +172,6 @@ export function LocalPage({
   const [extensionSourceFilter, setExtensionSourceFilter] = useState('全部');
   const [auditQuery, setAuditQuery] = useState('');
   const [auditTierFilter, setAuditTierFilter] = useState('全部');
-  const [agentQuery, setAgentQuery] = useState('');
-  const [projectQuery, setProjectQuery] = useState('');
-  const [toolkitQuery, setToolkitQuery] = useState('');
   const [kitWorkbenchOpen, setKitWorkbenchOpen] = useState(false);
   const [selected, setSelected] = useState<VisibleItem | undefined>();
   const [selectedKitId, setSelectedKitId] = useState<string | undefined>();
@@ -193,7 +190,7 @@ export function LocalPage({
   const auditItems = useMemo(() => createVisibleItems(snapshot, activeNav), [activeNav, snapshot]);
 
   const filteredItems = useMemo(() => {
-    if (activeTab === 'agents') return filterByQuery(agentItems, agentQuery);
+    if (activeTab === 'agents') return agentItems;
     if (activeTab === 'extensions') {
       return extensionItems.filter((item) => (
         matchesQuery(item, extensionQuery)
@@ -202,13 +199,13 @@ export function LocalPage({
         && (extensionSourceFilter === '全部' || item.source === extensionSourceFilter)
       ));
     }
-    if (activeTab === 'projects') return filterByQuery(projectItems, projectQuery);
-    if (activeTab === 'toolkits') return filterByQuery(kitItems, toolkitQuery);
+    if (activeTab === 'projects') return projectItems;
+    if (activeTab === 'toolkits') return kitItems;
     if (activeTab === 'audit-events') {
       return auditItems.filter((item) => matchesQuery(item, auditQuery) && (auditTierFilter === '全部' || item.auditLabel === auditTierFilter || item.severity === auditTierFilter || item.status.label === auditTierFilter));
     }
     return overviewItems;
-  }, [activeTab, agentItems, agentQuery, auditItems, auditQuery, auditTierFilter, extensionAgentFilter, extensionItems, extensionQuery, extensionSourceFilter, extensionTypeFilter, kitItems, overviewItems, projectItems, projectQuery, toolkitQuery]);
+  }, [activeTab, agentItems, auditItems, auditQuery, auditTierFilter, extensionAgentFilter, extensionItems, extensionQuery, extensionSourceFilter, extensionTypeFilter, kitItems, overviewItems, projectItems]);
 
   const counts = useMemo(() => Object.fromEntries(NAV_ITEMS.map((item) => [item.id,
     item.id === 'agents' ? agentItems.length
@@ -313,9 +310,6 @@ export function LocalPage({
           auditQuery={auditQuery}
           auditTierFilter={auditTierFilter}
           auditTierOptions={auditTierOptions}
-          agentQuery={agentQuery}
-          projectQuery={projectQuery}
-          toolkitQuery={toolkitQuery}
           kitWorkbenchOpen={kitWorkbenchOpen}
           onExtensionQuery={setExtensionQuery}
           onExtensionTypeFilter={setExtensionTypeFilter}
@@ -323,9 +317,6 @@ export function LocalPage({
           onExtensionSourceFilter={setExtensionSourceFilter}
           onAuditQuery={setAuditQuery}
           onAuditTierFilter={setAuditTierFilter}
-          onAgentQuery={setAgentQuery}
-          onProjectQuery={setProjectQuery}
-          onToolkitQuery={setToolkitQuery}
           onToggleKitWorkbench={() => setKitWorkbenchOpen((open) => !open)}
         />
 
@@ -346,6 +337,10 @@ export function LocalPage({
               }}
               onSelectDetailTab={setAgentDetailTab}
               onSelectResource={setSelected}
+              onOpenAgentExtensions={(agentId) => {
+                setExtensionAgentFilter(agentId);
+                switchTab('extensions');
+              }}
               onRefreshLocal={onRefreshLocal}
             />
           ) : activeTab === 'projects' ? (
@@ -410,9 +405,6 @@ function LocalTabToolbar({
   auditQuery,
   auditTierFilter,
   auditTierOptions,
-  agentQuery,
-  projectQuery,
-  toolkitQuery,
   kitWorkbenchOpen,
   onExtensionQuery,
   onExtensionTypeFilter,
@@ -420,9 +412,6 @@ function LocalTabToolbar({
   onExtensionSourceFilter,
   onAuditQuery,
   onAuditTierFilter,
-  onAgentQuery,
-  onProjectQuery,
-  onToolkitQuery,
   onToggleKitWorkbench
 }: {
   activeTab: LocalTab;
@@ -437,9 +426,6 @@ function LocalTabToolbar({
   auditQuery: string;
   auditTierFilter: string;
   auditTierOptions: string[];
-  agentQuery: string;
-  projectQuery: string;
-  toolkitQuery: string;
   kitWorkbenchOpen: boolean;
   onExtensionQuery: (value: string) => void;
   onExtensionTypeFilter: (value: string) => void;
@@ -447,9 +433,6 @@ function LocalTabToolbar({
   onExtensionSourceFilter: (value: string) => void;
   onAuditQuery: (value: string) => void;
   onAuditTierFilter: (value: string) => void;
-  onAgentQuery: (value: string) => void;
-  onProjectQuery: (value: string) => void;
-  onToolkitQuery: (value: string) => void;
   onToggleKitWorkbench: () => void;
 }) {
   if (activeTab === 'extensions') {
@@ -474,15 +457,14 @@ function LocalTabToolbar({
     );
   }
   if (activeTab === 'agents') {
-    return <section className="local-tab-toolbar" data-testid="local-agent-toolbar" aria-label="智能体工具栏"><SearchControl label="搜索智能体" value={agentQuery} onChange={onAgentQuery} /><span className="meta">{filteredCount} 项</span></section>;
+    return null;
   }
   if (activeTab === 'projects') {
-    return <section className="local-tab-toolbar" data-testid="local-project-toolbar" aria-label="项目工具栏"><SearchControl label="搜索项目" value={projectQuery} onChange={onProjectQuery} /><span className="meta">{filteredCount} 项</span></section>;
+    return null;
   }
   if (activeTab === 'toolkits') {
     return (
       <section className="local-tab-toolbar" data-testid="local-toolkit-toolbar" aria-label="工具集工具栏">
-        <SearchControl label="搜索工具集" value={toolkitQuery} onChange={onToolkitQuery} />
         <Button onClick={onToggleKitWorkbench}>{kitWorkbenchOpen ? '收起 Kit 生成与导入' : '展开导入 Kit'}</Button>
         {!kitWorkbenchOpen ? (
           <>
@@ -624,6 +606,7 @@ function AgentDashboard({
   onSelectAgent,
   onSelectDetailTab,
   onSelectResource,
+  onOpenAgentExtensions,
   onRefreshLocal
 }: {
   agentItems: VisibleItem[];
@@ -635,13 +618,14 @@ function AgentDashboard({
   onSelectAgent: (agentId: string) => void;
   onSelectDetailTab: (tab: AgentDashboardTab) => void;
   onSelectResource: (item: VisibleItem) => void;
+  onOpenAgentExtensions: (agentId: string) => void;
   onRefreshLocal?: () => void;
 }) {
   if (agentItems.length === 0) {
     return <EmptyState title="暂无智能体资源" message={emptyMessage('agents', localScanState, snapshot)} />;
   }
 
-  const defaultAgentId = agentItems.find((item) => item.agentId === CUSTOM_AGENT_ID && item.status.key === 'not_configured')?.agentId;
+  const defaultAgentId = agentItems.find((item) => item.agentId === 'codex')?.agentId ?? agentItems[0]?.agentId;
   const selectedAgent = agentItems.find((item) => item.agentId === (selectedAgentId ?? defaultAgentId)) ?? agentItems[0];
   const detailAgentId = selectedAgent.agentId ?? AGENT_DEFINITIONS[0].id;
   const detailRows = rowsForAgent(snapshot, detailAgentId);
@@ -649,14 +633,13 @@ function AgentDashboard({
   const definition = definitionForAgent(detailAgentId);
 
   return (
-    <div className="local-split-layout" data-testid="agent-dashboard">
-      <aside className="local-split-list" data-testid="local-agent-list" aria-label="智能体列表">
-        <VisibleItemsTable
+    <div className="local-split-layout agent-dashboard-layout" data-testid="agent-dashboard">
+      <aside className="local-split-list local-agent-selector" data-testid="local-agent-list" aria-label="智能体列表">
+        <AgentSelectorList
           items={agentItems}
-          onSelect={(item) => {
-            if (item.agentId) onSelectAgent(item.agentId);
-            else onSelectResource(item);
-          }}
+          selectedAgentId={detailAgentId}
+          onSelectAgent={onSelectAgent}
+          onSelectResource={onSelectResource}
         />
       </aside>
 
@@ -671,19 +654,18 @@ function AgentDashboard({
           <StatusBadge tone={selectedAgent.status.tone}>{selectedAgent.status.label}</StatusBadge>
         </header>
 
-        <div className="filter-bar" role="tablist" aria-label="智能体详情 Tab" style={{ margin: '12px 0' }}>
+        <div className="agent-detail-nav" role="tablist" aria-label="智能体详情 Tab">
           {AGENT_DETAIL_TABS.map((tab) => (
             <button
               key={tab.id}
               type="button"
               role="tab"
               aria-selected={activeDetailTab === tab.id}
-              className={`saas-sidebar-item ${activeDetailTab === tab.id ? 'active' : ''}`}
-              style={{ width: 'auto' }}
+              className={`agent-detail-tab ${activeDetailTab === tab.id ? 'active' : ''}`}
               onClick={() => onSelectDetailTab(tab.id)}
               data-testid={`agent-tab-${tab.id}`}
             >
-              <span className="saas-sidebar-item-label">{tab.label}</span>
+              {tab.label}
             </button>
           ))}
         </div>
@@ -697,9 +679,49 @@ function AgentDashboard({
           activeTab={activeDetailTab}
           settingsConfig={settingsConfig}
           onSelectResource={onSelectResource}
+          onOpenAgentExtensions={onOpenAgentExtensions}
           onRefreshLocal={onRefreshLocal}
         />
       </div>
+    </div>
+  );
+}
+
+function AgentSelectorList({
+  items,
+  selectedAgentId,
+  onSelectAgent,
+  onSelectResource
+}: {
+  items: VisibleItem[];
+  selectedAgentId?: string;
+  onSelectAgent: (agentId: string) => void;
+  onSelectResource: (item: VisibleItem) => void;
+}) {
+  return (
+    <div className="agent-selector-list" data-testid="local-agent-selector">
+      {items.map((item) => {
+        const active = item.agentId === selectedAgentId;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            className={`agent-selector-row ${active ? 'active' : ''}`}
+            aria-pressed={active}
+            data-testid={item.agentId ? `local-agent-row-${item.agentId}` : undefined}
+            onClick={() => {
+              if (item.agentId) onSelectAgent(item.agentId);
+              else onSelectResource(item);
+            }}
+          >
+            <span className="agent-selector-main">
+              <span className="agent-selector-name">{item.name}</span>
+              <span className="agent-selector-meta">{item.agentId ?? item.source ?? 'unknown'} · {item.builtIn ? '内置' : '自定义'}</span>
+            </span>
+            <StatusBadge tone={item.status.tone}>{item.status.label}</StatusBadge>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -713,6 +735,7 @@ function AgentTabContent({
   activeTab,
   settingsConfig,
   onSelectResource,
+  onOpenAgentExtensions,
   onRefreshLocal
 }: {
   agent: VisibleItem;
@@ -723,11 +746,12 @@ function AgentTabContent({
   activeTab: AgentDashboardTab;
   settingsConfig: Record<string, unknown>;
   onSelectResource: (item: VisibleItem) => void;
+  onOpenAgentExtensions: (agentId: string) => void;
   onRefreshLocal?: () => void;
 }) {
   const tabDefinition = AGENT_DETAIL_TABS.find((tab) => tab.id === activeTab);
   if (activeTab === 'overview') {
-    return <AgentOverview agent={agent} definition={definition} rows={rows} events={events} snapshot={snapshot} settingsConfig={settingsConfig} onSelectResource={onSelectResource} onRefreshLocal={onRefreshLocal} />;
+    return <AgentOverview agent={agent} definition={definition} rows={rows} events={events} snapshot={snapshot} settingsConfig={settingsConfig} onSelectResource={onSelectResource} onOpenAgentExtensions={onOpenAgentExtensions} onRefreshLocal={onRefreshLocal} />;
   }
   if (activeTab === 'files') {
     return <AgentFilesTable rows={rows} onSelectResource={onSelectResource} />;
@@ -759,6 +783,7 @@ function AgentOverview({
   snapshot,
   settingsConfig,
   onSelectResource,
+  onOpenAgentExtensions,
   onRefreshLocal
 }: {
   agent: VisibleItem;
@@ -768,19 +793,30 @@ function AgentOverview({
   snapshot: LocalResourceSnapshot;
   settingsConfig: Record<string, unknown>;
   onSelectResource: (item: VisibleItem) => void;
+  onOpenAgentExtensions: (agentId: string) => void;
   onRefreshLocal?: () => void;
 }) {
   const agentResource = agent.row?.resource;
+  const detailAgentId = agent.agentId ?? definition?.id ?? '';
   const profile = asRecord(agentResource?.metadata.pathProfile);
+  const configuredProfile = findConfiguredAgentProfile(settingsConfig.agentProfiles, detailAgentId, definition?.builtIn ? detailAgentId : undefined);
+  const configuredPathProfile = asRecord(configuredProfile?.pathProfile);
+  const editorProfile = configuredPathProfile ?? profile;
   const capabilityStatus = asRecord(profile?.capabilityStatus);
   const auditSummary = summarizeAudit(rows);
   const permissionSummary = summarizePermissions(rows);
   const recentEvents = events.slice(0, 4);
-  const hasConfiguredCustomProfile = !definition?.builtIn && Boolean(agentResource?.metadata.customProfileConfigured ?? rows.some((row) => row.resource.type !== LocalResourceTypes.AGENT));
+  const hasConfiguredCustomProfile = Boolean(configuredProfile) || (!definition?.builtIn && Boolean(agentResource?.metadata.customProfileConfigured ?? rows.some((row) => row.resource.type !== LocalResourceTypes.AGENT)));
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <AgentExtensionSummary
+        rows={rows}
+        agentId={detailAgentId}
+        onOpenAgentExtensions={onOpenAgentExtensions}
+      />
+
       <table className="table compact-table" data-testid="agent-overview-matrix">
         <tbody>
           <tr>
@@ -835,28 +871,26 @@ function AgentOverview({
         </table>
       </div>
 
-      {!definition?.builtIn ? (
-        <section className="panel" data-testid="custom-agent-profile-summary">
-          <header className="section-header">
-            <div>
-              <h3>Agent Profile 配置</h3>
-              <p className="muted">{hasConfiguredCustomProfile ? '已配置自定义目录 Profile；可展开编辑静态 Path Profile。' : '未配置路径规则；需要显式展开后再配置。'}</p>
-            </div>
-            <Button onClick={() => setProfileEditorOpen((open) => !open)}>{profileEditorOpen ? '收起配置' : hasConfiguredCustomProfile ? '编辑 Agent Profile' : '添加 Agent Profile'}</Button>
-          </header>
-          {profileEditorOpen ? (
-            <CustomAgentProfileEditor
-              configured={hasConfiguredCustomProfile}
-              agent={agent}
-              definition={definition}
-              profile={profile}
-              settingsConfig={settingsConfig}
-              onCancel={() => setProfileEditorOpen(false)}
-              onRefreshLocal={onRefreshLocal}
-            />
-          ) : null}
-        </section>
-      ) : null}
+      <section className="custom-agent-profile-panel" data-testid="custom-agent-profile-summary">
+        <header className="section-header">
+          <div>
+            <h3>{definition?.builtIn ? '自定义路径' : 'Agent Profile 配置'}</h3>
+            <p className="muted">{hasConfiguredCustomProfile ? '已保存自定义 Path Profile；扫描结果会并入当前智能体视图。' : '未配置路径规则；需要显式展开后再配置。'}</p>
+          </div>
+          <Button onClick={() => setProfileEditorOpen((open) => !open)}>{profileEditorOpen ? '收起配置' : hasConfiguredCustomProfile ? '编辑自定义路径' : definition?.builtIn ? '添加自定义路径' : '添加 Agent Profile'}</Button>
+        </header>
+        {profileEditorOpen ? (
+          <CustomAgentProfileEditor
+            configured={hasConfiguredCustomProfile}
+            agent={agent}
+            definition={definition}
+            profile={editorProfile}
+            settingsConfig={settingsConfig}
+            onCancel={() => setProfileEditorOpen(false)}
+            onRefreshLocal={onRefreshLocal}
+          />
+        ) : null}
+      </section>
 
       <div>
         <h3>最近资源</h3>
@@ -868,6 +902,39 @@ function AgentOverview({
         <AgentEventsTable events={recentEvents} onSelectResource={onSelectResource} />
       </div>
     </div>
+  );
+}
+
+function AgentExtensionSummary({
+  rows,
+  agentId,
+  onOpenAgentExtensions
+}: {
+  rows: LocalResourceRow[];
+  agentId: string;
+  onOpenAgentExtensions: (agentId: string) => void;
+}) {
+  const extensionRows = rows.filter((row) => isAgentExtensionType(row.resource.type));
+  const counts = {
+    skill: extensionRows.filter((row) => row.resource.type === LocalResourceTypes.SKILL).length,
+    mcp: extensionRows.filter((row) => row.resource.type === LocalResourceTypes.MCP_SERVER).length,
+    plugin: extensionRows.filter((row) => row.resource.type === LocalResourceTypes.PLUGIN).length,
+    hook: extensionRows.filter((row) => row.resource.type === LocalResourceTypes.HOOK).length,
+    cli: extensionRows.filter((row) => row.resource.type === LocalResourceTypes.CLI_COMMAND).length
+  };
+  return (
+    <section className="agent-extension-summary" data-testid="agent-extension-summary">
+      <div className="agent-extension-counts">
+        <strong>{extensionRows.length}</strong>
+        <span>扩展资源</span>
+        <span>{counts.skill} Skill</span>
+        <span>{counts.mcp} MCP</span>
+        <span>{counts.plugin} Plugin</span>
+        <span>{counts.hook} Hook</span>
+        <span>{counts.cli} CLI</span>
+      </div>
+      <Button onClick={() => onOpenAgentExtensions(agentId)}>在扩展中查看</Button>
+    </section>
   );
 }
 
@@ -1586,6 +1653,7 @@ function CustomAgentProfileEditor({
   const initialIdentity = customAgentProfileIdentity(agent, definition, settingsConfig.agentProfiles);
   const [profileId, setProfileId] = useState(initialIdentity.profileId);
   const [agentId, setAgentId] = useState(initialIdentity.agentId);
+  const [targetAgentId, setTargetAgentId] = useState(initialIdentity.targetAgentId ?? '');
   const [displayName, setDisplayName] = useState(initialIdentity.displayName);
   const [rootPath, setRootPath] = useState(asStringArray(profile?.detectionRoots)[0] ?? '');
   const [rulesText, setRulesText] = useState(JSON.stringify(profile?.resourcePaths ?? {}, null, 2));
@@ -1595,11 +1663,12 @@ function CustomAgentProfileEditor({
     const identity = customAgentProfileIdentity(agent, definition, settingsConfig.agentProfiles);
     setProfileId(identity.profileId);
     setAgentId(identity.agentId);
+    setTargetAgentId(identity.targetAgentId ?? '');
     setDisplayName(identity.displayName);
     setRootPath(asStringArray(profile?.detectionRoots)[0] ?? '');
     setRulesText(JSON.stringify(profile?.resourcePaths ?? {}, null, 2));
   }, [agent.id, definition?.id, profile, settingsConfig.agentProfiles]);
-  const validate = () => buildCustomAgentProfile({ profileId, agentId, displayName, rootPath, rulesText });
+  const validate = () => buildCustomAgentProfile({ profileId, agentId, targetAgentId, displayName, rootPath, rulesText });
   const handleValidate = () => {
     const result = validate();
     setMessage(result.valid ? { tone: 'success', text: 'Path Profile 静态校验通过；保存后将按内置智能体同一模型扫描。' } : { tone: 'error', text: result.error });
@@ -1632,8 +1701,14 @@ function CustomAgentProfileEditor({
       </label>
       <label>
         <span className="filter-label">Agent ID</span>
-        <input className="input" aria-label="Agent ID" value={agentId} onChange={(event) => setAgentId(event.target.value)} />
+        <input className="input" aria-label="Agent ID" value={agentId} readOnly={Boolean(targetAgentId)} onChange={(event) => setAgentId(event.target.value)} />
       </label>
+      {targetAgentId ? (
+        <label>
+          <span className="filter-label">目标智能体</span>
+          <input className="input" aria-label="目标智能体" value={targetAgentId} readOnly onChange={(event) => setTargetAgentId(event.target.value)} />
+        </label>
+      ) : null}
       <label>
         <span className="filter-label">显示名称</span>
         <input className="input" aria-label="显示名称" value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
@@ -2100,6 +2175,7 @@ function createAgentItems(snapshot: LocalResourceSnapshot): VisibleItem[] {
   const staticAgentIds = new Set<string>(AGENT_DEFINITIONS.map((definition) => definition.id));
   const dynamicDefinitions: AgentDefinition[] = unique((snapshot.rows ?? []).flatMap((row) => {
     if (row.resource.type !== LocalResourceTypes.AGENT) return [];
+    if (asText(row.resource.metadata.targetAgentId, '')) return [];
     const agentId = row.binding?.agentId ?? row.resource.sourceId;
     if (!agentId || staticAgentIds.has(agentId)) return [];
     return [agentId];
@@ -2150,11 +2226,39 @@ function summarizeAgentStatus(definition: AgentDefinition, rows: LocalResourceRo
 }
 
 function rowsForAgent(snapshot: LocalResourceSnapshot, agentId: string): LocalResourceRow[] {
-  return (snapshot.rows ?? []).filter((row) => row.binding?.agentId === agentId || row.resource.sourceId === agentId || String(row.resource.sourceId ?? '').startsWith(`${agentId}:`));
+  return (snapshot.rows ?? []).filter((row) => rowTargetsAgent(row, agentId));
 }
 
 function eventsForAgent(snapshot: LocalResourceSnapshot, agentId: string): LocalEventRecord[] {
-  return (snapshot.events ?? []).filter((event) => event.agentId === agentId || String(event.resourceId ?? '').includes(agentId) || String(event.metadata?.agentId ?? '') === agentId);
+  return (snapshot.events ?? []).filter((event) => (
+    event.agentId === agentId
+    || String(event.resourceId ?? '').includes(agentId)
+    || String(event.metadata?.agentId ?? '') === agentId
+    || String(event.metadata?.targetAgentId ?? '') === agentId
+  ));
+}
+
+function rowTargetsAgent(row: LocalResourceRow, agentId: string): boolean {
+  return row.binding?.agentId === agentId
+    || row.resource.sourceId === agentId
+    || String(row.resource.sourceId ?? '').startsWith(`${agentId}:`)
+    || targetAgentIdForRow(row) === agentId;
+}
+
+function targetAgentIdForRow(row: LocalResourceRow): string | undefined {
+  return asText(row.binding?.metadata?.targetAgentId ?? row.resource.metadata.targetAgentId, '') || undefined;
+}
+
+function targetAgentIdForEvent(event: LocalEventRecord): string | undefined {
+  return asText(event.metadata?.targetAgentId, '') || undefined;
+}
+
+function isAgentExtensionType(type: LocalResourceType | string): boolean {
+  return type === LocalResourceTypes.SKILL
+    || type === LocalResourceTypes.MCP_SERVER
+    || type === LocalResourceTypes.PLUGIN
+    || type === LocalResourceTypes.HOOK
+    || type === LocalResourceTypes.CLI_COMMAND;
 }
 
 function rowsForProject(snapshot: LocalResourceSnapshot, projectId: string): LocalResourceRow[] {
@@ -2247,6 +2351,7 @@ function rowToItem(row: LocalResourceRow): VisibleItem {
   const resource = row.resource;
   const binding = row.binding;
   const file = row.files[0];
+  const targetAgentId = targetAgentIdForRow(row);
   return {
     id: `${resource.id}:${binding?.id ?? 'resource'}`,
     name: resource.displayName || resource.name,
@@ -2264,8 +2369,8 @@ function rowToItem(row: LocalResourceRow): VisibleItem {
     updatedAt: binding?.updatedAt ?? resource.lastScannedAt ?? resource.createdAt,
     source: resource.sourceType,
     row,
-    agentId: binding?.agentId,
-    agentIds: binding?.agentId ? [binding.agentId] : [],
+    agentId: targetAgentId ?? binding?.agentId,
+    agentIds: unique([binding?.agentId, targetAgentId].filter((value): value is string => Boolean(value))),
     projectId: binding?.projectId,
     projectIds: binding?.projectId ? [binding.projectId] : [],
     kitId: binding?.kitId,
@@ -2288,6 +2393,7 @@ function fileToItem(file: FileBackedResource, row: LocalResourceRow): VisibleIte
 
 function eventToItem(event: LocalEventRecord): VisibleItem {
   const status = eventStatus(event);
+  const targetAgentId = targetAgentIdForEvent(event);
   return {
     id: event.eventId,
     name: event.message,
@@ -2302,8 +2408,8 @@ function eventToItem(event: LocalEventRecord): VisibleItem {
     updatedAt: event.createdAt,
     source: event.eventType,
     event,
-    agentId: event.agentId,
-    agentIds: event.agentId ? [event.agentId] : [],
+    agentId: targetAgentId ?? event.agentId,
+    agentIds: unique([event.agentId, targetAgentId].filter((value): value is string => Boolean(value))),
     projectId: event.projectId,
     projectIds: event.projectId ? [event.projectId] : [],
     kitId: event.kitId,
@@ -2328,6 +2434,7 @@ function eventStatus(event: LocalEventRecord): AggregatedResourceStatus {
 function findingToItem(finding: AuditFindingRecord, snapshot: LocalResourceSnapshot): VisibleItem {
   const row = rowForFinding(snapshot, finding);
   const relatedEvents = eventsForFinding(snapshot, finding);
+  const targetAgentId = row ? targetAgentIdForRow(row) : undefined;
   const trustScore = row?.resource.auditSummary.trustScore ?? Math.max(0, 100 - finding.trustScoreImpact);
   return {
     id: finding.id,
@@ -2346,8 +2453,8 @@ function findingToItem(finding: AuditFindingRecord, snapshot: LocalResourceSnaps
     source: finding.ruleId,
     row,
     finding,
-    agentId: finding.agentId ?? row?.binding?.agentId,
-    agentIds: unique([finding.agentId, row?.binding?.agentId].filter((value): value is string => Boolean(value))),
+    agentId: targetAgentId ?? finding.agentId ?? row?.binding?.agentId,
+    agentIds: unique([finding.agentId, row?.binding?.agentId, targetAgentId].filter((value): value is string => Boolean(value))),
     projectId: finding.projectId ?? row?.binding?.projectId,
     projectIds: unique([finding.projectId, row?.binding?.projectId].filter((value): value is string => Boolean(value))),
     kitId: finding.kitId ?? row?.binding?.kitId,
@@ -2470,18 +2577,21 @@ function asNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-function customAgentProfileIdentity(agent: VisibleItem, definition: AgentDefinition | undefined, existing: unknown): { profileId: string; agentId: string; displayName: string } {
+function customAgentProfileIdentity(agent: VisibleItem, definition: AgentDefinition | undefined, existing: unknown): { profileId: string; agentId: string; targetAgentId?: string; displayName: string } {
   const resource = agent.row?.resource;
+  const targetAgentId = definition?.builtIn ? definition.id : asText(resource?.metadata.targetAgentId, '');
   const rawAgentId = asText(agent.row?.binding?.agentId ?? resource?.sourceId ?? definition?.id, '');
-  const fallbackAgentId = fallbackCustomAgentId(agent, definition);
+  const fallbackAgentId = targetAgentId ? `custom-${targetAgentId}` : fallbackCustomAgentId(agent, definition);
   const rowAgentId = rawAgentId && rawAgentId !== CUSTOM_AGENT_ID ? rawAgentId : fallbackAgentId;
-  const storedProfile = findConfiguredAgentProfile(existing, rowAgentId);
+  const storedProfile = findConfiguredAgentProfile(existing, rowAgentId, targetAgentId);
   const storedAgentId = asText(storedProfile?.agentId, '');
   const agentId = storedAgentId && storedAgentId !== CUSTOM_AGENT_ID ? storedAgentId : rowAgentId;
+  const fallbackDisplayName = targetAgentId && definition ? `${definition.label} 自定义路径` : asText(resource?.displayName ?? resource?.name ?? agent.name ?? definition?.label, '自定义目录');
   return {
     profileId: asText(storedProfile?.profileId ?? resource?.metadata.profileId, agentId),
     agentId,
-    displayName: asText(storedProfile?.displayName ?? resource?.displayName ?? resource?.name ?? agent.name ?? definition?.label, '自定义目录')
+    ...(targetAgentId ? { targetAgentId } : {}),
+    displayName: asText(storedProfile?.displayName, fallbackDisplayName)
   };
 }
 
@@ -2492,13 +2602,16 @@ function fallbackCustomAgentId(agent: VisibleItem, definition: AgentDefinition |
   return candidate.startsWith('custom-') ? candidate : `custom-${candidate}`;
 }
 
-function findConfiguredAgentProfile(existing: unknown, agentId: string): Record<string, unknown> | undefined {
+function findConfiguredAgentProfile(existing: unknown, agentId: string, targetAgentId?: string): Record<string, unknown> | undefined {
   if (!Array.isArray(existing)) return undefined;
+  const normalizedTargetAgentId = targetAgentId ? normalizeCustomAgentId(targetAgentId) : '';
   return existing
     .map(asRecord)
     .find((item): item is Record<string, unknown> => {
       if (!item) return false;
-      return asText(item.agentId, '') === agentId || asText(item.profileId, '') === agentId;
+      return asText(item.agentId, '') === agentId
+        || asText(item.profileId, '') === agentId
+        || Boolean(normalizedTargetAgentId && asText(item.targetAgentId, '') === normalizedTargetAgentId);
     });
 }
 
@@ -2508,11 +2621,13 @@ export function upsertAgentProfile(existing: unknown, profile: Record<string, un
     : [];
   const profileId = asText(profile.profileId, '');
   const agentId = asText(profile.agentId, '');
+  const targetAgentId = asText(profile.targetAgentId, '');
   let replaced = false;
   const next = current.map((item) => {
     if (
       (profileId && asText(item.profileId, '') === profileId)
       || (agentId && asText(item.agentId, '') === agentId)
+      || (targetAgentId && asText(item.targetAgentId, '') === targetAgentId)
     ) {
       replaced = true;
       return profile;
@@ -2529,6 +2644,7 @@ function asStringArray(value: unknown): string[] {
 interface CustomAgentProfileDraft {
   profileId: string;
   agentId: string;
+  targetAgentId?: string;
   displayName: string;
   rootPath: string;
   rulesText: string;
@@ -2537,10 +2653,12 @@ interface CustomAgentProfileDraft {
 export function buildCustomAgentProfile(input: CustomAgentProfileDraft): { valid: true; profile: Record<string, unknown> } | { valid: false; error: string } {
   const profileId = normalizeCustomAgentId(input.profileId);
   const agentId = normalizeCustomAgentId(input.agentId);
+  const targetAgentId = input.targetAgentId ? normalizeCustomAgentId(input.targetAgentId) : '';
   const root = input.rootPath.trim();
   if (!profileId) return { valid: false, error: 'Profile ID 不能为空，且只能包含字母、数字、点、下划线或连字符。' };
   if (!agentId) return { valid: false, error: 'Agent ID 不能为空，且只能包含字母、数字、点、下划线或连字符。' };
   if (BUILT_IN_AGENT_DEFINITIONS.some((definition) => definition.id === agentId)) return { valid: false, error: 'Agent ID 不能覆盖内置智能体。' };
+  if (targetAgentId && !BUILT_IN_AGENT_DEFINITIONS.some((definition) => definition.id === targetAgentId)) return { valid: false, error: '目标智能体必须是内置智能体。' };
   if (profileId === CUSTOM_AGENT_ID || agentId === CUSTOM_AGENT_ID) return { valid: false, error: 'custom-directory 是自定义目录入口保留 ID，不能保存为真实 Agent Profile。' };
   if (!input.displayName.trim()) return { valid: false, error: '显示名称不能为空。' };
   if (!root) return { valid: false, error: '根目录不能为空。' };
@@ -2563,6 +2681,7 @@ export function buildCustomAgentProfile(input: CustomAgentProfileDraft): { valid
     profile: {
       profileId,
       agentId,
+      ...(targetAgentId ? { targetAgentId } : {}),
       displayName: input.displayName.trim(),
       supportedPlatforms: ['macos', 'windows'],
       rootPaths: [root],
@@ -2823,11 +2942,6 @@ function operationResultsFromEvent(event: LocalEventRecord): Array<{ resourceRef
       message: asText(record.message ?? record.failureReason, '无消息')
     }];
   });
-}
-
-function filterByQuery(items: VisibleItem[], query: string): VisibleItem[] {
-  if (!query.trim()) return items;
-  return items.filter((item) => matchesQuery(item, query));
 }
 
 function matchesQuery(item: VisibleItem, query: string): boolean {

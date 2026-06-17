@@ -70,6 +70,15 @@ export class AgentInventoryScanner {
     this.maxPreviewBytes = options.maxPreviewBytes ?? 256 * 1024;
   }
 
+  private customProfileMetadataFor(agentId: string): Record<string, unknown> {
+    const profile = (this.options.customProfiles ?? []).find((item) => item.agentId === agentId);
+    if (!profile) return {};
+    return {
+      customProfileId: profile.profileId,
+      ...(profile.targetAgentId ? { targetAgentId: profile.targetAgentId, attachedToBuiltInAgent: true } : {})
+    };
+  }
+
   async scan(): Promise<AgentInventoryScanSummary> {
     const scannedAt = new Date().toISOString();
     let resources = 0;
@@ -100,6 +109,7 @@ export class AgentInventoryScanner {
         eaManagedFallback: Boolean(profile.fallbackRoot),
         metadata: {
           builtIn: manifest.builtIn,
+          ...this.customProfileMetadataFor(manifest.agentId),
           capabilities: manifest.capabilities,
           pathProfile: profile,
           projectId: agentScope.projectId,
@@ -164,7 +174,7 @@ export class AgentInventoryScanner {
             agentId: manifest.agentId,
             projectId: this.projectIdFor(candidate.path),
             operationStatus: OperationStatuses.IDLE,
-            metadata: { agentId: manifest.agentId, kind: candidate.kind, pattern: candidate.fromPattern }
+            metadata: { agentId: manifest.agentId, ...this.customProfileMetadataFor(manifest.agentId), kind: candidate.kind, pattern: candidate.fromPattern }
           });
         }
       }
@@ -189,6 +199,7 @@ export class AgentInventoryScanner {
       nativeDirectoryManaged: sourceType === LocalResourceSourceTypes.NATIVE_AGENT_DIRECTORY,
       metadata: {
         kind: candidate.kind,
+        ...this.customProfileMetadataFor(agentId),
         pattern: candidate.fromPattern,
         projectId: projectScope.projectId,
         pathStatusReason: '路径缺失或未配置'
@@ -206,7 +217,7 @@ export class AgentInventoryScanner {
       errorCode: 'path_missing',
       failureReason: '路径缺失或未配置',
       suggestion: '配置路径后重新扫描。',
-      metadata: { kind: candidate.kind, pattern: candidate.fromPattern, projectId: projectScope.projectId }
+      metadata: { kind: candidate.kind, ...this.customProfileMetadataFor(agentId), pattern: candidate.fromPattern, projectId: projectScope.projectId }
     });
   }
 
@@ -226,6 +237,7 @@ export class AgentInventoryScanner {
       operationStatus: OperationStatuses.IDLE,
       metadata: {
         kind: candidate.kind,
+        ...this.customProfileMetadataFor(agentId),
         pattern: candidate.fromPattern,
         projectId: projectScope.projectId,
         pathStatusReason: reason,
@@ -245,7 +257,7 @@ export class AgentInventoryScanner {
       errorCode: code,
       failureReason: reason,
       suggestion: '检查路径是否存在、是否为目录/文件，以及当前用户是否有读取权限。',
-      metadata: { kind: candidate.kind, pattern: candidate.fromPattern, projectId: projectScope.projectId }
+      metadata: { kind: candidate.kind, ...this.customProfileMetadataFor(agentId), pattern: candidate.fromPattern, projectId: projectScope.projectId }
     });
   }
 
@@ -276,6 +288,7 @@ export class AgentInventoryScanner {
           permissionSummary,
           metadata: {
             kind: candidate.kind,
+            ...this.customProfileMetadataFor(agentId),
             pattern: candidate.fromPattern,
             projectId: projectScope.projectId,
             staticOnly: true
@@ -298,6 +311,7 @@ export class AgentInventoryScanner {
         auditSummary,
         metadata: {
           kind: candidate.kind,
+          ...this.customProfileMetadataFor(agentId),
           pattern: candidate.fromPattern,
           projectId: projectScope.projectId,
           previewAvailable: fileStat.isFile() && fileStat.size <= this.maxPreviewBytes,
@@ -316,7 +330,7 @@ export class AgentInventoryScanner {
         targetPath: filePath,
         status: 'info',
         message: `${displayName} ${kindLabels[candidate.kind]} 已静态发现`,
-        metadata: { kind: candidate.kind, pattern: candidate.fromPattern, projectId: projectScope.projectId }
+        metadata: { kind: candidate.kind, ...this.customProfileMetadataFor(agentId), pattern: candidate.fromPattern, projectId: projectScope.projectId }
       });
       count += 1;
     }

@@ -315,6 +315,64 @@ describe('phase 2 agent inventory scanner', () => {
     }
   });
 
+  it('carries targetAgentId metadata for custom paths attached to built-in agents', async () => {
+    const temp = await tempRoot();
+    try {
+      const customRoot = path.join(temp.root, 'codex-extra');
+      await mkdir(customRoot, { recursive: true });
+      await writeFile(path.join(customRoot, 'config.toml'), 'model = "extra"\n', 'utf8');
+      const repo = await createRepo(temp.root);
+
+      await new AgentInventoryScanner(repo, {
+        platform: 'macos',
+        homeDir: path.join(temp.root, 'home'),
+        env: {},
+        includeMissingPaths: false,
+        customProfiles: [{
+          profileId: 'custom-codex-extra',
+          agentId: 'custom-codex-extra',
+          targetAgentId: 'codex',
+          displayName: 'Codex Extra Paths',
+          supportedPlatforms: ['macos'],
+          rootPaths: [customRoot],
+          createdByUser: true,
+          capabilities: ['detect', 'settings-read', 'static-audit'],
+          pathProfile: {
+            platform: 'macos',
+            detectionRoots: [customRoot],
+            globalResourcePaths: [path.join(customRoot, 'config.toml')],
+            projectResourcePaths: [],
+            sourceLevel: 'USER_CONFIG_REQUIRED',
+            resourcePaths: {
+              settings: [path.join(customRoot, 'config.toml')]
+            }
+          }
+        }]
+      }).scan();
+      const snapshot = repo.listResources();
+      const attachedAgent = snapshot.resources.find((resource) => resource.sourceId === 'custom-codex-extra');
+      const attachedConfig = snapshot.rows.find((row) => row.binding?.agentId === 'custom-codex-extra' && row.resource.type === LocalResourceTypes.AGENT_CONFIG);
+      const attachedEvent = snapshot.events.find((event) => event.agentId === 'custom-codex-extra' && event.eventType === LocalEventTypes.CONFIG_DISCOVERED);
+
+      expect(attachedAgent?.metadata).toMatchObject({
+        customProfileId: 'custom-codex-extra',
+        targetAgentId: 'codex',
+        attachedToBuiltInAgent: true
+      });
+      expect(attachedConfig?.resource.metadata).toMatchObject({
+        customProfileId: 'custom-codex-extra',
+        targetAgentId: 'codex',
+        staticOnly: true
+      });
+      expect(attachedEvent?.metadata).toMatchObject({
+        targetAgentId: 'codex',
+        kind: 'settings'
+      });
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
   it('records path-state failures as LocalEvent records and continues scanning', async () => {
     const temp = await tempRoot();
     try {

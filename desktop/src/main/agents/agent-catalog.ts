@@ -38,6 +38,7 @@ export interface AgentPathProfileInput {
 export interface CustomAgentProfile {
   profileId: string;
   agentId: string;
+  targetAgentId?: BuiltInAgentId;
   displayName: string;
   supportedPlatforms: AgentProfilePlatform[];
   rootPaths: string[];
@@ -208,8 +209,10 @@ export function validateCustomAgentProfile(input: Partial<CustomAgentProfile>, e
   const errors: string[] = [];
   const agentId = normalizeAgentId(input.agentId ?? '');
   const profileId = normalizeAgentId(input.profileId ?? '');
+  const targetAgentId = normalizeAgentId(input.targetAgentId ?? '');
   if (!agentId) errors.push('agentId is required');
   if (agentId && existingAgentIds.includes(agentId)) errors.push(`agentId ${agentId} already exists`);
+  if (targetAgentId && !BUILT_IN_AGENT_IDS.includes(targetAgentId as BuiltInAgentId)) errors.push(`targetAgentId ${targetAgentId} must reference a built-in agent`);
   if (agentId === CUSTOM_AGENT_ID) errors.push(`agentId ${CUSTOM_AGENT_ID} is reserved for the custom profile template`);
   if (profileId === CUSTOM_AGENT_ID) errors.push(`profileId ${CUSTOM_AGENT_ID} is reserved for the custom profile template`);
   if (!input.displayName?.trim()) errors.push('displayName is required');
@@ -238,6 +241,7 @@ export function validateCustomAgentProfile(input: Partial<CustomAgentProfile>, e
     normalized: {
       profileId: input.profileId?.trim() || `custom-${agentId}`,
       agentId,
+      ...(targetAgentId ? { targetAgentId: targetAgentId as BuiltInAgentId } : {}),
       displayName: input.displayName?.trim() ?? agentId,
       supportedPlatforms: [...new Set(platforms)],
       rootPaths,
@@ -520,6 +524,7 @@ function customProfileTemplate(platform: AgentProfilePlatform): AgentPathProfile
 }
 
 function customPathProfileForPlatform(profile: CustomAgentProfile, platform: AgentProfilePlatform): AgentPathProfile {
+  const targetNotes = profile.targetAgentId ? [`Custom Agent Profile is attached to built-in agent ${profile.targetAgentId}.`] : [];
   if (profile.pathProfile.platform === platform) {
     return {
       ...profile.pathProfile,
@@ -529,13 +534,14 @@ function customPathProfileForPlatform(profile: CustomAgentProfile, platform: Age
       sourceLevel: profile.pathProfile.sourceLevel ?? 'USER_CONFIG_REQUIRED',
       sourceLevels: profile.pathProfile.sourceLevels ?? ['USER_CONFIG_REQUIRED', 'EA_MANAGED'],
       capabilityStatus: profile.pathProfile.capabilityStatus ?? capabilityStatusFor(profile.pathProfile.resourcePaths ?? {}),
-      resourcePaths: cloneResourcePaths(profile.pathProfile.resourcePaths ?? {})
+      resourcePaths: cloneResourcePaths(profile.pathProfile.resourcePaths ?? {}),
+      notes: [...(profile.pathProfile.notes ?? []), ...targetNotes]
     };
   }
   const template = customProfileTemplate(platform);
   return {
     ...template,
-    notes: ['Custom Agent Profile has not configured path rules for this platform.']
+    notes: ['Custom Agent Profile has not configured path rules for this platform.', ...targetNotes]
   };
 }
 

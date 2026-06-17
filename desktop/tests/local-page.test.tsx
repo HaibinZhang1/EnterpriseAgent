@@ -282,13 +282,17 @@ describe('local resource page', () => {
     expectTestId(html, 'local-agent-list');
     expectTestId(html, 'local-agent-detail');
     expect(html.indexOf('data-testid="local-agent-list"')).toBeLessThan(html.indexOf('data-testid="local-agent-detail"'));
+    const listRegion = html.slice(html.indexOf('data-testid="local-agent-list"'), html.indexOf('data-testid="local-agent-detail"'));
+    expect(listRegion).toContain('agent-selector-row');
+    expect(listRegion).not.toContain('<table');
     for (const tabLabel of ['总览', '设置', '规则', '子智能体', '记忆', '扩展', 'Hook', 'CLI', '文件', '审计', '事件']) {
       expect(html).toContain(tabLabel);
     }
     expect(html).toContain('macOS / Windows Path Profile');
     expect(html).toContain('Hook 和 CLI 只展示配置事件');
-    expect(html).toContain('Agent Profile 配置');
-    expect(html).toContain('添加 Agent Profile');
+    expect(html).toContain('自定义路径');
+    expect(html).toContain('添加自定义路径');
+    expect(html).toContain('在扩展中查看');
     expect(html).not.toContain('data-testid="custom-agent-profile-form"');
     expect(html).not.toContain('HOOK_TRIGGERED');
     expect(html).not.toContain('CLI_EXECUTED');
@@ -340,6 +344,53 @@ describe('local resource page', () => {
     }
   });
 
+  it('does not render search controls for agents, projects, or toolkits', () => {
+    for (const [tab, removedLabel] of [
+      ['agents', '搜索智能体'],
+      ['projects', '搜索项目'],
+      ['toolkits', '搜索工具集']
+    ] as const) {
+      const html = renderToStaticMarkup(
+        <LocalPage
+          snapshot={phase4AuditEventSnapshot()}
+          activeTab={tab as LocalTab}
+          offline={false}
+          localScanState="ready"
+          onChangeTab={() => undefined}
+          onRefreshLocal={() => undefined}
+        />
+      );
+
+      expect(html).not.toContain(removedLabel);
+    }
+  });
+
+  it('does not leave count-only toolbars after removing agent and project search', () => {
+    const agentHtml = renderToStaticMarkup(
+      <LocalPage
+        snapshot={phase4AuditEventSnapshot()}
+        activeTab="agents"
+        offline={false}
+        localScanState="ready"
+        onChangeTab={() => undefined}
+        onRefreshLocal={() => undefined}
+      />
+    );
+    const projectHtml = renderToStaticMarkup(
+      <LocalPage
+        snapshot={phase4AuditEventSnapshot()}
+        activeTab="projects"
+        offline={false}
+        localScanState="ready"
+        onChangeTab={() => undefined}
+        onRefreshLocal={() => undefined}
+      />
+    );
+
+    expect(agentHtml).not.toContain('data-testid="local-agent-toolbar"');
+    expect(projectHtml).not.toContain('data-testid="local-project-toolbar"');
+  });
+
   it('preserves multiple custom Agent Profiles when unique IDs are saved', () => {
     expect(buildCustomAgentProfile({
       profileId: 'custom-directory',
@@ -373,6 +424,34 @@ describe('local resource page', () => {
 
     expect(profiles.map((item) => item.agentId)).toEqual(['custom-one', 'custom-two']);
     expect(profiles.map((item) => item.profileId)).toEqual(['custom-one', 'custom-two']);
+
+    const codexProfile = buildCustomAgentProfile({
+      profileId: 'custom-codex',
+      agentId: 'custom-codex',
+      targetAgentId: 'codex',
+      displayName: 'Codex Custom',
+      rootPath: '/tmp/codex-a',
+      rulesText: JSON.stringify({ settings: ['/tmp/codex-a/config.toml'] })
+    });
+    const codexReplacement = buildCustomAgentProfile({
+      profileId: 'custom-codex-replacement',
+      agentId: 'custom-codex-replacement',
+      targetAgentId: 'codex',
+      displayName: 'Codex Replacement',
+      rootPath: '/tmp/codex-b',
+      rulesText: JSON.stringify({ settings: ['/tmp/codex-b/config.toml'] })
+    });
+    if (!codexProfile.valid) throw new Error(codexProfile.error);
+    if (!codexReplacement.valid) throw new Error(codexReplacement.error);
+
+    const attachedProfiles = upsertAgentProfile(upsertAgentProfile([], codexProfile.profile), codexReplacement.profile);
+
+    expect(attachedProfiles).toHaveLength(1);
+    expect(attachedProfiles[0]).toMatchObject({
+      profileId: 'custom-codex-replacement',
+      agentId: 'custom-codex-replacement',
+      targetAgentId: 'codex'
+    });
   });
 
   it('renders operation helper status without fake success for partial or failed results', () => {

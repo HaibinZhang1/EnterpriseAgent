@@ -107,6 +107,8 @@ describe('phase 2 agent catalog and path profiles', () => {
 
   it('validates custom Agent Profiles before they can behave like built-ins', () => {
     expect(validateCustomAgentProfile({ agentId: 'codex', displayName: 'Codex Clone', supportedPlatforms: ['macos'], rootPaths: ['/tmp/codex'] }).errors).toContain('agentId codex already exists');
+    const invalidTargetProfile = { agentId: 'custom-codex', targetAgentId: 'unknown-agent', displayName: 'Codex Paths', supportedPlatforms: ['macos'], rootPaths: ['/tmp/codex'], pathProfile: customPathProfile('/tmp/codex') } as unknown as Parameters<typeof validateCustomAgentProfile>[0];
+    expect(validateCustomAgentProfile(invalidTargetProfile).errors).toContain('targetAgentId unknown-agent must reference a built-in agent');
     expect(validateCustomAgentProfile({ agentId: 'new-agent', displayName: 'New Agent', supportedPlatforms: ['macos'], rootPaths: [] }).errors).toContain('at least one root path is required');
     expect(validateCustomAgentProfile({ profileId: CUSTOM_AGENT_ID, agentId: CUSTOM_AGENT_ID, displayName: 'Reserved', supportedPlatforms: ['macos'], rootPaths: ['/tmp/custom'], pathProfile: customPathProfile('/tmp/custom') }).errors).toEqual(expect.arrayContaining([
       `agentId ${CUSTOM_AGENT_ID} is reserved for the custom profile template`,
@@ -146,6 +148,21 @@ describe('phase 2 agent catalog and path profiles', () => {
       builtIn: false
     });
     expect(listAgentCatalog([profile.normalized!]).map((agent) => agent.agentId)).toEqual([...BUILT_IN_AGENT_IDS, 'custom-new-agent']);
+    const targetProfile = validateCustomAgentProfile({
+      ...profile.normalized!,
+      profileId: 'custom-codex-profile',
+      agentId: 'custom-codex-profile',
+      targetAgentId: 'codex',
+      displayName: 'Codex Extra Paths'
+    });
+    expect(targetProfile).toMatchObject({
+      valid: true,
+      normalized: {
+        agentId: 'custom-codex-profile',
+        targetAgentId: 'codex'
+      }
+    });
+    expect(buildCustomAgentManifest(targetProfile.normalized!).macosPathProfile?.notes?.join('\n')).toContain('codex');
     expect(normalizeCustomAgentProfiles([profile.normalized!]).normalized).toHaveLength(1);
     expect(normalizeCustomAgentProfiles([
       profile.normalized!,
